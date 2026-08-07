@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="firefly_y6">
+  <xacro:arg name="backend" default="view"/>
+  <xacro:arg name="controllers_file" default=""/>
+  <xacro:arg name="state_timeout_sec" default="0.100"/>
+
+  <!-- Geometry, inertials, joint origins, axes, and limits remain owned by the
+       pinned upstream package. The contract test compares every field. -->
+  <xacro:include filename="$(find xpkg_urdf_firefly_y6)/urdf/xpkg_urdf_firefly_y6.urdf"/>
+  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.ros2_control.xacro"/>
+
+  <xacro:if value="${'$(arg backend)' != 'view'}">
+    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)"/>
+  </xacro:if>
+
+  <xacro:if value="${'$(arg backend)' == 'gz'}">
+    <link name="world"/>
+    <joint name="world_to_base" type="fixed">
+      <parent link="world"/>
+      <child link="base_link"/>
+    </joint>
+    <gazebo>
+      <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>$(arg controllers_file)</parameters>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+</robot>
+

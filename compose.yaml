@@ -1,0 +1,26 @@
+services:
+  ros2-jazzy-arm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: hex-arm-jazzy:local
+    container_name: ros2-jazzy-arm
+    hostname: hex-arm-dev
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-wayland-0}
+      XDG_RUNTIME_DIR: /mnt/wslg/runtime-dir
+      PULSE_SERVER: unix:/mnt/wslg/PulseServer
+      QT_X11_NO_MITSHM: "1"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+    volumes:
+      - .:/workspaces/hex_arm_ros2
+      - /mnt/wslg:/mnt/wslg
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    security_opt:
+      - no-new-privileges:true
+    command: sleep infinity
+

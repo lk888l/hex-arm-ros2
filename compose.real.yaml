@@ -1,0 +1,7 @@
+services:
+  ros2-jazzy-arm:
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - 'c 189:* rw'
+

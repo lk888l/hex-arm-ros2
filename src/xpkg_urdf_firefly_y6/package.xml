@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>xpkg_urdf_firefly_y6</name>
+  <version>1.1.0</version>
+  <description>
+    URDF description of the firefly_y6 6-DOF arm (visual meshes + simplified convex-hull
+    collision meshes). Package name kept for compatibility with existing consumers
+    (hex-ros2-arm, firefly_y6_moveit_config, hex-controller urdf_filename, hex-motor-gui);
+    rename to the hex_*_description convention is scheduled for the joint-zero URDF
+    re-export MAJOR bump. See model.yaml for the machine-readable manifest.
+  </description>
+  <maintainer email="kisonhe@icloud.com">kisonhe</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

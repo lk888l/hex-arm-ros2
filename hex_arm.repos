@@ -1,0 +1,14 @@
+repositories:
+  upstream/hex-descriptions:
+    type: git
+    url: https://github.com/hex-meow/hex-descriptions.git
+    version: d1a475fd5326db9ee27938d9eba886b4a5cb1320
+  upstream/hex-motor:
+    type: git
+    url: https://github.com/hex-meow/hex-motor.git
+    version: c8684ba72e75b408dbb741c07f2961057a5f4e7a
+  upstream/hex-robot-proto:
+    type: git
+    url: https://github.com/hex-meow/hex-robot-proto.git
+    version: e52860ad1226af49b46f702033d9eb94fa17248e
+

@@ -1,0 +1,26 @@
+# 产品清单 —— 机器可校验的契约(tools/validate.py)。tag 必须等于这里的 version(firefly_y6/v<version>)。
+model: firefly_y6            # == URDF <robot name>;运行时查找键:控制器按此选 /usr/share/hexmeow/urdf/<model>.urdf
+kind: arm                    # RobotKind: arm | base | lift | hand
+version: 1.1.0               # 描述版本(与 proto ApiVersion 正交;仅同一硬件的描述修订,硬件不兼容变更=新 model 身份,见 06)
+# hw_rev: a                  # 可选:同名硬件修订;不兼容硬件变更时新增身份并存,永不删除老身份
+dof: 6
+joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+root_link: base_link
+tip_link: link_6             # EE 安装 link:arm.tip_link <-> EE.root_link 以 fixed joint 运行时拼接
+package: xpkg_urdf_firefly_y6   # ROS 包名 == URDF 内 package:// 根。兼容保留旧名,重命名待零点重导出 MAJOR
+urdf: urdf/xpkg_urdf_firefly_y6.urdf
+
+provenance:
+  exporter: SW2URDF 1.6.0-4-g7f85cfe
+  exported: "2026-01-09"
+  note: 机械工程师从 SolidWorks 导出后手工清理;CAD(SLDASM/STEP)不入库
+
+limits_note: |
+  URDF <limit> effort=6 为出厂 nominal,非唯一真相:
+  电机真实峰值约 31.6 Nm(GRAVITY_COMP 需 torque limit > ~11 Nm),
+  hex-controller models.rs 的 tau=15 是安全包络,MoveIt joint_limits.yaml 是规划上限。
+  多值分层是有意设计 —— 这里只承诺 nominal 运动学事实(关节名/位置限位/惯量)。
+
+todo:
+  - "重导出 URDF 使关节零点=电机零点(joint_3 origin 移 pi/2),删除控制器 zero_offset;届时 MAJOR bump 并更名 hex_firefly_y6_description(协调 hex-ros2-arm / moveit_config / controller urdf_filename / GUI loader.packages)"
+  - "几何变更后 MoveIt SRDF(自碰撞矩阵)必须人工重跑 Setup Assistant,不可自动再生"

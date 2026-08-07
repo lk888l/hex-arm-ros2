@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hex_arm_description</name>
+  <version>0.1.0</version>
+  <description>Firefly Y6 xacro overlay for ros2_control and Gazebo Harmonic.</description>
+  <maintainer email="kisonhe@icloud.com">HEX arm maintainers</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>xacro</depend>
+  <exec_depend>hex_arm_hardware</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
+  <exec_depend>ros2_control</exec_depend>
+  <exec_depend>xpkg_urdf_firefly_y6</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>urdfdom_py</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
+

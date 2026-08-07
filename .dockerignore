@@ -1,0 +1,7 @@
+build
+install
+log
+.git
+**/target
+config/hardware/*.local.yaml
+

@@ -1,0 +1,55 @@
+# COMMISSIONING TEMPLATE ONLY. This file is intentionally rejected by real
+# bringup. Copy it to a gitignored *.local.yaml and replace every placeholder
+# from read-only discovery and supervised per-axis commissioning.
+schema_version: 1
+validated: false
+calibrated: false
+robot_prefix: hexmeow/wsl/firefly_y6_0
+urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
+
+bus:
+  channel: 0
+  adapter_vid: 0       # no dangerous default
+  adapter_pid: 0       # no dangerous default
+  heartbeat_node_id: 16
+  hardware_timestamp: true
+
+controller:
+  loop_hz: 1000
+  state_publish_hz: 100
+  discovery_timeout_ms: 5000
+  feedback_timeout_ms: 100
+  command_watchdog_ms: 100
+
+# Historical signs (-1,-1,+1,+1,+1,+1) and 0.85 torque scales are deliberately
+# not prefilled. joint_3's mechanical zero difference belongs in its explicit
+# zero_offset_rad after calibration, not in the geometry URDF.
+joints:
+  - &uncommissioned
+    name: joint_1
+    node_id: 0
+    identity: {vendor_id: 0, product_code: 0, revision: 0, serial_number: 0, model: UNVERIFIED}
+    direction: 0
+    zero_offset_rad: 0.0
+    torque_scale: 0.0
+    torque_permille: 0
+    kp_kd_torque_permille: 0
+    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, velocity_rad_s: 0.2, torque_nm: 0.5}
+    default_kp: 5.0
+    default_kd: 0.8
+  - <<: *uncommissioned
+    name: joint_2
+    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, velocity_rad_s: 0.2, torque_nm: 0.5}
+  - <<: *uncommissioned
+    name: joint_3
+    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, velocity_rad_s: 0.2, torque_nm: 0.5}
+  - <<: *uncommissioned
+    name: joint_4
+    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, velocity_rad_s: 0.2, torque_nm: 0.5}
+  - <<: *uncommissioned
+    name: joint_5
+    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, velocity_rad_s: 0.2, torque_nm: 0.5}
+  - <<: *uncommissioned
+    name: joint_6
+    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, velocity_rad_s: 0.2, torque_nm: 0.5}
+

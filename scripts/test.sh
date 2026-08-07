@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+level="${1:-unit}"
+cd "${workspace_dir}"
+source /opt/ros/jazzy/setup.bash
+test ! -f install/setup.bash || source install/setup.bash
+set -u
+export PYTHONDONTWRITEBYTECODE=1
+
+case "${level}" in
+  unit)
+    CARGO_TARGET_DIR="${workspace_dir}/build/hex_arm_controller/cargo" \
+      cargo test --locked --manifest-path src/hex_arm_controller/Cargo.toml
+    colcon test --event-handlers console_direct+ \
+      --packages-select hex_arm_msgs hex_arm_description hex_arm_bridge hex_arm_hardware
+    colcon test-result --verbose
+    ;;
+  protocol)
+    python3 src/hex_arm_bringup/test/test_protocol_smoke.py
+    ;;
+  mock)
+    python3 src/hex_arm_bringup/test/test_mock_trajectory.py
+    ;;
+  gz)
+    python3 src/hex_arm_bringup/test/test_gz_trajectory.py
+    ;;
+  *)
+    echo "usage: $0 {unit|protocol|mock|gz}" >&2
+    exit 2
+    ;;
+esac
+

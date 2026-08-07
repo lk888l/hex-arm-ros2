@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<library path="hex_arm_hardware">
+  <class
+    name="hex_arm_hardware/HexArmSystem"
+    type="hex_arm_hardware::HexArmSystem"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Six-axis Firefly Y6 SystemInterface. Blocking Zenoh and USB work is
+      delegated to a lifecycle bridge and the Rust motor process.
+    </description>
+  </class>
+</library>
+

@@ -1,0 +1,12 @@
+build/
+install/
+log/
+.colcon/
+.pytest_cache/
+__pycache__/
+*.pyc
+target/
+.idea/
+.vscode/
+config/hardware/*.local.yaml
+

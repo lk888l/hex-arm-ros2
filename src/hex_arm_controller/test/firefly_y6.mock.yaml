@@ -1,0 +1,89 @@
+# MOCK-ONLY integration profile. The deliberately impossible USB identity
+# prevents this fixture from opening physical hardware if used accidentally.
+schema_version: 1
+validated: true
+calibrated: true
+robot_prefix: hexmeow/wsl/firefly_y6_test
+urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
+
+bus:
+  channel: 0
+  adapter_vid: 65535
+  adapter_pid: 65535
+  heartbeat_node_id: 127
+  hardware_timestamp: false
+
+controller:
+  loop_hz: 1000
+  state_publish_hz: 100
+  discovery_timeout_ms: 500
+  feedback_timeout_ms: 100
+  command_watchdog_ms: 100
+
+joints:
+  - name: joint_1
+    node_id: 1
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 1, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
+  - name: joint_2
+    node_id: 2
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 2, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
+  - name: joint_3
+    node_id: 3
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 3, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
+  - name: joint_4
+    node_id: 4
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 4, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
+  - name: joint_5
+    node_id: 5
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 5, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
+  - name: joint_6
+    node_id: 6
+    identity: {vendor_id: 6841720, product_code: 2863267842, revision: 1, serial_number: 6, model: MOCK_ONLY}
+    direction: 1
+    zero_offset_rad: 0.0
+    torque_scale: 1.0
+    torque_permille: 250
+    kp_kd_torque_permille: 250
+    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, velocity_rad_s: 2.0, torque_nm: 5.0}
+    default_kp: 10.0
+    default_kd: 1.5
