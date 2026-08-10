@@ -78,6 +78,71 @@ install/setup.bash` reports paths below `/workspaces/hex_arm_ros2` as missing,
 the shell is in the wrong container; enter it with `docker exec -it
 ros2-jazzy-arm bash` from the WSL host.
 
+## Driving the simulated arm from the CLI (`ros2 action send_goal` reference)
+
+After starting the `mock` or `gz` mode, run this in another terminal (with
+`source install/setup.bash` already applied):
+
+```bash
+ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
+  control_msgs/action/FollowJointTrajectory \
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+```
+
+### Command format
+
+```text
+ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+```
+
+| Argument | Example | Meaning |
+|---|---|---|
+| Subcommand | `ros2 action send_goal` | Sends an action goal; `ros2 action` also supports `list`, `info`, and `type` |
+| Action server | `/firefly_arm_controller/follow_joint_trajectory` | The trajectory controller's action server. Start a `mock`/`gz` launch first, otherwise the CLI keeps printing `waiting` |
+| Action type | `control_msgs/action/FollowJointTrajectory` | Tells the CLI how to parse the YAML; must match this workspace |
+| Goal payload | YAML in double quotes | See field rules below |
+
+### YAML field rules
+
+- `trajectory.joint_names`: joint-name list. The order is **fixed** to
+  `joint_1` ... `joint_6`, and all six must be present (the controller sets
+  `allow_partial_joints_goal: false`, so partial goals are rejected).
+- `trajectory.points`: array of trajectory points (one in this example). Each
+  point has:
+  - `positions`: target angles in **radians**, exactly six values in
+    `joint_names` order. Keep them inside the URDF limits: joint_1 ±2.86,
+    joint_2 −1.57~2.09, joint_3 0~3.14, joint_4 ±1.57, joint_5 ±1.54,
+    joint_6 ±2.79. Note that the mock/gz configs do **not** enable command
+    limit clamping, so out-of-limit values are not automatically rejected —
+    make sure the numbers are safe yourself.
+  - `time_from_start`: offset from the moment the goal is accepted;
+    `{sec: 2, nanosec: 0}` means "reach within 2 seconds". The controller
+    smooths the motion with `interpolation_method: splines`.
+  - Optional: `velocities`, `accelerations`, `effort`; omitted fields are
+    interpolated by the controller.
+  - Add more points to build multi-segment trajectories, increasing
+    `time_from_start` for each.
+
+### Shell and usage details
+
+- Wrap the whole YAML in **double quotes** so spaces are not split into
+  separate shell arguments; the trailing `\` is just a line continuation and
+  can be removed to put everything on one line.
+- Source the environment first (interactive bash does this automatically;
+  otherwise run `source /opt/ros/jazzy/setup.bash` and
+  `source install/setup.bash`).
+- After sending, expect `Goal accepted with ID: ...` and then
+  `Goal finished with status: SUCCEEDED` (`error_code: 0`).
+- Verify the final pose with `ros2 topic echo --once /joint_states`; the
+  `position` values should match the goal.
+- A new goal cancels/replaces the goal currently being executed (default
+  controller behavior); `Ctrl-C` only exits the CLI client.
+- The same command works for `gz`; there the trajectory advances with the
+  Gazebo (simulation) clock.
+
+More GUI and CLI troubleshooting: [docs/gui_and_cli_simulation.md](docs/gui_and_cli_simulation.md).
+
+
 The real profile is intentionally a separate Compose override. It maps only
 the USB bus and never enables Docker privileged mode:
 

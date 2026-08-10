@@ -1,4 +1,6 @@
 # Firefly Y6 ROS 2 驱动
+[English (英文版)](README.md)
+
 
 面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、仿真与调试（commissioning）工作区。对外公开的运动接口是由 `joint_trajectory_controller` 暴露的标准 `control_msgs/action/FollowJointTrajectory` action：
 
@@ -61,6 +63,50 @@ ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 ```
 
 在启动另一种模式之前，请先按 `Ctrl-C` 停止当前 launch。如果 `source install/setup.bash` 报错称 `/workspaces/hex_arm_ros2` 下的路径缺失，说明当前所在的容器不对；请在 WSL 宿主机上执行 `docker exec -it ros2-jazzy-arm bash` 进入正确的容器。
+
+## 用命令行驱动模拟机械臂（`ros2 action send_goal` 详解）
+
+mock / gz 模式启动后，在另一个终端（已 `source install/setup.bash`）执行：
+
+```bash
+ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
+  control_msgs/action/FollowJointTrajectory \
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+```
+
+### 命令格式
+
+```text
+ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+```
+
+| 参数 | 本例取值 | 说明 |
+|---|---|---|
+| 子命令 | `ros2 action send_goal` | 发送 action goal 的 CLI 子命令；`ros2 action` 还支持 `list`、`info`、`type` |
+| action server | `/firefly_arm_controller/follow_joint_trajectory` | 轨迹控制器暴露的 action 服务端。必须先启动 mock/gz launch，否则 CLI 会一直显示 waiting |
+| action 类型 | `control_msgs/action/FollowJointTrajectory` | 决定 YAML 的解析方式，必须与工程一致 |
+| goal 内容 | 双引号包裹的 YAML | 字段规则见下 |
+
+### YAML 字段规则
+
+- `trajectory.joint_names`：关节名列表。**顺序固定**为 `joint_1` ~ `joint_6`，且必须 6 个全部给出（控制器配置了 `allow_partial_joints_goal: false`，缺关节会被拒绝）。
+- `trajectory.points`：轨迹点数组，本例只给 1 个点。每个点包含：
+  - `positions`：目标角度，单位**弧度（rad）**，数量必须等于 6 且按 `joint_names` 顺序。建议保持在 URDF 限位内：joint_1 ±2.86、joint_2 −1.57~2.09、joint_3 0~3.14、joint_4 ±1.57、joint_5 ±1.54、joint_6 ±2.79。注意 mock/gz 配置**未启用命令限位拦截**，超限位置不会被自动钳制，请自行确保数值安全。
+  - `time_from_start`：相对目标被接受时刻的时间偏移，`{sec: 2, nanosec: 0}` 表示 2 秒内到达；控制器使用 `interpolation_method: splines`（样条插值）平滑运动。
+  - 可选字段：`velocities`、`accelerations`、`effort`；不填时由控制器自行插值。
+  - 可以放多个点组成多段轨迹，每段的 `time_from_start` 递增即可。
+
+### Shell 与使用细节
+
+- 整段 YAML 用**双引号**包住，防止空格被拆成多个 shell 参数；行尾的 `\` 是续行符，全部写成一行也可以。
+- 先 source 环境（交互式 bash 会自动加载；否则手动执行 `source /opt/ros/jazzy/setup.bash` 与 `source install/setup.bash`）。
+- 发送后应看到 `Goal accepted with ID: ...`；执行完成输出 `Goal finished with status: SUCCEEDED`（`error_code: 0`）。
+- 验证实际到达位置：`ros2 topic echo --once /joint_states`，`position` 应与目标一致。
+- 再发一个新 goal 会取消/替换正在执行的旧 goal（控制器默认行为）；`Ctrl-C` 只结束 CLI 客户端本身。
+- gz 模式使用同样的命令；gz 走仿真时间，轨迹按 Gazebo 时钟推进。
+
+更多图形界面与命令行排查见 [docs/gui_and_cli_simulation.md](docs/gui_and_cli_simulation.md)。
+
 
 real 配置故意做成独立的 Compose override。它只映射 USB 总线，并且从不启用 Docker 特权模式：
 
