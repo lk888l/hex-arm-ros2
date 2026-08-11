@@ -1,5 +1,7 @@
 # Supervised hardware commissioning
 
+**English** | [中文](commissioning_cn.md)
+
 Do not run real bringup until the arm is mechanically secured, its workspace
 is clear, and the independent physical emergency stop has been tested. WSL2
 and Docker are not safety systems.
@@ -32,4 +34,3 @@ and Docker are not safety systems.
 `clear_fault` never auto-enables the arm. After every fault, inspect and remove
 the physical cause before clearing; activation remains an explicit
 ros2_control lifecycle operation.
-

@@ -1,0 +1,17 @@
+# Software simulation exposes the URDF capability limit. The 10 rad/s^2
+# acceleration is simulation-only and comes from the historical MoveIt config;
+# it is not a measured hardware limit.
+default_velocity_scaling_factor: 0.1
+default_acceleration_scaling_factor: 0.1
+
+joint_limits:
+  joint_1: &sim_limit
+    has_velocity_limits: true
+    max_velocity: 6.0
+    has_acceleration_limits: true
+    max_acceleration: 10.0
+  joint_2: *sim_limit
+  joint_3: *sim_limit
+  joint_4: *sim_limit
+  joint_5: *sim_limit
+  joint_6: *sim_limit

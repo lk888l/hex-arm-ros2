@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="firefly_y6_ros2_control" params="backend state_timeout_sec:=0.100">
+  <xacro:macro name="firefly_y6_ros2_control" params="backend state_timeout_sec:=0.100 activation_timeout_sec:=5.0">
     <ros2_control name="FireflyY6System" type="system">
       <hardware>
         <xacro:if value="${backend == 'real'}">
@@ -10,6 +10,7 @@
           <param name="activate_service">/hex_arm_bridge/activate_hardware</param>
           <param name="deactivate_service">/hex_arm_bridge/deactivate_hardware</param>
           <param name="state_timeout_sec">${state_timeout_sec}</param>
+          <param name="activation_timeout_sec">${activation_timeout_sec}</param>
           <param name="service_timeout_sec">5.0</param>
         </xacro:if>
         <xacro:if value="${backend == 'mock'}">
@@ -66,4 +67,3 @@
     </ros2_control>
   </xacro:macro>
 </robot>
-

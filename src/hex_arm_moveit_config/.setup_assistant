@@ -1,0 +1,10 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: hex_arm_description
+    relative_path: urdf/firefly_y6.urdf.xacro
+    xacro_args: backend:=mock
+  srdf:
+    relative_path: config/firefly_y6.srdf
+  package_settings:
+    author_name: HEX arm maintainers
+    author_email: kisonhe@icloud.com
