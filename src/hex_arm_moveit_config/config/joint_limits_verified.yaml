@@ -1,0 +1,17 @@
+# Enable this velocity profile only after supervised commissioning and
+# tracking-data review. Acceleration deliberately remains at the conservative
+# provisional 0.2 rad/s^2 until an independent value is measured.
+default_velocity_scaling_factor: 0.1
+default_acceleration_scaling_factor: 0.1
+
+joint_limits:
+  joint_1: &verified_limit
+    has_velocity_limits: true
+    max_velocity: 6.0
+    has_acceleration_limits: true
+    max_acceleration: 0.2
+  joint_2: *verified_limit
+  joint_3: *verified_limit
+  joint_4: *verified_limit
+  joint_5: *verified_limit
+  joint_6: *verified_limit

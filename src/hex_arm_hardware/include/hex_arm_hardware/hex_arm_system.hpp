@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -61,6 +62,7 @@ private:
   std::vector<double> command_velocity_;
 
   mutable std::mutex state_mutex_;
+  std::condition_variable state_condition_;
   std::vector<double> pending_position_;
   std::vector<double> pending_velocity_;
   std::vector<double> pending_effort_;
@@ -72,6 +74,7 @@ private:
   std::string activate_service_{"/hex_arm_bridge/activate_hardware"};
   std::string deactivate_service_{"/hex_arm_bridge/deactivate_hardware"};
   std::chrono::duration<double> state_timeout_{0.1};
+  std::chrono::duration<double> activation_timeout_{5.0};
   std::chrono::duration<double> service_timeout_{5.0};
 
   rclcpp::Node::SharedPtr io_node_;
@@ -85,4 +88,3 @@ private:
 };
 
 }  // namespace hex_arm_hardware
-

@@ -79,6 +79,8 @@ hardware_interface::CallbackReturn HexArmSystem::on_init(
     deactivate_service_ = parameter_or(info_, "deactivate_service", deactivate_service_);
     state_timeout_ = std::chrono::duration<double>(
       parse_positive_parameter(info_, "state_timeout_sec", state_timeout_.count()));
+    activation_timeout_ = std::chrono::duration<double>(
+      parse_positive_parameter(info_, "activation_timeout_sec", activation_timeout_.count()));
     service_timeout_ = std::chrono::duration<double>(
       parse_positive_parameter(info_, "service_timeout_sec", service_timeout_.count()));
   } catch (const std::exception & error) {
@@ -156,12 +158,20 @@ hardware_interface::CallbackReturn HexArmSystem::on_cleanup(
 hardware_interface::CallbackReturn HexArmSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
-  if (!state_is_fresh()) {
-    RCLCPP_ERROR(io_node_->get_logger(), "activation rejected: no fresh six-joint feedback");
-    return hardware_interface::CallbackReturn::ERROR;
-  }
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::unique_lock<std::mutex> lock(state_mutex_);
+    const bool have_fresh_state = state_condition_.wait_for(
+      lock, activation_timeout_, [this]() {
+        return have_state_ &&
+               (std::chrono::steady_clock::now() - last_state_time_) <= state_timeout_;
+      });
+    if (!have_fresh_state) {
+      RCLCPP_ERROR(
+        io_node_->get_logger(),
+        "activation rejected: no fresh six-joint feedback within %.3f s",
+        activation_timeout_.count());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
     command_position_ = pending_position_;
     std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
   }
@@ -243,12 +253,15 @@ void HexArmSystem::receive_state(sensor_msgs::msg::JointState::ConstSharedPtr me
       "invalid or incomplete joint feedback rejected");
     return;
   }
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  pending_position_ = std::move(position);
-  pending_velocity_ = std::move(velocity);
-  pending_effort_ = std::move(effort);
-  last_state_time_ = std::chrono::steady_clock::now();
-  have_state_ = true;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    pending_position_ = std::move(position);
+    pending_velocity_ = std::move(velocity);
+    pending_effort_ = std::move(effort);
+    last_state_time_ = std::chrono::steady_clock::now();
+    have_state_ = true;
+  }
+  state_condition_.notify_all();
 }
 
 bool HexArmSystem::call_safety_service(
@@ -294,11 +307,13 @@ void HexArmSystem::stop_io_thread()
   state_subscription_.reset();
   executor_.reset();
   io_node_.reset();
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  have_state_ = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    have_state_ = false;
+  }
+  state_condition_.notify_all();
 }
 
 }  // namespace hex_arm_hardware
 
 PLUGINLIB_EXPORT_CLASS(hex_arm_hardware::HexArmSystem, hardware_interface::SystemInterface)
-

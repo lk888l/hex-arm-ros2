@@ -1,0 +1,17 @@
+# First supervised hardware commissioning profile. The 0.2 rad/s^2 planning
+# acceleration is deliberately conservative and remains provisional until
+# measured. The Rust hardware profile must independently cap velocity at 0.2.
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 0.1
+
+joint_limits:
+  joint_1: &commissioning_limit
+    has_velocity_limits: true
+    max_velocity: 0.2
+    has_acceleration_limits: true
+    max_acceleration: 0.2
+  joint_2: *commissioning_limit
+  joint_3: *commissioning_limit
+  joint_4: *commissioning_limit
+  joint_5: *commissioning_limit
+  joint_6: *commissioning_limit

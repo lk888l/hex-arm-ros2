@@ -38,6 +38,26 @@ struct CommandEnvelope {
     targets: Vec<RosTarget>,
     duration_ns: u64,
     received_at: Instant,
+    rebase_from_feedback: Option<Vec<RosTarget>>,
+}
+
+impl CommandEnvelope {
+    fn apply_to_interpolator(
+        &self,
+        interpolator: &mut Interpolator,
+        now_ns: u64,
+        velocity_limits_rad_s: &[f32],
+    ) -> Result<()> {
+        if let Some(feedback_targets) = &self.rebase_from_feedback {
+            *interpolator = Interpolator::hold(feedback_targets.clone(), now_ns);
+        }
+        interpolator.retarget_with_velocity_limits(
+            self.targets.clone(),
+            now_ns,
+            self.duration_ns,
+            velocity_limits_rad_s,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -220,6 +240,7 @@ impl ArmRuntime {
             data.command_generation = data.command_generation.wrapping_add(1);
             Some(CommandEnvelope {
                 generation: data.command_generation,
+                rebase_from_feedback: Some(targets.clone()),
                 targets,
                 duration_ns: 0,
                 received_at: Instant::now(),
@@ -282,12 +303,17 @@ impl ArmRuntime {
             data.safety.mode == OperatingMode::Active,
             "joint commands require ACTIVE mode"
         );
+        let rebase_from_feedback = data
+            .command
+            .as_ref()
+            .and_then(|pending| pending.rebase_from_feedback.clone());
         data.command_generation = data.command_generation.wrapping_add(1);
         data.command = Some(CommandEnvelope {
             generation: data.command_generation,
             targets,
             duration_ns,
             received_at: Instant::now(),
+            rebase_from_feedback,
         });
         Ok(())
     }
@@ -397,14 +423,30 @@ impl ArmRuntime {
                         continue;
                     }
                     if command.generation != generation {
-                        if let Err(error) = interpolator.retarget(
-                            command.targets.clone(),
+                        let velocity_limits: Vec<_> = self
+                            .profile
+                            .joints
+                            .iter()
+                            .map(|joint| joint.limits.velocity_rad_s)
+                            .collect();
+                        if let Err(error) = command.apply_to_interpolator(
+                            &mut interpolator,
                             self.monotonic_ns(),
-                            command.duration_ns,
+                            &velocity_limits,
                         ) {
                             self.fault_and_disable(FAULT_COMMAND, error.to_string())
                                 .await;
                             continue;
+                        }
+                        if command.rebase_from_feedback.is_some() {
+                            let mut data = self.data.write();
+                            if let Some(pending) = data
+                                .command
+                                .as_mut()
+                                .filter(|pending| pending.generation == command.generation)
+                            {
+                                pending.rebase_from_feedback = None;
+                            }
                         }
                         generation = command.generation;
                     }
@@ -725,5 +767,105 @@ fn motor_proto(motor: &MotorIdentitySnapshot) -> pb::MotorIdentity {
         serial_number: motor.serial_number,
         model: motor.model.clone(),
         identity_verified: motor.identity_verified,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets(positions: [f32; DOF]) -> Vec<RosTarget> {
+        positions
+            .into_iter()
+            .map(|position_rad| RosTarget {
+                position_rad,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn activation_rebases_without_observing_the_intermediate_mode() {
+        let old_positions = [0.8, 0.6, 0.4, 0.2, -0.2, -0.4];
+        let moved_positions = [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5];
+
+        for inactive_mode in [OperatingMode::Disabled, OperatingMode::Passive] {
+            let mut interpolator = Interpolator::hold(targets(old_positions), 0);
+            assert_ne!(inactive_mode, OperatingMode::Active);
+            let activation = CommandEnvelope {
+                generation: 2,
+                targets: targets(moved_positions),
+                duration_ns: 0,
+                received_at: Instant::now(),
+                rebase_from_feedback: Some(targets(moved_positions)),
+            };
+
+            activation
+                .apply_to_interpolator(&mut interpolator, 20_000_000, &[0.2; DOF])
+                .unwrap();
+
+            let first_active_sample = interpolator.sample(20_000_000);
+            for (target, expected_position) in first_active_sample.iter().zip(moved_positions) {
+                assert!((target.position_rad - expected_position).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_zero_duration_command_remains_rate_limited() {
+        let start_positions = [0.0; DOF];
+        let goal_positions = [1.0; DOF];
+        let mut interpolator = Interpolator::hold(targets(start_positions), 0);
+        let command = CommandEnvelope {
+            generation: 1,
+            targets: targets(goal_positions),
+            duration_ns: 0,
+            received_at: Instant::now(),
+            rebase_from_feedback: None,
+        };
+
+        command
+            .apply_to_interpolator(&mut interpolator, 0, &[0.2; DOF])
+            .unwrap();
+
+        for target in interpolator.sample(0) {
+            assert_eq!(target.position_rad, 0.0);
+        }
+        for target in interpolator.sample(1_000_000_000) {
+            assert!((target.position_rad - 0.2).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn first_trajectory_preserves_unconsumed_activation_rebase() {
+        let old_positions = [-1.0; DOF];
+        let feedback_positions = [0.0; DOF];
+        let goal_positions = [1.0; DOF];
+        let activation = CommandEnvelope {
+            generation: 1,
+            targets: targets(feedback_positions),
+            duration_ns: 0,
+            received_at: Instant::now(),
+            rebase_from_feedback: Some(targets(feedback_positions)),
+        };
+        let queued_trajectory = CommandEnvelope {
+            generation: 2,
+            targets: targets(goal_positions),
+            duration_ns: 0,
+            received_at: Instant::now(),
+            rebase_from_feedback: activation.rebase_from_feedback.clone(),
+        };
+        let mut interpolator = Interpolator::hold(targets(old_positions), 0);
+
+        queued_trajectory
+            .apply_to_interpolator(&mut interpolator, 0, &[0.2; DOF])
+            .unwrap();
+
+        for target in interpolator.sample(0) {
+            assert_eq!(target.position_rad, 0.0);
+        }
+        for target in interpolator.sample(1_000_000_000) {
+            assert!((target.position_rad - 0.2).abs() < 1e-6);
+        }
     }
 }

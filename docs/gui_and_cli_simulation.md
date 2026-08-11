@@ -1,34 +1,49 @@
-# Firefly Y6：图形界面启动与命令行模拟驱动指南
+# Firefly Y6: GUI startup and command-line simulation control guide
 
-> 适用范围：WSL2 + Docker 下的 `hex_arm_ros2`（ROS 2 Jazzy）。
-> 本文只讲「图形界面为什么打不开」和「如何用命令行驱动模拟机械臂」，不改动任何工程代码。
+**English** | [中文](gui_and_cli_simulation_cn.md)
 
-## 1. 结论先行
+> Scope: `hex_arm_ros2` on WSL2 + Docker (ROS 2 Jazzy).
+> This document explains why GUI windows may fail to open and how to drive the
+> simulated arm from the command line. It does not require project code changes.
 
-1. **图形窗口打不开的根因（本机已实测定位）**：当前 `ros2-jazzy-arm` 容器是从 Windows 侧（PowerShell / Docker Desktop）创建的，工程以 `\\wsl.localhost\...` 这种 UNC 路径挂载进容器，`compose.yaml` 里声明的 `/tmp/.X11-unix` 挂载没有生效。容器里虽然能看到 X socket 文件，但**无法建立连接**，于是 RViz、joint_state_publisher_gui 直接报 `qt.qpa.xcb: could not connect to display :0` 崩溃退出。launch 本身、机器人模型、ros2_control 都是正常的。
-2. **修复方式**：按 README 的要求，在 **Ubuntu WSL shell**（不是 PowerShell）里重建一次容器即可，命令见第 3 节。
-3. **命令行模拟驱动：完全可以**，而且已在当前机器上实测通过。`mock`（RViz 显示）和 `gz`（Gazebo 物理仿真）两种模式都暴露标准的 `FollowJointTrajectory` action，用 `ros2 action send_goal` 或一段 Python 脚本即可驱动，详见第 4 节。
+## 1. Conclusions first
+
+1. **Root cause of the missing GUI windows, verified on this machine**: the current
+   `ros2-jazzy-arm` container was created from Windows (PowerShell / Docker Desktop).
+   The workspace was mounted through a `\\wsl.localhost\...` UNC path, and the
+   `/tmp/.X11-unix` mount declared in `compose.yaml` did not take effect. Although
+   an X socket file appears inside the container, a connection cannot be established.
+   RViz and `joint_state_publisher_gui` therefore exit with
+   `qt.qpa.xcb: could not connect to display :0`. The launch files, robot model,
+   and ros2_control are otherwise working.
+2. **Fix**: recreate the container once from an **Ubuntu WSL shell**, not from
+   PowerShell, as required by the README. See Section 3.
+3. **Command-line simulation control works** and has been verified on this machine.
+   Both `mock` (RViz visualization) and `gz` (Gazebo physics simulation) expose
+   the standard `FollowJointTrajectory` action. Drive either mode with
+   `ros2 action send_goal` or a short Python program; see Section 4.
 
 ---
 
-## 2. 先确认 WSLg（图形系统）本身是好的
+## 2. Verify WSLg itself first
 
-在 **Ubuntu-24.04 的 WSL 终端**里执行：
+Run the following in an **Ubuntu-24.04 WSL terminal**:
 
 ```bash
-echo "DISPLAY=$DISPLAY WAYLAND=$WAYLAND_DISPLAY"
-ls -la /tmp/.X11-unix        # 应能看到 X0 socket
-ls /mnt/wslg                 # 应能看到 .X11-unix、PulseServer 等
+env | grep -E 'DISPLAY|WAYLAND_DISPLAY'
+ls -la /tmp/.X11-unix        # X0 socket should be present
+ls /mnt/wslg                 # .X11-unix, PulseServer, and similar entries should be present
 ```
 
-本机实测结果（正常）：
+Observed healthy result on this machine:
 
 ```text
-DISPLAY=:0 WAYLAND=wayland-0
+DISPLAY=:0 WAYLAND_DISPLAY=wayland-0
 /tmp/.X11-unix/X0            # srwxrwxrwx socket
 ```
 
-还可以用下面这段 Python 直接跟 X 服务器做一次握手，连接成功即说明 WSLg 正常：
+The following Python snippet performs a direct handshake with the X server.
+A successful connection confirms that WSLg is healthy:
 
 ```bash
 python3 - <<'EOF'
@@ -40,204 +55,240 @@ print('X OK, reply:', s.recv(8).hex())
 EOF
 ```
 
-正常输出类似 `X OK, reply: 00190b0000000700`；如果报错或卡住，说明 WSLg 本身有问题（先 `wsl --update` / 重启 WSL），与 Docker 无关。
+Normal output looks like `X OK, reply: 00190b0000000700`. An error or hang means
+WSLg itself needs attention first, such as `wsl --update` or a WSL restart; that
+problem is independent of Docker.
 
 ---
 
-## 3. 为什么图形窗口没有弹出（诊断记录）
+## 3. Why the GUI window did not appear
 
-### 3.1 现象
+### 3.1 Symptom
 
-按 README 执行 `ros2 launch hex_arm_bringup view.launch.py` 后，终端里出现：
+After running `ros2 launch hex_arm_bringup view.launch.py` as described in the
+README, the terminal reports:
 
 ```text
 [rviz2-3] qt.qpa.xcb: could not connect to display :0
-[rviz2-3] qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ...
+[rviz2-3] qt.qpa.plugin: Could not load the Qt platform plugin xcb ...
 [ERROR] [rviz2-3]: process has died ...
 [joint_state_publisher_gui-2] qt.qpa.xcb: could not connect to display :0
 [ERROR] [joint_state_publisher_gui-2]: process has died ...
 ```
 
-`robot_state_publisher` 正常启动，只有需要弹窗的进程死掉——这是典型的「容器连不上 X 服务器」。
+`robot_state_publisher` remains healthy while only the windowed processes exit.
+This is the typical signature of a container that cannot reach the X server.
 
-### 3.2 根因（本机实测数据）
+### 3.2 Root cause: measurements from this machine
 
-对当前容器 `docker inspect ros2-jazzy-arm` 检查后发现：
+`docker inspect ros2-jazzy-arm` showed:
 
-| 检查项 | 结果 | 说明 |
+| Check | Result | Meaning |
 |---|---|---|
-| 工作区挂载源 | `\\wsl.localhost\Ubuntu-24.04\home\kk_wsl\...` | 从 Windows 侧创建的 UNC 挂载 |
-| 容器 Hostname | `docker-desktop` | 引擎是 Docker Desktop，不是 WSL 内原生 dockerd |
-| 挂载列表 | 只有工作区 + `/mnt/wslg` | `compose.yaml` 声明的 `/tmp/.X11-unix` **缺失** |
-| 容器内 X socket | `stat` 能看到文件，但 `connect()` 返回 `FileNotFoundError` | socket 不可连接 |
-| WSL 宿主机 X socket | 握手成功（`X OK, reply: 00190b0000000700`） | WSLg 本身正常 |
-| 新建一个正确挂载 `/tmp/.X11-unix` 的容器 | 握手成功 | 证明修好挂载即可解决 |
+| Workspace mount source | `\\wsl.localhost\Ubuntu-24.04\home\kk_wsl\...` | UNC mount created from Windows |
+| Container hostname | `docker-desktop` | The engine is Docker Desktop, not a native dockerd inside WSL |
+| Mount list | Workspace and `/mnt/wslg` only | The `/tmp/.X11-unix` mount declared by `compose.yaml` is **missing** |
+| X socket inside the container | `stat` sees a file, but `connect()` returns `FileNotFoundError` | The socket is unusable |
+| X socket on the WSL host | Handshake succeeds with `X OK, reply: 00190b0000000700` | WSLg itself is healthy |
+| New container with a correct `/tmp/.X11-unix` mount | Handshake succeeds | Correcting the mount resolves the problem |
 
-结论：**容器是被 Windows 侧的 Docker Desktop 创建出来的，X11 socket 的挂载损坏/缺失，导致所有 Qt/X11 图形程序无法连上 `:0`**。README 里那句“请在 Ubuntu 24.04 WSL shell 中运行，而不是在 PowerShell 中运行”正是为了防止这种情况。
+Conclusion: **the container was created through Docker Desktop from Windows, and
+its X11 socket mount is missing or damaged, so Qt/X11 programs cannot connect to
+`:0`**. The README instruction to run from an Ubuntu 24.04 WSL shell rather than
+PowerShell exists to prevent this situation.
 
-### 3.3 修复：在 WSL shell 里重建容器（推荐）
+### 3.3 Recommended fix: recreate the container from WSL
 
-> 注意：如果 VS Code 的 Dev Containers 正连着这个容器（当前容器里确实有 vscode-server 和打开的终端），先断开/关掉 VS Code 连接，重建会中断这些会话。
+> If VS Code is currently attached to this container through Dev Containers,
+> disconnect from the container first. Otherwise, VS Code may automatically stop
+> or recreate it while you are working.
+
+Run the following commands in an **Ubuntu 24.04 WSL terminal**, not in
+PowerShell:
 
 ```bash
-# 在 Ubuntu-24.04 的 WSL 终端中执行（不是 PowerShell）
 cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2
-
-docker compose down          # 只删容器，不影响镜像和工程文件
-docker compose up -d         # 从 WSL 原生路径重建，三个挂载都会生效
+docker compose down
+docker compose up -d
 docker exec -it ros2-jazzy-arm bash
 ```
 
-进容器后确认挂载和 X 是否恢复：
+After entering the container, confirm that the graphical socket is present:
 
 ```bash
-docker inspect ros2-jazzy-arm | grep -A 10 '"Mounts"'   # 应能看到 /tmp/.X11-unix
-docker exec ros2-jazzy-arm ls /tmp/.X11-unix           # 应能看到 X0
+env | grep -E 'DISPLAY|WAYLAND_DISPLAY'
+ls -la /tmp/.X11-unix
+docker inspect ros2-jazzy-arm | grep -A 10 Mounts
 ```
 
-然后在容器里（交互式 bash 会自动 source，或手动）：
+The expected environment includes `DISPLAY=:0`, and the mount list should
+contain both `/mnt/wslg` and `/tmp/.X11-unix`.
+
+Then launch the visualization:
 
 ```bash
+cd /workspaces/hex_arm_ros2
 source /opt/ros/jazzy/setup.bash
-source /workspaces/hex_arm_ros2/install/setup.bash
-ros2 launch hex_arm_bringup view.launch.py             # 滑块窗口 + RViz
-```
-
-### 3.4 不想重建容器时的临时方案（备用）
-
-不动现有容器，另开一个挂载正确的新容器跑 GUI（ROS 通信走 host 网络，与旧容器互通；两者不要同时 launch 同一种模式）：
-
-```bash
-# 在 WSL 终端执行
-docker run -d --name ros2-jazzy-gui \
-  --network host --ipc host \
-  -e DISPLAY=:0 -e WAYLAND_DISPLAY=wayland-0 \
-  -e XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir \
-  -e PULSE_SERVER=unix:/mnt/wslg/PulseServer \
-  -e QT_X11_NO_MITSHM=1 \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v /mnt/wslg:/mnt/wslg \
-  -v /home/kk_wsl/ros2_ws/code/hex_arm_ros2:/workspaces/hex_arm_ros2 \
-  hex-arm-jazzy:local sleep infinity
-
-docker exec -it ros2-jazzy-gui bash
-source /opt/ros/jazzy/setup.bash
-source /workspaces/hex_arm_ros2/install/setup.bash
+source install/setup.bash
 ros2 launch hex_arm_bringup view.launch.py
 ```
 
-这个方案的 X socket 连通性已实测通过；完整 GUI 流程建议自己跑一次确认。
+If the RViz window appears and the six sliders in
+`joint_state_publisher_gui` move the model, the graphical path is working.
 
----
+### 3.4 Temporary alternative: start a separate GUI-capable container
 
-## 4. 用命令行/脚本驱动模拟机械臂
-
-工程提供三种模式，只有 `view` 是纯展示，`mock` 和 `gz` 都有真正的控制回路：
-
-| 模式 | 内容 | 启动命令 | 驱动方式 |
-|---|---|---|---|
-| `view` | URDF + 关节滑块 + RViz，无控制回路 | `ros2 launch hex_arm_bringup view.launch.py` | 拖动滑块（GUI）；命令行请用 mock/gz |
-| `mock` | ros2_control + 模拟硬件 + 轨迹控制器 + RViz | `ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true` | `FollowJointTrajectory` action（命令行/脚本） |
-| `gz` | Gazebo Harmonic 物理仿真（+RViz） | `ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true` | `FollowJointTrajectory` action（命令行/脚本） |
-
-统一的外部接口：
-
-```text
-/firefly_arm_controller/follow_joint_trajectory   (control_msgs/action/FollowJointTrajectory)
-```
-
-关节顺序固定为 `joint_1 ... joint_6`，单位是弧度（rad），限位如下（来自工程 URDF）：
-
-| 关节 | 限位 (rad) |
-|---|---|
-| joint_1 | −2.86 ~ 2.86 |
-| joint_2 | −1.57 ~ 2.09 |
-| joint_3 | 0 ~ 3.14 |
-| joint_4 | −1.57 ~ 1.57 |
-| joint_5 | −1.54 ~ 1.54 |
-| joint_6 | −2.79 ~ 2.79 |
-
-### 4.1 命令行：`ros2 action send_goal`（已在本机实测）
-
-先启动 mock 模式（开 RViz 就能看到机械臂动）：
+If the current development container must remain untouched, create a second
+container from an Ubuntu 24.04 WSL terminal:
 
 ```bash
-# 终端 1
+docker run -d --name ros2-jazzy-gui \
+  --network host \
+  --ipc host \
+  -e DISPLAY=:0 \
+  -e WAYLAND_DISPLAY=wayland-0 \
+  -e XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir \
+  -e PULSE_SERVER=/mnt/wslg/PulseServer \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /mnt/wslg:/mnt/wslg \
+  -v /home/kk_wsl/ros2_ws/code/hex_arm_ros2:/workspaces/hex_arm_ros2 \
+  osrf/ros:jazzy-desktop
+```
+
+Enter that container, build or source the workspace, and run the same launch
+command. This is useful for diagnosis, but recreating the main container from
+WSL is the cleaner long-term solution.
+
+## 4. Command-line simulation control
+
+The project provides three launch modes:
+
+| Mode | Launch command | Purpose |
+|---|---|---|
+| Model viewing | `ros2 launch hex_arm_bringup view.launch.py` | Inspect the URDF and move joints manually; no trajectory controller |
+| Mock hardware | `ros2 launch hex_arm_bringup mock.launch.py` | Fastest way to test the ros2_control trajectory interface |
+| Gazebo simulation | `ros2 launch hex_arm_bringup gz_sim.launch.py` | Test the same controller interface with simulated dynamics |
+
+Both mock hardware and Gazebo expose the same action:
+
+```text
+/firefly_arm_controller/follow_joint_trajectory
+```
+
+The canonical joint order is:
+
+```text
+joint_1, joint_2, joint_3, joint_4, joint_5, joint_6
+```
+
+The URDF position limits are:
+
+| Joint | Minimum (rad) | Maximum (rad) |
+|---|---:|---:|
+| `joint_1` | -2.86 | 2.86 |
+| `joint_2` | -1.57 | 2.09 |
+| `joint_3` | 0.00 | 3.14 |
+| `joint_4` | -1.57 | 1.57 |
+| `joint_5` | -1.54 | 1.54 |
+| `joint_6` | -2.79 | 2.79 |
+
+Keep every test target inside these limits. The simulated MoveIt configuration
+may use the nominal URDF velocity limit of `6.0 rad/s`; the real commissioning
+profile remains independently capped at `0.2 rad/s` until the hardware is
+validated.
+
+### 4.1 Send a trajectory to mock hardware
+
+Terminal 1:
+
+```bash
+cd /workspaces/hex_arm_ros2
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch hex_arm_bringup mock.launch.py
+```
+
+Terminal 2:
+
+```bash
 source /opt/ros/jazzy/setup.bash
 source /workspaces/hex_arm_ros2/install/setup.bash
-ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
-```
 
-另开一个终端发送轨迹目标：
-
-```bash
-# 终端 2（同样先 source 两行）
-ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
+ros2 action send_goal \
+  /firefly_arm_controller/follow_joint_trajectory \
   control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+  'trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}'
 ```
 
-预期输出（本机实测）：
-
-```text
-Goal accepted with ID: ...
-...
-Goal finished with status: SUCCEEDED
-```
-
-查看关节实际位置（应等于目标值）：
+A successful run reports that the goal was accepted and finishes with
+`STATUS_SUCCEEDED`. You can watch the joint states in another terminal:
 
 ```bash
-ros2 topic echo --once /joint_states
-# position: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1]
+ros2 topic echo /joint_states
 ```
 
-其他常用命令：
+Useful inspection commands:
 
 ```bash
-ros2 action list -t                      # 查看可用的 action
-ros2 topic list                          # 查看话题
-ros2 topic echo /joint_states            # 持续查看关节状态
+ros2 control list_controllers
+ros2 control list_hardware_components
+ros2 action list -t
 ```
 
-### 4.2 gz 物理仿真模式
+### 4.2 Send the same trajectory to Gazebo
+
+Terminal 1:
 
 ```bash
-# 终端 1：打开 Gazebo 窗口和 RViz
-ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
-
-# 终端 2：同一套 send_goal 命令即可驱动
-ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
-  control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+cd /workspaces/hex_arm_ros2
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch hex_arm_bringup gz_sim.launch.py
 ```
 
-说明：
-- `headless:=false` 才会弹出 Gazebo 窗口；默认 `headless:=true` 是后台物理仿真。
-- gz 模式使用仿真时间（`use_sim_time`），轨迹执行由 Gazebo 时钟驱动。
+Wait until Gazebo, `robot_state_publisher`, and
+`firefly_arm_controller` are ready. Then run the same
+`ros2 action send_goal` command from section 4.1 in a second terminal.
 
-### 4.3 用 Python 脚本驱动（可编程）
+Using one controller action for mock hardware, Gazebo, MoveIt, and the real arm
+is intentional: clients do not need to change when the execution backend
+changes.
 
-把下面内容存成 `drive_arm.py`（写法与仓库自带测试 `src/hex_arm_bringup/test/trajectory_test_common.py` 一致）：
+To display the Gazebo window, launch it explicitly with:
+
+```bash
+ros2 launch hex_arm_bringup gz_sim.launch.py headless:=false
+```
+
+The default `headless:=true` runs physics without a window. Gazebo mode uses
+simulation time, so trajectory execution follows the Gazebo clock.
+
+### 4.3 Drive the arm from Python
+
+Save the following as `drive_arm.py`. It uses the same action API as
+`src/hex_arm_bringup/test/trajectory_test_common.py`:
 
 ```python
 #!/usr/bin/env python3
 import rclpy
+from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-JOINTS = [f"joint_{i}" for i in range(1, 7)]
+JOINTS = [f'joint_{i}' for i in range(1, 7)]
+
 
 def main() -> None:
     rclpy.init()
-    node = Node("drive_arm")
+    node = Node('drive_arm')
     client = ActionClient(
-        node, FollowJointTrajectory,
-        "/firefly_arm_controller/follow_joint_trajectory")
+        node,
+        FollowJointTrajectory,
+        '/firefly_arm_controller/follow_joint_trajectory',
+    )
     if not client.wait_for_server(timeout_sec=10):
-        raise SystemExit("action server 不可用：先启动 mock/gz launch")
+        raise SystemExit('action server unavailable; start the mock or Gazebo launch first')
 
     goal = FollowJointTrajectory.Goal()
     goal.trajectory.joint_names = JOINTS
@@ -250,14 +301,16 @@ def main() -> None:
     rclpy.spin_until_future_complete(node, future)
     handle = future.result()
     if not handle.accepted:
-        raise SystemExit("goal 被拒绝")
+        raise SystemExit('goal was rejected')
+
     result = handle.get_result_async()
     rclpy.spin_until_future_complete(node, result)
-    print("result status:", result.result().status)
+    print('result status:', result.result().status)
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
 ```
 
@@ -265,48 +318,46 @@ if __name__ == "__main__":
 python3 drive_arm.py
 ```
 
-### 4.4 无界面自动化验证
+### 4.4 Headless automated verification
 
-仓库自带测试可以直接验证 mock/gz 的完整轨迹链路（发送两条轨迹 + 取消一条），不需要任何窗口：
+The repository test scripts exercise the complete mock or Gazebo trajectory
+path by sending two trajectories and cancelling one. No window is required:
 
 ```bash
 ./scripts/test.sh mock
 ./scripts/test.sh gz
 ```
 
-本机 `./scripts/test.sh mock` 已实测通过。
+## 5. Quick troubleshooting
 
----
-
-## 5. 常见问题速查
-
-| 报错/现象 | 原因 | 处理 |
+| Error or symptom | Likely cause | Resolution |
 |---|---|---|
-| `qt.qpa.xcb: could not connect to display :0` | 容器 X socket 挂载损坏/缺失（Windows 侧创建容器） | 按第 3.3 节在 WSL shell 重建容器 |
-| `command not found: ros2 / rviz2` | 没 source ROS 环境 | `source /opt/ros/jazzy/setup.bash`（或进入交互式 bash） |
-| `Package 'hex_arm_bringup' not found` | 没 source 工作区 install | `source /workspaces/hex_arm_ros2/install/setup.bash`，没有就先 `./scripts/build.sh` |
-| 从 PowerShell 跑 `docker compose` | 会以 UNC 路径挂载，X socket 失效 | 一律在 Ubuntu WSL shell 中执行 |
-| Gazebo 很卡/窗口空白 | WSLg 软件渲染 | 正常现象，属软件渲染；可接受即可 |
-| `ros2 action send_goal` 提示 server 不可用 | launch 还没起完 / 控制器未激活 | 等几秒再发，或用 `ros2 action list -t` 确认 |
+| `qt.qpa.xcb: could not connect to display :0` | The container X socket mount is missing or broken, often because the container was created from Windows | Recreate the container from a WSL shell as described in section 3.3 |
+| `command not found: ros2` or `rviz2` | The ROS environment was not sourced | Run `source /opt/ros/jazzy/setup.bash` or enter an interactive container shell |
+| `Package 'hex_arm_bringup' not found` | The workspace installation was not sourced or built | Run `source /workspaces/hex_arm_ros2/install/setup.bash`; if it does not exist, run `./scripts/build.sh` |
+| `docker compose` was run from a PowerShell path | Docker received a UNC workspace path and the X socket became unusable | Run all Compose commands from an Ubuntu WSL shell |
+| Gazebo is slow or its window is blank | WSLg is using software rendering | This can be normal; use headless mode if the graphical window is unnecessary |
+| `ros2 action send_goal` cannot find the server | The launch is still starting or the controller is inactive | Wait briefly, then confirm with `ros2 action list -t` and `ros2 control list_controllers` |
 
----
+## 6. Diagnostic command record
 
-## 6. 附：本次诊断执行过的关键命令（留档）
+These commands summarize the checks used to isolate the GUI issue and verify
+trajectory control:
 
 ```bash
-# WSL 宿主机
-python3 x11probe.py                      # /tmp/.X11-unix/X0 握手 → OK
+# WSL host: verify that /tmp/.X11-unix/X0 accepts a handshake
+python3 x11probe.py
 
-# 容器内
-docker exec ros2-jazzy-arm env            # DISPLAY=:0 等环境正确
-docker inspect ros2-jazzy-arm             # 挂载缺 /tmp/.X11-unix；Hostname=docker-desktop
-docker exec ros2-jazzy-arm python3 x11probe.py   # 容器内握手 → FileNotFoundError
+# Existing container: inspect environment, mounts, and the X11 handshake
+docker exec ros2-jazzy-arm env
+docker inspect ros2-jazzy-arm
+docker exec ros2-jazzy-arm python3 x11probe.py
 
-# 对照实验
+# Control experiment: mount the X socket in a fresh container
 docker run --rm -v /tmp/.X11-unix:/tmp/.X11-unix \
-  --entrypoint python3 hex-arm-jazzy:local x11probe.py   # 新容器握手 → OK
+  --entrypoint python3 hex-arm-jazzy:local x11probe.py
 
-# 命令行驱动验证
-./scripts/test.sh mock                   # 通过
-ros2 action send_goal ...                # SUCCEEDED，/joint_states 到达目标位姿
+# Headless trajectory verification
+./scripts/test.sh mock
+ros2 action send_goal ...
 ```
