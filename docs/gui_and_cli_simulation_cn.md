@@ -34,8 +34,39 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
 若 OpenGL renderer 是 `llvmpipe`，GUI 仍可正常使用，但 Gazebo 为软件渲染。
-NVIDIA 主机若需要容器硬件加速，还需在宿主机单独安装 NVIDIA Container Toolkit；
-它不是“窗口无法弹出”的必要修复条件。
+
+### NVIDIA GPU 检查与回退
+
+NVIDIA 主机需先按 [README](../README_cn.md#nvidia-独立显卡加速) 安装 Container
+Toolkit。完成后，本地 Ubuntu 脚本会自动叠加 `compose.nvidia.yaml`：
+
+```bash
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+```
+
+`doctor` 必须同时输出容器内的 RTX 型号、NVIDIA OpenGL renderer 和
+`NVIDIA GPU acceleration: OK`。如需确认失败时不会悄悄退回 CPU 渲染，可强制
+NVIDIA 模式：
+
+```bash
+HEX_ARM_GPU=nvidia ./scripts/docker-dev.sh doctor
+```
+
+临时禁用 NVIDIA、仅使用现有 `/dev/dri` 路径：
+
+```bash
+HEX_ARM_GPU=none ./scripts/docker-dev.sh up
+```
+
+原生 Compose 等价命令为：
+
+```bash
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml up -d
+```
+
+Toolkit 只负责向容器注入宿主机匹配的设备和驱动库；项目 Dockerfile 不安装
+NVIDIA 内核驱动或 CUDA SDK。Toolkit 不是“窗口无法弹出”的必要修复条件。
 
 ## WSL2 专项诊断结论
 

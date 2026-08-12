@@ -105,6 +105,62 @@ docker compose -f compose.ubuntu.yaml down
 命令。请不要把本地 Ubuntu 的 `compose.ubuntu.yaml` 换成 WSL2 使用的
 `compose.yaml`，也不需要执行 `xhost +`。
 
+#### NVIDIA 独立显卡加速
+
+本地 Ubuntu 上，脚本默认使用 `HEX_ARM_GPU=auto`：检测到可用 NVIDIA GPU 时
+自动叠加 `compose.nvidia.yaml`；没有 NVIDIA GPU 时保持 `/dev/dri` 通用路径。
+首次使用 NVIDIA 容器前，需在宿主机安装 NVIDIA Container Toolkit（不会在
+Dockerfile 中安装宿主机显卡驱动）：
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor --yes \
+      -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Docker 重启会停止当时正在运行的全部容器，但不会停止宿主机直接运行的 CUDA
+进程。安装完成后重新创建并检查本项目容器：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+```
+
+也可以显式选择模式：
+
+```bash
+# 强制 NVIDIA；缺少 GPU 或 Toolkit 时立即报错
+HEX_ARM_GPU=nvidia ./scripts/docker-dev.sh up
+
+# 禁用 NVIDIA override，使用 AMD/Intel DRI 或软件渲染
+HEX_ARM_GPU=none ./scripts/docker-dev.sh up
+```
+
+不使用辅助脚本时，先按上一节设置 `HEX_ARM_XAUTHORITY`，再显式叠加 NVIDIA
+override：
+
+```bash
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml up -d
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml \
+  exec -T ros2-jazzy-arm nvidia-smi
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml \
+  exec -T ros2-jazzy-arm glxinfo -B
+```
+
+`doctor` 成功时应显示 RTX 型号、`OpenGL renderer string: NVIDIA ...` 和
+`NVIDIA GPU acceleration: OK`。若仍显示 `llvmpipe`，则是 CPU 软件渲染。
+镜像已经包含 GLVND/OpenGL 用户态依赖；不要把 NVIDIA 内核驱动或宿主机驱动包
+写入 Dockerfile。若同时进行 LeRobot 等 CUDA 训练，RViz/Gazebo 会与训练任务
+共享显存和算力，建议错峰运行。
+
 ### WSL2（仅 Windows 10/11）
 
 WSL2 是 **Windows Subsystem for Linux 2**，即 Windows 内置的 Linux 虚拟化

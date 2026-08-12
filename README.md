@@ -113,6 +113,64 @@ Set `HEX_ARM_XAUTHORITY` again in every new host terminal before running these
 Compose commands. Do not replace native Ubuntu's `compose.ubuntu.yaml` with the
 WSL2-only `compose.yaml`, and do not run `xhost +`.
 
+#### NVIDIA discrete GPU acceleration
+
+On native Ubuntu, the helper defaults to `HEX_ARM_GPU=auto`: it automatically
+adds `compose.nvidia.yaml` when a working NVIDIA GPU is detected, and otherwise
+keeps the generic `/dev/dri` path. Before first use, install NVIDIA Container
+Toolkit on the host. Do not install the host graphics driver in the Dockerfile:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor --yes \
+      -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Restarting Docker stops all containers that are running at that moment, but
+does not stop CUDA processes running directly on the host. Recreate and check
+this project's container afterward:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+```
+
+The mode can also be selected explicitly:
+
+```bash
+# Require NVIDIA; fail immediately when the GPU or Toolkit is unavailable
+HEX_ARM_GPU=nvidia ./scripts/docker-dev.sh up
+
+# Disable the NVIDIA override and use AMD/Intel DRI or software rendering
+HEX_ARM_GPU=none ./scripts/docker-dev.sh up
+```
+
+Without the helper, set `HEX_ARM_XAUTHORITY` as shown above and explicitly add
+the NVIDIA override:
+
+```bash
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml up -d
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml \
+  exec -T ros2-jazzy-arm nvidia-smi
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml \
+  exec -T ros2-jazzy-arm glxinfo -B
+```
+
+A successful `doctor` reports the RTX model,
+`OpenGL renderer string: NVIDIA ...`, and `NVIDIA GPU acceleration: OK`.
+`llvmpipe` means CPU software rendering. The image already contains its
+GLVND/OpenGL userspace dependencies; do not add the NVIDIA kernel or host driver
+packages to the Dockerfile. RViz/Gazebo shares GPU memory and compute with
+host CUDA workloads such as LeRobot training, so avoid running them together.
+
 ### WSL2 (Windows 10/11 only)
 
 WSL2 means **Windows Subsystem for Linux 2**, the Linux virtualization
