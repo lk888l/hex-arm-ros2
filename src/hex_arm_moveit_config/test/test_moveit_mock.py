@@ -125,6 +125,11 @@ def main() -> None:
             if time.monotonic() >= deadline:
                 raise TimeoutError("MoveGroup or trajectory-controller action did not appear")
 
+        # The probe may discover the controller before move_group's newly
+        # constructed controller handle has completed DDS action discovery.
+        # Let that independent client settle before the first execution.
+        time.sleep(1.0)
+
         node.request(TARGET, plan_only=True)
         node.request(TARGET, plan_only=False)
         for _ in range(20):

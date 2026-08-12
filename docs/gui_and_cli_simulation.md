@@ -2,11 +2,45 @@
 
 **English** | [中文](gui_and_cli_simulation_cn.md)
 
-> Scope: `hex_arm_ros2` on WSL2 + Docker (ROS 2 Jazzy).
-> This document explains why GUI windows may fail to open and how to drive the
-> simulated arm from the command line. It does not require project code changes.
+> Scope: `hex_arm_ros2` on native Ubuntu 24.04 or WSL2 with Docker
+> (ROS 2 Jazzy).
 
-## 1. Conclusions first
+## Native Ubuntu 24.04
+
+Using the old WSL2 Compose file on native Ubuntu supplies a nonexistent
+`/mnt/wslg/runtime-dir` and does not pass the desktop session's Xauthority
+cookie. The typical failure starts with `Authorization required`, followed by
+RViz reporting `could not connect to display :0`.
+
+Run the following from the repository root in a terminal opened by the desktop
+session:
+
+```bash
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+`doctor` should report at least `X11 authorization: OK` and an OpenGL
+version. The native Compose file mounts the current Xauthority read-only and
+does not disable X server access control; do not run `xhost +`. This also
+works on a GNOME Wayland session through Xwayland.
+
+Inside the container, start MoveIt with:
+
+```bash
+cd /workspaces/hex_arm_ros2
+./scripts/build.sh
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
+```
+
+An OpenGL renderer of `llvmpipe` is functional software rendering, though
+Gazebo will be slower. NVIDIA acceleration additionally requires NVIDIA
+Container Toolkit on the host; it is not required merely to open the windows.
+
+## WSL2-specific conclusions
 
 1. **Root cause of the missing GUI windows, verified on this machine**: the current
    `ros2-jazzy-arm` container was created from Windows (PowerShell / Docker Desktop).
@@ -16,8 +50,8 @@
    RViz and `joint_state_publisher_gui` therefore exit with
    `qt.qpa.xcb: could not connect to display :0`. The launch files, robot model,
    and ros2_control are otherwise working.
-2. **Fix**: recreate the container once from an **Ubuntu WSL shell**, not from
-   PowerShell, as required by the README. See Section 3.
+2. **Fix**: recreate the container from an **Ubuntu WSL shell**, not PowerShell,
+   as described in the WSL2 diagnosis below.
 3. **Command-line simulation control works** and has been verified on this machine.
    Both `mock` (RViz visualization) and `gz` (Gazebo physics simulation) expose
    the standard `FollowJointTrajectory` action. Drive either mode with
@@ -25,7 +59,7 @@
 
 ---
 
-## 2. Verify WSLg itself first
+## WSL2: verify WSLg itself first
 
 Run the following in an **Ubuntu-24.04 WSL terminal**:
 
@@ -61,9 +95,9 @@ problem is independent of Docker.
 
 ---
 
-## 3. Why the GUI window did not appear
+## WSL2 GUI diagnosis
 
-### 3.1 Symptom
+### Symptom
 
 After running `ros2 launch hex_arm_bringup view.launch.py` as described in the
 README, the terminal reports:
@@ -79,7 +113,7 @@ README, the terminal reports:
 `robot_state_publisher` remains healthy while only the windowed processes exit.
 This is the typical signature of a container that cannot reach the X server.
 
-### 3.2 Root cause: measurements from this machine
+### Root cause: WSL2 measurements
 
 `docker inspect ros2-jazzy-arm` showed:
 
@@ -97,7 +131,7 @@ its X11 socket mount is missing or damaged, so Qt/X11 programs cannot connect to
 `:0`**. The README instruction to run from an Ubuntu 24.04 WSL shell rather than
 PowerShell exists to prevent this situation.
 
-### 3.3 Recommended fix: recreate the container from WSL
+### Recommended fix: recreate the container from WSL
 
 > If VS Code is currently attached to this container through Dev Containers,
 > disconnect from the container first. Otherwise, VS Code may automatically stop
@@ -136,7 +170,7 @@ ros2 launch hex_arm_bringup view.launch.py
 If the RViz window appears and the six sliders in
 `joint_state_publisher_gui` move the model, the graphical path is working.
 
-### 3.4 Temporary alternative: start a separate GUI-capable container
+### Temporary alternative: start a separate GUI-capable container
 
 If the current development container must remain untouched, create a second
 container from an Ubuntu 24.04 WSL terminal:
@@ -332,7 +366,7 @@ path by sending two trajectories and cancelling one. No window is required:
 
 | Error or symptom | Likely cause | Resolution |
 |---|---|---|
-| `qt.qpa.xcb: could not connect to display :0` | The container X socket mount is missing or broken, often because the container was created from Windows | Recreate the container from a WSL shell as described in section 3.3 |
+| `qt.qpa.xcb: could not connect to display :0` | Xauthority is missing on native Ubuntu, or the WSL2 X socket mount is broken | Run `./scripts/docker-dev.sh doctor` on the host, then recreate the matching container |
 | `command not found: ros2` or `rviz2` | The ROS environment was not sourced | Run `source /opt/ros/jazzy/setup.bash` or enter an interactive container shell |
 | `Package 'hex_arm_bringup' not found` | The workspace installation was not sourced or built | Run `source /workspaces/hex_arm_ros2/install/setup.bash`; if it does not exist, run `./scripts/build.sh` |
 | `docker compose` was run from a PowerShell path | Docker received a UNC workspace path and the X socket became unusable | Run all Compose commands from an Ubuntu WSL shell |

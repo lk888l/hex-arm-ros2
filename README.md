@@ -36,16 +36,106 @@ session or activation state machine.
 | `gz` | Gazebo Harmonic physics through `gz_ros2_control` | none |
 | `real` | Rust controller, Zenoh bridge, ros2_control | `/dev/bus/usb` only |
 
-Start the development container without USB access. Run these commands from
-the **Ubuntu 24.04 WSL shell**, not PowerShell: WSL must resolve `/mnt/wslg`
-and `/tmp/.X11-unix` so RViz and Gazebo can reach WSLg.
+## Starting the Docker development environment
+
+### Native Ubuntu 24.04 (this machine)
+
+“Native Ubuntu” means that the computer boots Ubuntu directly, rather than
+running Ubuntu inside Windows. The current repository at
+`/home/kk/kk_data/ros2_project/hex-arm-ros2` is in this environment. Run:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+`build` is needed only on first use or after changing the Dockerfile. A normal
+daily start is:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh shell
+```
+
+On native Ubuntu, the helper selects `compose.ubuntu.yaml`, passes the current
+X11 authorization cookie read-only, and maps `/dev/dri` so RViz, MoveIt, and
+Gazebo can open desktop windows.
+
+#### Direct Docker Compose commands (without the helper)
+
+`docker compose` is Docker's Compose CLI. The following commands are equivalent
+to `docker-dev.sh` on native Ubuntu. Run them from an Ubuntu graphical desktop
+terminal and set `HEX_ARM_XAUTHORITY` in that terminal first:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+
+# Prefer XAUTHORITY from the desktop session; otherwise use ~/.Xauthority
+if [[ -n "${XAUTHORITY:-}" ]]; then
+  export HEX_ARM_XAUTHORITY="$XAUTHORITY"
+else
+  export HEX_ARM_XAUTHORITY="$(getent passwd "$(id -u)" | cut -d: -f6)/.Xauthority"
+fi
+
+# This must print GUI prerequisites: OK
+test -n "${DISPLAY:-}" \
+  && test -r "$HEX_ARM_XAUTHORITY" \
+  && test -e /dev/dri \
+  && echo "GUI prerequisites: OK"
+
+# Build on first use or after changing the Dockerfile
+docker compose -f compose.ubuntu.yaml build
+
+# Start the container in the background
+docker compose -f compose.ubuntu.yaml up -d
+
+# Optional: verify X11 access and show the OpenGL renderer
+docker compose -f compose.ubuntu.yaml exec -T ros2-jazzy-arm \
+  bash -lc 'xdpyinfo >/dev/null && glxinfo -B'
+
+# Enter the ROS 2 container
+docker compose -f compose.ubuntu.yaml exec ros2-jazzy-arm bash
+```
+
+After leaving the container, inspect logs or stop it from the same host terminal,
+where `HEX_ARM_XAUTHORITY` is still set:
+
+```bash
+docker compose -f compose.ubuntu.yaml logs -f
+docker compose -f compose.ubuntu.yaml down
+```
+
+Set `HEX_ARM_XAUTHORITY` again in every new host terminal before running these
+Compose commands. Do not replace native Ubuntu's `compose.ubuntu.yaml` with the
+WSL2-only `compose.yaml`, and do not run `xhost +`.
+
+### WSL2 (Windows 10/11 only)
+
+WSL2 means **Windows Subsystem for Linux 2**, the Linux virtualization
+environment built into Windows. Ubuntu is running under WSL2 only when it was
+started from Windows and `uname -r` contains `microsoft-standard-WSL2`.
+Linux GUI windows are displayed through WSLg.
+
+Run the following commands in the **Ubuntu/WSL terminal** in Windows, not in
+PowerShell or Command Prompt. Replace the first path if the repository is
+elsewhere:
 
 ```bash
 cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2
-docker compose build
-docker compose up -d
-docker exec -it ros2-jazzy-arm bash
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
 ```
+
+The same helper selects `compose.yaml` and the WSLg sockets on WSL2. Neither
+environment requires the overly broad `xhost +` command. The existing image is
+already Ubuntu 24.04 (ROS 2 Jazzy), so a duplicate native-Ubuntu Dockerfile is
+unnecessary.
 
 Inside the container the prompt hostname is `hex-arm-dev`. The older
 `ros2-jazzy` container uses the hostname `ros2-dev`; do not source this
@@ -75,8 +165,8 @@ ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 
 Stop a launch with `Ctrl-C` before starting another mode. If `source
 install/setup.bash` reports paths below `/workspaces/hex_arm_ros2` as missing,
-the shell is in the wrong container; enter it with `docker exec -it
-ros2-jazzy-arm bash` from the WSL host.
+the shell is in the wrong container; enter it with
+`./scripts/docker-dev.sh shell` from the host.
 
 ## Driving the simulated arm from the CLI (`ros2 action send_goal` reference)
 
@@ -147,7 +237,7 @@ The real profile is intentionally a separate Compose override. It maps only
 the USB bus and never enables Docker privileged mode:
 
 ```bash
-docker compose -f compose.yaml -f compose.real.yaml up -d
+HEX_ARM_REAL=1 ./scripts/docker-dev.sh up
 ```
 
 Copy `config/hardware/firefly_y6.example.yaml` to an ignored `*.local.yaml`,
