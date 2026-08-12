@@ -37,8 +37,43 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
 An OpenGL renderer of `llvmpipe` is functional software rendering, though
-Gazebo will be slower. NVIDIA acceleration additionally requires NVIDIA
-Container Toolkit on the host; it is not required merely to open the windows.
+Gazebo will be slower.
+
+### NVIDIA GPU checks and fallback
+
+On an NVIDIA host, first install Container Toolkit as described in the
+[README](../README.md#nvidia-discrete-gpu-acceleration). The native Ubuntu
+helper then adds `compose.nvidia.yaml` automatically:
+
+```bash
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+```
+
+`doctor` must report the RTX model inside the container, an NVIDIA OpenGL
+renderer, and `NVIDIA GPU acceleration: OK`. Force NVIDIA mode when a silent
+CPU-rendering fallback would be unacceptable:
+
+```bash
+HEX_ARM_GPU=nvidia ./scripts/docker-dev.sh doctor
+```
+
+Temporarily disable the NVIDIA override and retain the existing `/dev/dri`
+path with:
+
+```bash
+HEX_ARM_GPU=none ./scripts/docker-dev.sh up
+```
+
+The equivalent direct Compose command is:
+
+```bash
+docker compose -f compose.ubuntu.yaml -f compose.nvidia.yaml up -d
+```
+
+Container Toolkit injects devices and driver libraries that match the host.
+The project Dockerfile does not install the NVIDIA kernel driver or CUDA SDK.
+Toolkit is not required merely to open the GUI windows.
 
 ## WSL2-specific conclusions
 
