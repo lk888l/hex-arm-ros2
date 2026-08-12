@@ -30,14 +30,101 @@ Rust 进程拥有电机总线及全部安全决策权。ROS 桥接层不实现�
 | `gz` | 通过 `gz_ros2_control` 使用 Gazebo Harmonic 物理仿真 | 无 |
 | `real` | Rust 控制器、Zenoh 桥接、ros2_control | 仅 `/dev/bus/usb` |
 
-在不接入 USB 的情况下启动开发容器。请在 **Ubuntu 24.04 WSL shell** 中运行以下命令，而不是在 PowerShell 中：WSL 必须能够解析 `/mnt/wslg` 和 `/tmp/.X11-unix`，RViz 和 Gazebo 才能访问 WSLg。
+## Docker 开发环境启动
+
+### 本地 Ubuntu 24.04（当前机器）
+
+“本地 Ubuntu”是指电脑直接安装并启动 Ubuntu，而不是在 Windows 中运行 Ubuntu。
+当前仓库路径 `/home/kk/kk_data/ros2_project/hex-arm-ros2` 属于这种情况。在 Ubuntu
+桌面的终端中执行：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+`build` 只需在首次使用或 Dockerfile 改动后执行。以后日常启动通常只需要：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh shell
+```
+
+脚本在本地 Ubuntu 中自动使用 `compose.ubuntu.yaml`，只读传入当前 X11 授权
+cookie，并映射 `/dev/dri`，以便 RViz、MoveIt 和 Gazebo 弹出图形窗口。
+
+#### 不使用辅助脚本：原生 Docker Compose 命令
+
+`docker compose` 是 Docker 自带的 Compose CLI。以下命令与本地 Ubuntu 下的
+`docker-dev.sh` 等价。必须从 Ubuntu 图形桌面的终端执行，并在当前终端设置
+`HEX_ARM_XAUTHORITY`：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+
+# 优先使用桌面会话提供的 XAUTHORITY；未提供时回退到 ~/.Xauthority
+if [[ -n "${XAUTHORITY:-}" ]]; then
+  export HEX_ARM_XAUTHORITY="$XAUTHORITY"
+else
+  export HEX_ARM_XAUTHORITY="$(getent passwd "$(id -u)" | cut -d: -f6)/.Xauthority"
+fi
+
+# 必须打印 GUI prerequisites: OK；否则先检查 DISPLAY、Xauthority 或 /dev/dri
+test -n "${DISPLAY:-}" \
+  && test -r "$HEX_ARM_XAUTHORITY" \
+  && test -e /dev/dri \
+  && echo "GUI prerequisites: OK"
+
+# 首次使用或 Dockerfile 改动后构建
+docker compose -f compose.ubuntu.yaml build
+
+# 后台启动容器
+docker compose -f compose.ubuntu.yaml up -d
+
+# 可选：检查容器能否连接 X11，并显示 OpenGL 渲染器
+docker compose -f compose.ubuntu.yaml exec -T ros2-jazzy-arm \
+  bash -lc 'xdpyinfo >/dev/null && glxinfo -B'
+
+# 进入 ROS 2 容器
+docker compose -f compose.ubuntu.yaml exec ros2-jazzy-arm bash
+```
+
+退出容器后，可在同一个已经设置 `HEX_ARM_XAUTHORITY` 的宿主机终端查看日志或
+停止容器：
+
+```bash
+docker compose -f compose.ubuntu.yaml logs -f
+docker compose -f compose.ubuntu.yaml down
+```
+
+每次新开宿主机终端，都要重新设置 `HEX_ARM_XAUTHORITY`，再执行上述 Compose
+命令。请不要把本地 Ubuntu 的 `compose.ubuntu.yaml` 换成 WSL2 使用的
+`compose.yaml`，也不需要执行 `xhost +`。
+
+### WSL2（仅 Windows 10/11）
+
+WSL2 是 **Windows Subsystem for Linux 2**，即 Windows 内置的 Linux 虚拟化
+环境。Ubuntu 若是从 Windows 中启动、`uname -r` 的输出包含
+`microsoft-standard-WSL2`，才属于 WSL2；它通过 WSLg 显示 Linux 图形窗口。
+
+必须打开 Windows 中的 **Ubuntu/WSL 终端**执行以下命令，不要在 PowerShell 或
+CMD 中执行。仓库路径不同则替换第一行：
 
 ```bash
 cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2
-docker compose build
-docker compose up -d
-docker exec -it ros2-jazzy-arm bash
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
 ```
+
+同一个辅助脚本会在 WSL2 中自动使用 `compose.yaml` 和 WSLg socket。两种环境都
+不需要执行权限过宽的 `xhost +`。现有镜像本身已经是 Ubuntu 24.04（ROS 2
+Jazzy），因此无需再复制维护一份内容相同的 Ubuntu Dockerfile。
 
 容器内的提示符主机名为 `hex-arm-dev`。较旧的 `ros2-jazzy` 容器使用主机名 `ros2-dev`；请勿在其中 source 本工作区生成的 `install/` 目录树。`--symlink-install` 构建绑定在 `ros2-jazzy-arm` 使用的 `/workspaces/hex_arm_ros2` 挂载点上。
 
@@ -62,7 +149,9 @@ ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
 ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 ```
 
-在启动另一种模式之前，请先按 `Ctrl-C` 停止当前 launch。如果 `source install/setup.bash` 报错称 `/workspaces/hex_arm_ros2` 下的路径缺失，说明当前所在的容器不对；请在 WSL 宿主机上执行 `docker exec -it ros2-jazzy-arm bash` 进入正确的容器。
+在启动另一种模式之前，请先按 `Ctrl-C` 停止当前 launch。如果 `source
+install/setup.bash` 报错称 `/workspaces/hex_arm_ros2` 下的路径缺失，说明当前
+所在的容器不对；请在宿主机执行 `./scripts/docker-dev.sh shell` 进入正确容器。
 
 ## 用命令行驱动模拟机械臂（`ros2 action send_goal` 详解）
 
@@ -105,13 +194,14 @@ ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
 - 再发一个新 goal 会取消/替换正在执行的旧 goal（控制器默认行为）；`Ctrl-C` 只结束 CLI 客户端本身。
 - gz 模式使用同样的命令；gz 走仿真时间，轨迹按 Gazebo 时钟推进。
 
-更多图形界面与命令行排查见 [docs/gui_and_cli_simulation.md](docs/gui_and_cli_simulation.md)。
+更多图形界面与命令行排查见
+[docs/gui_and_cli_simulation_cn.md](docs/gui_and_cli_simulation_cn.md)。
 
 
 real 配置故意做成独立的 Compose override。它只映射 USB 总线，并且从不启用 Docker 特权模式：
 
 ```bash
-docker compose -f compose.yaml -f compose.real.yaml up -d
+HEX_ARM_REAL=1 ./scripts/docker-dev.sh up
 ```
 
 将 `config/hardware/firefly_y6.example.yaml` 复制为被 git 忽略的 `*.local.yaml`，填写每一项 identity、方向、偏移和限位，然后在真实启动前进行校验。该示例明确标记为不完整，bringup 层和 Rust 控制器都会拒绝使用它。

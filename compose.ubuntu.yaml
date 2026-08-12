@@ -1,0 +1,30 @@
+services:
+  ros2-jazzy-arm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: hex-arm-jazzy:local
+    container_name: ros2-jazzy-arm
+    hostname: hex-arm-dev
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      XAUTHORITY: /tmp/hex-arm-host.xauth
+      QT_QPA_PLATFORM: xcb
+      QT_X11_NO_MITSHM: "1"
+      XDG_RUNTIME_DIR: /tmp/hex-arm-runtime
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+    volumes:
+      - .:/workspaces/hex_arm_ros2
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${HEX_ARM_XAUTHORITY:?run ./scripts/docker-dev.sh instead of invoking this file directly}:/tmp/hex-arm-host.xauth:ro
+    devices:
+      - /dev/dri:/dev/dri
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - bash
+      - -lc
+      - install -d -m 0700 /tmp/hex-arm-runtime && exec sleep infinity

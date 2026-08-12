@@ -5,19 +5,56 @@
 此流程会验证 MoveIt、OMPL、碰撞检测、逆运动学、`FollowJointTrajectory`
 以及现有的 ros2_control `GenericSystem`。它不会访问 USB/CAN 硬件，也不是物理仿真。
 
-在 `ros2-jazzy-arm` 容器内执行：
+## 本地 Ubuntu 24.04 启动（当前机器）
+
+先在 Ubuntu 桌面的宿主机终端中启动容器并检查图形转发：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+进入提示符主机名为 `hex-arm-dev` 的 `ros2-jazzy-arm` 容器后执行：
 
 ```bash
 cd /workspaces/hex_arm_ros2
-./scripts/build.sh
+./scripts/build.sh  # 首次使用或源码改动后执行
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
+```
+
+最后一条命令会启动 `move_group` 和 RViz，正常情况下 Ubuntu 桌面会弹出 MoveIt
+界面。
+
+## WSL2 启动（仅 Windows 10/11）
+
+WSL2 是 **Windows Subsystem for Linux 2**：Ubuntu 运行在 Windows 内部，图形
+窗口由 WSLg 显示。在 Windows 的 Ubuntu/WSL 终端（不是 PowerShell）中执行：
+
+```bash
+cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2  # 仓库不在此处时请替换路径
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+进入同一个 `ros2-jazzy-arm` 容器后，MoveIt 命令与本地 Ubuntu 相同：
+
+```bash
+cd /workspaces/hex_arm_ros2
+./scripts/build.sh  # 首次使用或源码改动后执行
 source install/setup.bash
 ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
 如果现有 `hex_arm_bringup mock.launch.py` 使用相同的 `ROS_DOMAIN_ID`，请先停止
-该会话；两个 launch 文件有意使用相同的控制器名称。如果长期运行的 Docker 容器中
-RViz 报告 `could not connect to display :0`，请先停止 launch，再重启或重建容器，
-使 `/tmp/.X11-unix` 和 `/mnt/wslg` 挂载获取当前 WSLg socket，然后重新执行命令。
+该会话；两个 launch 文件有意使用相同的控制器名称。如果 RViz 报
+`could not connect to display :0`，请在宿主机运行
+`./scripts/docker-dev.sh doctor`。脚本会在本地 Ubuntu 检查 Xauthority，在 WSL2
+使用 WSLg 配置；不要用 `xhost +` 绕过访问控制。自检通过后重新进入容器再启动
+MoveIt。
 
 在 RViz 中选择 `arm` 规划组。拖动交互标记，或选择名为 `ready` 的状态；先点击
 **Plan**，确认预览正确后再点击 **Plan & Execute**。执行链路如下：

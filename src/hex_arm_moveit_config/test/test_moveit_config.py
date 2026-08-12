@@ -57,3 +57,13 @@ def test_moveit_controller_matches_ros2_control_action() -> None:
     assert controller["type"] == "FollowJointTrajectory"
     assert controller["action_ns"] == "follow_joint_trajectory"
     assert controller["joints"] == JOINTS
+
+
+def test_rviz_uses_motion_planning_as_a_display_only() -> None:
+    config = _yaml("moveit.rviz")
+    panel_classes = {panel["Class"] for panel in config["Panels"]}
+    display_classes = {
+        display["Class"] for display in config["Visualization Manager"]["Displays"]
+    }
+    assert "moveit_rviz_plugin/MotionPlanning" not in panel_classes
+    assert "moveit_rviz_plugin/MotionPlanning" in display_classes

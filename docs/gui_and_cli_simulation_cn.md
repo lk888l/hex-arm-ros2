@@ -2,18 +2,50 @@
 
 [English](gui_and_cli_simulation.md) | **中文**
 
-> 适用范围：WSL2 + Docker 下的 `hex_arm_ros2`（ROS 2 Jazzy）。
-> 本文只讲「图形界面为什么打不开」和「如何用命令行驱动模拟机械臂」，不改动任何工程代码。
+> 适用范围：本地 Ubuntu 24.04 或 WSL2 + Docker 下的 `hex_arm_ros2`
+>（ROS 2 Jazzy）。
 
-## 1. 结论先行
+## 本地 Ubuntu 24.04
+
+本地 Ubuntu 使用旧的 WSL2 Compose 时，容器会得到不存在的
+`/mnt/wslg/runtime-dir`，同时缺少宿主机 Xauthority cookie。典型报错是先出现
+`Authorization required`，随后 RViz 报 `could not connect to display :0`。
+
+从桌面会话中的终端进入仓库根目录：
+
+```bash
+./scripts/docker-dev.sh build
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+`doctor` 至少应输出 `X11 authorization: OK` 和 OpenGL 版本。它只读挂载当前
+会话的 Xauthority，不会关闭 X server 的访问控制，因此不要执行 `xhost +`。
+GNOME Wayland 桌面也通过 Xwayland 使用这套方式。
+
+进入容器后运行 MoveIt：
+
+```bash
+cd /workspaces/hex_arm_ros2
+./scripts/build.sh
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
+```
+
+若 OpenGL renderer 是 `llvmpipe`，GUI 仍可正常使用，但 Gazebo 为软件渲染。
+NVIDIA 主机若需要容器硬件加速，还需在宿主机单独安装 NVIDIA Container Toolkit；
+它不是“窗口无法弹出”的必要修复条件。
+
+## WSL2 专项诊断结论
 
 1. **图形窗口打不开的根因（本机已实测定位）**：当前 `ros2-jazzy-arm` 容器是从 Windows 侧（PowerShell / Docker Desktop）创建的，工程以 `\\wsl.localhost\...` 这种 UNC 路径挂载进容器，`compose.yaml` 里声明的 `/tmp/.X11-unix` 挂载没有生效。容器里虽然能看到 X socket 文件，但**无法建立连接**，于是 RViz、joint_state_publisher_gui 直接报 `qt.qpa.xcb: could not connect to display :0` 崩溃退出。launch 本身、机器人模型、ros2_control 都是正常的。
-2. **修复方式**：按 README 的要求，在 **Ubuntu WSL shell**（不是 PowerShell）里重建一次容器即可，命令见第 3 节。
+2. **修复方式**：按 README 的要求，在 **Ubuntu WSL shell**（不是 PowerShell）里重建容器，步骤见下文 WSL2 诊断记录。
 3. **命令行模拟驱动：完全可以**，而且已在当前机器上实测通过。`mock`（RViz 显示）和 `gz`（Gazebo 物理仿真）两种模式都暴露标准的 `FollowJointTrajectory` action，用 `ros2 action send_goal` 或一段 Python 脚本即可驱动，详见第 4 节。
 
 ---
 
-## 2. 先确认 WSLg（图形系统）本身是好的
+## WSL2：先确认 WSLg（图形系统）本身正常
 
 在 **Ubuntu-24.04 的 WSL 终端**里执行：
 
@@ -46,9 +78,9 @@ EOF
 
 ---
 
-## 3. 为什么图形窗口没有弹出（诊断记录）
+## WSL2 图形窗口诊断记录
 
-### 3.1 现象
+### 现象
 
 按 README 执行 `ros2 launch hex_arm_bringup view.launch.py` 后，终端里出现：
 
@@ -62,7 +94,7 @@ EOF
 
 `robot_state_publisher` 正常启动，只有需要弹窗的进程死掉——这是典型的「容器连不上 X 服务器」。
 
-### 3.2 根因（本机实测数据）
+### 根因（WSL2 实测数据）
 
 对当前容器 `docker inspect ros2-jazzy-arm` 检查后发现：
 
@@ -77,7 +109,7 @@ EOF
 
 结论：**容器是被 Windows 侧的 Docker Desktop 创建出来的，X11 socket 的挂载损坏/缺失，导致所有 Qt/X11 图形程序无法连上 `:0`**。README 里那句“请在 Ubuntu 24.04 WSL shell 中运行，而不是在 PowerShell 中运行”正是为了防止这种情况。
 
-### 3.3 修复：在 WSL shell 里重建容器（推荐）
+### 修复：在 WSL shell 里重建容器（推荐）
 
 > 注意：如果 VS Code 的 Dev Containers 正连着这个容器（当前容器里确实有 vscode-server 和打开的终端），先断开/关掉 VS Code 连接，重建会中断这些会话。
 
@@ -105,7 +137,7 @@ source /workspaces/hex_arm_ros2/install/setup.bash
 ros2 launch hex_arm_bringup view.launch.py             # 滑块窗口 + RViz
 ```
 
-### 3.4 不想重建容器时的临时方案（备用）
+### 不想重建容器时的临时方案（备用）
 
 不动现有容器，另开一个挂载正确的新容器跑 GUI（ROS 通信走 host 网络，与旧容器互通；两者不要同时 launch 同一种模式）：
 
@@ -284,7 +316,7 @@ python3 drive_arm.py
 
 | 报错/现象 | 原因 | 处理 |
 |---|---|---|
-| `qt.qpa.xcb: could not connect to display :0` | 容器 X socket 挂载损坏/缺失（Windows 侧创建容器） | 按第 3.3 节在 WSL shell 重建容器 |
+| `qt.qpa.xcb: could not connect to display :0` | 本地 Ubuntu 缺 Xauthority，或 WSL2 的 X socket 挂载失效 | 在宿主机运行 `./scripts/docker-dev.sh doctor`，再按对应章节重建容器 |
 | `command not found: ros2 / rviz2` | 没 source ROS 环境 | `source /opt/ros/jazzy/setup.bash`（或进入交互式 bash） |
 | `Package 'hex_arm_bringup' not found` | 没 source 工作区 install | `source /workspaces/hex_arm_ros2/install/setup.bash`，没有就先 `./scripts/build.sh` |
 | 从 PowerShell 跑 `docker compose` | 会以 UNC 路径挂载，X socket 失效 | 一律在 Ubuntu WSL shell 中执行 |

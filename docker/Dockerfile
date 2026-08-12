@@ -36,8 +36,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-ros2-control \
     ros-jazzy-ros2-controllers \
     ros-jazzy-xacro \
+    mesa-utils \
     udev \
     usbutils \
+    x11-utils \
  && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir --break-system-packages eclipse-zenoh==1.9.0

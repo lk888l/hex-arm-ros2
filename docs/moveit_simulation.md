@@ -6,21 +6,59 @@ This workflow exercises MoveIt, OMPL, collision checking, inverse kinematics,
 `FollowJointTrajectory`, and the existing ros2_control `GenericSystem`. It does
 not access USB/CAN hardware and is not a physics simulation.
 
-Run these commands inside the `ros2-jazzy-arm` container:
+## Native Ubuntu 24.04 startup (this machine)
+
+Start the container and check graphical forwarding in an Ubuntu desktop host
+terminal:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+After entering the `ros2-jazzy-arm` container, whose prompt hostname is
+`hex-arm-dev`, run:
 
 ```bash
 cd /workspaces/hex_arm_ros2
-./scripts/build.sh
+./scripts/build.sh  # Run on first use or after source changes
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
+```
+
+The last command starts `move_group` and RViz. The MoveIt window should appear
+on the Ubuntu desktop.
+
+## WSL2 startup (Windows 10/11 only)
+
+WSL2 means **Windows Subsystem for Linux 2**: Ubuntu runs inside Windows and
+WSLg displays its graphical windows. Run the host commands in the Ubuntu/WSL
+terminal in Windows, not in PowerShell:
+
+```bash
+cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2  # Replace if the repository is elsewhere
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh shell
+```
+
+Inside the same `ros2-jazzy-arm` container, the MoveIt commands are identical:
+
+```bash
+cd /workspaces/hex_arm_ros2
+./scripts/build.sh  # Run on first use or after source changes
 source install/setup.bash
 ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
 Stop any existing `hex_arm_bringup mock.launch.py` session first when it uses
 the same `ROS_DOMAIN_ID`; both launch files intentionally use the same
-controller names. If RViz reports `could not connect to display :0` from a
-long-running Docker container, stop the launch and restart/recreate the
-container so its `/tmp/.X11-unix` and `/mnt/wslg` mounts pick up the current
-WSLg sockets, then run the command again.
+controller names. If RViz reports `could not connect to display :0`, run
+`./scripts/docker-dev.sh doctor` on the host. The helper checks Xauthority on
+native Ubuntu and selects WSLg on WSL2; do not bypass access control with
+`xhost +`. Re-enter the container and start MoveIt after the check passes.
 
 In RViz, select the `arm` planning group. Drag the interactive marker or choose
 the named `ready` state, then use **Plan** first and **Plan & Execute** after the
