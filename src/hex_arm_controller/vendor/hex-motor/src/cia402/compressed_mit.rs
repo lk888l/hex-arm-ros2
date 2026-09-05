@@ -7,8 +7,9 @@
 //! 用法(与 [`crate::cia402::Cia402Manager`] 配合):
 //!   1. `mgr.initialize(nid)`:NMT Operational + 心跳监听 + 默认 TPDO 反馈(q/dq/τ)。
 //!   2. 每个电机调 [`configure`]:写 `0x2004` 压缩开关/映射范围 + 把 RPDO1 重映射到
-//!      `0x2004:02/03`(本电机在共享帧里的 8 字节槽)+ 进 MIT 模式 + 使能。
-//!   3. 控制环按节拍构造共享帧([`pack_shared_frame`])经 `bus.send` 发到 [`DEFAULT_SHARED_COB_ID`]。
+//!      `0x2004:02/03`(本电机在共享帧里的 8 字节槽),但保持电机禁用。
+//!   3. 调 `mgr.set_mode(nid, MotorMode::Mit)` 走统一、可由 TPDO 确认的使能路径。
+//!   4. 控制环按节拍构造共享帧([`pack_shared_frame`])经 `bus.send` 发到 [`DEFAULT_SHARED_COB_ID`]。
 //!
 //! 反馈仍走 manager 的默认 TPDO(本模块不动 TPDO 映射)。
 //! 位打包格式 = 厂商专有压缩定点(CiA402 之上的扩展,非标准)。
@@ -19,24 +20,25 @@ use can_transport::CanBus;
 
 use crate::canopen::rpdo_config::{build_rpdo_config_writes, RpdoRecipe};
 use crate::canopen::sdo;
-use crate::canopen::tpdo_config::TpdoEntry;
+use crate::canopen::tpdo_config::{SdoWrite, TpdoEntry};
 use crate::Result;
 
 // ── 对象字典地址 ──
 const OD_MIT_COMPRESSED: u16 = 0x2004; // 压缩 MIT 控制对象(厂商扩展)
 const OD_MAX_TORQUE: u16 = 0x6072; // 各模式最大力矩(‰)
 const OD_SHORT_BRAKE: u16 = 0x2040; // 短接绕组制动使能(u8)
-const OD_MODE: u16 = 0x6060; // 操作模式(i8),5 = MIT
-const OD_CONTROLWORD: u16 = 0x6040; // 控制字(u16)
 
 const SUB_ENABLE: u8 = 0x01; // u8: 1 = 启用压缩模式
 const SUB_LOWER: u8 = 0x02; // u32: 打包目标低 32 位(RPDO 映射点)
 const SUB_UPPER: u8 = 0x03; // u32: 打包目标高 32 位(RPDO 映射点)
 const SUB_KP_KD_TORQUE_PERMILLE: u8 = 0x0E; // u16: MIT KP/KD 项最大力矩(‰)
-const MODE_MIT: i8 = 5;
 
 /// 占位对象:其他电机槽的 8 字节由它消费(本电机不关心)。沿用参考实现的 `0x3000:03`。
-const PLACEHOLDER: TpdoEntry = TpdoEntry { index: 0x3000, subindex: 0x03, bit_len: 32 };
+const PLACEHOLDER: TpdoEntry = TpdoEntry {
+    index: 0x3000,
+    subindex: 0x03,
+    bit_len: 32,
+};
 
 /// 主站发命令用的共享 COB-ID(= 主站 node 0x10 的 TPDO1 功能码 0x180 | 0x10)。
 /// 所有电机的 RPDO1 都监听它,各取自己的 8 字节槽。
@@ -97,8 +99,13 @@ pub struct CompressedMitTarget {
 
 impl CompressedMitTarget {
     /// 零目标(kp=kd=0 → 零力矩;注意定点对 0 有 ~±数 mNm 量化偏差,见模块说明)。
-    pub const ZERO: Self =
-        Self { position: 0.0, velocity: 0.0, torque: 0.0, kp: 0.0, kd: 0.0 };
+    pub const ZERO: Self = Self {
+        position: 0.0,
+        velocity: 0.0,
+        torque: 0.0,
+        kp: 0.0,
+        kd: 0.0,
+    };
 
     fn float_to_uint(x: f32, x_min: f32, x_max: f32, bits: u32) -> u32 {
         let x = x.clamp(x_min, x_max);
@@ -138,13 +145,39 @@ pub fn pack_shared_frame(
     data
 }
 
+/// Return the exact two object-dictionary words written to `0x2004:02/03`.
+///
+/// Besides configuration this is useful for a read-only RPDO-consumption
+/// proof: hold one target constant, upload both words from the drive, and
+/// compare them bit-for-bit with this result.  The comparison deliberately
+/// happens after the 12/16-bit quantization rather than against the source
+/// floats.
+pub fn packed_target_words(
+    target: &CompressedMitTarget,
+    mapping: &CompressedMitMapping,
+) -> (u32, u32) {
+    let packed = target.to_le_bytes(mapping);
+    (
+        u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]),
+        u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]),
+    )
+}
+
 /// 本电机在共享帧里占 `slice` 槽:自己映射 `0x2004:02/03`,其余槽用占位对象填满 8 字节。
 fn rpdo_entries(slice: u8, total: u8) -> Vec<TpdoEntry> {
     let mut entries = Vec::with_capacity(2 * total as usize);
     for i in 0..total {
         if i == slice {
-            entries.push(TpdoEntry { index: OD_MIT_COMPRESSED, subindex: SUB_LOWER, bit_len: 32 });
-            entries.push(TpdoEntry { index: OD_MIT_COMPRESSED, subindex: SUB_UPPER, bit_len: 32 });
+            entries.push(TpdoEntry {
+                index: OD_MIT_COMPRESSED,
+                subindex: SUB_LOWER,
+                bit_len: 32,
+            });
+            entries.push(TpdoEntry {
+                index: OD_MIT_COMPRESSED,
+                subindex: SUB_UPPER,
+                bit_len: 32,
+            });
         } else {
             entries.push(PLACEHOLDER);
             entries.push(PLACEHOLDER);
@@ -153,31 +186,29 @@ fn rpdo_entries(slice: u8, total: u8) -> Vec<TpdoEntry> {
     entries
 }
 
-/// 配置一个电机进入压缩 MIT(**前提:`Cia402Manager::initialize(nid)` 已跑过** ——
-/// NMT Operational / 心跳监听 / 默认 TPDO 反馈已就绪)。
+/// 生成压缩 MIT 的禁用态配置写序列。
 ///
-/// 顺序:最大力矩限制 → `0x2004` 映射范围/初值/压缩开关 → 短接制动 → RPDO1 重映射到本槽
-/// → MIT 模式 → 使能(控制字 6→7→0x0F)。完成后电机已使能,**调用方须立即按节拍发共享帧**
-/// (初值已置零,使能到首帧之间目标为零)。
+/// 此序列刻意不含 CiA402 模式对象 `0x6060` 和控制字 `0x6040`。模式切换和使能
+/// 必须由 [`crate::cia402::Cia402Manager::set_mode`] 完成，确保统一走 TPDO 确认路径。
 #[allow(clippy::too_many_arguments)]
-pub async fn configure(
-    bus: &(impl CanBus + ?Sized),
-    nid: u8,
+fn build_disabled_configuration_writes(
     slice: u8,
     total: u8,
     cob_id: u16,
     mapping: &CompressedMitMapping,
+    initial_target: &CompressedMitTarget,
     torque_permille: u16,
     kp_kd_torque_permille: u16,
-    timeout: Option<Duration>,
-) -> Result<()> {
-    // 1) 最大力矩限制(全模式 + MIT KP/KD 项)
-    sdo::download_u16(bus, nid, OD_MAX_TORQUE, 0, torque_permille, timeout).await?;
-    gap().await;
-    sdo::download_u16(bus, nid, OD_MIT_COMPRESSED, SUB_KP_KD_TORQUE_PERMILLE, kp_kd_torque_permille, timeout).await?;
-    gap().await;
+) -> Result<Vec<SdoWrite>> {
+    let mut writes = vec![
+        SdoWrite::u16(OD_MAX_TORQUE, 0, torque_permille),
+        SdoWrite::u16(
+            OD_MIT_COMPRESSED,
+            SUB_KP_KD_TORQUE_PERMILLE,
+            kp_kd_torque_permille,
+        ),
+    ];
 
-    // 2) 映射范围 0x2004:04..0D(f32)
     let ranges: [(u8, f32); 10] = [
         (0x04, mapping.position_min),
         (0x05, mapping.position_max),
@@ -190,44 +221,63 @@ pub async fn configure(
         (0x0C, mapping.torque_min),
         (0x0D, mapping.torque_max),
     ];
-    for (sub, val) in ranges {
-        sdo::download_f32(bus, nid, OD_MIT_COMPRESSED, sub, val, timeout).await?;
-        gap().await;
-    }
+    writes.extend(
+        ranges
+            .into_iter()
+            .map(|(subindex, value)| SdoWrite::f32(OD_MIT_COMPRESSED, subindex, value)),
+    );
 
-    // 3) 初始打包目标置零(使能到首帧之间安全)
-    let zero = CompressedMitTarget::ZERO.to_le_bytes(mapping);
-    let lower = u32::from_le_bytes([zero[0], zero[1], zero[2], zero[3]]);
-    let upper = u32::from_le_bytes([zero[4], zero[5], zero[6], zero[7]]);
-    sdo::download_u32(bus, nid, OD_MIT_COMPRESSED, SUB_LOWER, lower, timeout).await?;
-    gap().await;
-    sdo::download_u32(bus, nid, OD_MIT_COMPRESSED, SUB_UPPER, upper, timeout).await?;
-    gap().await;
+    let (lower, upper) = packed_target_words(initial_target, mapping);
+    writes.push(SdoWrite::u32(OD_MIT_COMPRESSED, SUB_LOWER, lower));
+    writes.push(SdoWrite::u32(OD_MIT_COMPRESSED, SUB_UPPER, upper));
+    writes.push(SdoWrite::u8(OD_MIT_COMPRESSED, SUB_ENABLE, 1));
+    writes.push(SdoWrite::u8(OD_SHORT_BRAKE, 0, 1));
 
-    // 4) 启用压缩模式 + 短接制动
-    sdo::download_u8(bus, nid, OD_MIT_COMPRESSED, SUB_ENABLE, 1, timeout).await?;
-    gap().await;
-    sdo::download_u8(bus, nid, OD_SHORT_BRAKE, 0, 1, timeout).await?;
-    gap().await;
-
-    // 5) RPDO1 重映射到本槽的 0x2004:02/03(共享 COB-ID)
     let recipe = RpdoRecipe {
         rpdo_index: 0,
         cob_id,
         entries: rpdo_entries(slice, total),
         transmission_type: 255,
     };
-    for w in build_rpdo_config_writes(&recipe)? {
-        sdo::download(bus, nid, w.index, w.subindex, &w.data, timeout).await?;
-        gap().await;
-    }
+    writes.extend(build_rpdo_config_writes(&recipe)?);
+    Ok(writes)
+}
 
-    // 6) MIT 模式 + 使能(6→7→0x0F)
-    sdo::download(bus, nid, OD_MODE, 0, &MODE_MIT.to_le_bytes(), timeout).await?;
-    gap().await;
-    for cw in [0x0006u16, 0x0007, 0x000F] {
-        sdo::download_u16(bus, nid, OD_CONTROLWORD, 0, cw, timeout).await?;
-        gap().await;
+/// 在禁用态配置一个电机的压缩 MIT(**前提:`Cia402Manager::initialize(nid)` 已跑过** ——
+/// NMT Operational / 心跳监听 / 默认 TPDO 反馈已就绪)。
+///
+/// 顺序:最大力矩限制 → `0x2004` 映射范围/初值/压缩开关 → 短接制动 → RPDO1 重映射到本槽
+/// 并保持 CiA402 禁用。调用方须在之后调用 `Cia402Manager::set_mode(nid, MotorMode::Mit)`；
+/// 使能前应开始按节拍发送同一 `initial_target` 共享帧。初值同时通过 SDO 写入，避免
+/// RPDO 首帧延迟时出现零刚度窗口。
+#[allow(clippy::too_many_arguments)]
+pub async fn configure(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    slice: u8,
+    total: u8,
+    cob_id: u16,
+    mapping: &CompressedMitMapping,
+    initial_target: &CompressedMitTarget,
+    torque_permille: u16,
+    kp_kd_torque_permille: u16,
+    timeout: Option<Duration>,
+) -> Result<()> {
+    let writes = build_disabled_configuration_writes(
+        slice,
+        total,
+        cob_id,
+        mapping,
+        initial_target,
+        torque_permille,
+        kp_kd_torque_permille,
+    )?;
+    let last = writes.len().saturating_sub(1);
+    for (index, w) in writes.iter().enumerate() {
+        sdo::download(bus, nid, w.index, w.subindex, &w.data, timeout).await?;
+        if index != last {
+            gap().await;
+        }
     }
     Ok(())
 }
@@ -263,7 +313,7 @@ mod tests {
         assert_eq!(b.len(), 8);
         // kp/kd 下限为 0 → 量化精确为 0(高字节里 kp 部分应为 0)
         let upper = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
-        assert_eq!(upper >> 0 & 0xF, 0, "kp high nibble should be 0 for kp=0");
+        assert_eq!(upper & 0xF, 0, "kp high nibble should be 0 for kp=0");
     }
 
     #[test]
@@ -271,6 +321,54 @@ mod tests {
         let t = [CompressedMitTarget::ZERO; 6];
         let m = [CompressedMitMapping::default(); 6];
         assert_eq!(pack_shared_frame(&t, &m).len(), 48);
+    }
+
+    #[test]
+    fn configure_initial_words_are_derived_from_supplied_hold_target() {
+        let mapping = CompressedMitMapping::default();
+        let hold = CompressedMitTarget {
+            position: 0.25,
+            velocity: 0.0,
+            torque: 0.0,
+            kp: 12.0,
+            kd: 0.8,
+        };
+        assert_eq!(packed_target_words(&hold, &mapping), {
+            let packed = hold.to_le_bytes(&mapping);
+            (
+                u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]),
+                u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]),
+            )
+        });
+        assert_ne!(
+            packed_target_words(&hold, &mapping),
+            packed_target_words(&CompressedMitTarget::ZERO, &mapping)
+        );
+    }
+
+    #[test]
+    fn disabled_configuration_never_writes_mode_or_controlword() {
+        let writes = build_disabled_configuration_writes(
+            2,
+            6,
+            DEFAULT_SHARED_COB_ID,
+            &CompressedMitMapping::default(),
+            &CompressedMitTarget::ZERO,
+            100,
+            100,
+        )
+        .unwrap();
+
+        assert!(!writes.is_empty());
+        assert!(writes.iter().any(|write| write.index == OD_MIT_COMPRESSED));
+        assert!(writes.iter().any(|write| write.index == 0x1400));
+        assert!(writes.iter().any(|write| write.index == 0x1600));
+        assert!(
+            writes
+                .iter()
+                .all(|write| write.index != 0x6060 && write.index != 0x6040),
+            "disabled compressed-MIT configuration must not switch mode or enable the drive"
+        );
     }
 
     #[test]

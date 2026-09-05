@@ -11,6 +11,7 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>hex_arm_bringup</exec_depend>
   <exec_depend>hex_arm_description</exec_depend>
+  <exec_depend>hex_arm_moveit_runtime</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>launch</exec_depend>
@@ -29,9 +30,12 @@
   <test_depend>action_msgs</test_depend>
   <test_depend>control_msgs</test_depend>
   <test_depend>moveit_msgs</test_depend>
+  <test_depend>moveit_setup_assistant</test_depend>
   <test_depend>python3-yaml</test_depend>
+  <test_depend>python3-pytest</test_depend>
   <test_depend>rclpy</test_depend>
   <test_depend>sensor_msgs</test_depend>
+  <test_depend>xpkg_urdf_firefly_y6</test_depend>
 
   <export><build_type>ament_cmake</build_type></export>
 </package>

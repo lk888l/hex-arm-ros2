@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="firefly_y6">
+  <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>
+
+  <group name="arm">
+    <chain base_link="base_link" tip_link="link_6"/>
+  </group>
+
+  <!-- Surveyed-pose planning reference only; not a calibrated home target. -->
+  <group_state name="commissioning_start" group="arm">
+    <joint name="joint_1" value="0.0"/>
+    <joint name="joint_2" value="-1.56"/>
+    <joint name="joint_3" value="3.13"/>
+    <joint name="joint_4" value="0.0"/>
+    <joint name="joint_5" value="0.0"/>
+    <joint name="joint_6" value="0.0"/>
+  </group_state>
+
+  <disable_collisions link1="base_link" link2="link_1" reason="Adjacent"/>
+  <disable_collisions link1="link_1" link2="link_2" reason="Adjacent"/>
+  <disable_collisions link1="link_2" link2="link_3" reason="Adjacent"/>
+  <disable_collisions link1="link_3" link2="link_4" reason="Adjacent"/>
+  <disable_collisions link1="link_4" link2="link_5" reason="Adjacent"/>
+  <disable_collisions link1="link_5" link2="link_6" reason="Adjacent"/>
+
+  <!-- PLAN-ONLY: the physical arm occupies the surveyed fold, while the
+       provenance collision meshes overlap at exactly these two pairs. This
+       relaxed matrix must never be loaded by mock execution or real execution. -->
+  <disable_collisions link1="link_1" link2="link_5" reason="PlanOnlySurveyedFold"/>
+  <disable_collisions link1="link_2" link2="link_4" reason="PlanOnlySurveyedFold"/>
+</robot>

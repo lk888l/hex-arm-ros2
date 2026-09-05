@@ -95,19 +95,52 @@ pub fn decode_tpdo2(data: &[u8]) -> Option<Tpdo2Frame> {
 // 状态由低 4 位 + bit 5,6 联合判定。我们这里**只关心 3 件事**：
 //
 //   1. Fault 置位（bit 3） → Logic::Error
-//   2. Operation Enabled（bits 0..2 == 0b111） → Logic::Enabled
+//   2. Operation Enabled（状态机掩码 `(sw & 0x006F) == 0x0027`） → Logic::Enabled
 //   3. 其他全部塌缩为 Logic::Disabled
 //
 // 这样上层 UI 只需要"能/不能/坏了"，足够 v0.1 上位机使用。
+
+const CIA402_STATE_MASK: u16 = 0x006F;
+const CIA402_NOT_READY_TO_SWITCH_ON: u16 = 0x0000;
+const CIA402_SWITCH_ON_DISABLED: u16 = 0x0040;
+const CIA402_READY_TO_SWITCH_ON: u16 = 0x0021;
+const CIA402_SWITCHED_ON: u16 = 0x0023;
+const CIA402_OPERATION_ENABLED: u16 = 0x0027;
+const CIA402_FAULT: u16 = 0x0008;
 
 /// CiA402 status_word bit 3 = Fault。
 pub fn status_word_has_fault(sw: u16) -> bool {
     (sw & 0x0008) != 0
 }
 
-/// CiA402 status_word 低 3 位都置 1 = Operation Enabled state。
+/// 严格判定 CiA402 Operation Enabled 状态。
+///
+/// 必须同时检查低 4 位、Quick Stop（bit 5，active-low）和
+/// Switch On Disabled（bit 6）。只检查低 3 位会把 Quick Stop Active
+/// (`0x0007`) 错认成 Operation Enabled。
 pub fn status_word_is_operation_enabled(sw: u16) -> bool {
-    (sw & 0x0007) == 0x0007
+    (sw & CIA402_STATE_MASK) == CIA402_OPERATION_ENABLED
+}
+
+/// `true` only for CiA402 states whose drive function is defined as disabled.
+///
+/// This is deliberately not the inverse of [`status_word_is_operation_enabled`]:
+/// Quick Stop Active (`0x0007`) and Fault Reaction Active (`0x000F`) can still
+/// command braking torque and therefore fail this safety predicate. Switched On
+/// is accepted because the CiA402 drive function is disabled in that state even
+/// though high voltage may be present. Fault (`0x0008`) is accepted only after
+/// the fault reaction has completed; callers that require a fault-free state
+/// must additionally check [`status_word_has_fault`]. Manufacturer-specific
+/// bits outside the standard state mask do not affect the result.
+pub fn status_word_is_confirmed_non_torque(sw: u16) -> bool {
+    matches!(
+        sw & CIA402_STATE_MASK,
+        CIA402_NOT_READY_TO_SWITCH_ON
+            | CIA402_SWITCH_ON_DISABLED
+            | CIA402_READY_TO_SWITCH_ON
+            | CIA402_SWITCHED_ON
+            | CIA402_FAULT
+    )
 }
 
 /// 把 status_word + 当前目标模式 + 错误码 综合判定为 [`Logic`]。
@@ -226,9 +259,27 @@ mod tests {
     #[test]
     fn status_op_enabled_detection() {
         assert!(status_word_is_operation_enabled(0x0237));
-        assert!(status_word_is_operation_enabled(0x0007));
-        assert!(!status_word_is_operation_enabled(0x0003)); // Switched On but not OE
+        assert!(status_word_is_operation_enabled(0x0027));
+        assert!(!status_word_is_operation_enabled(0x0007)); // Quick Stop Active
+        assert!(!status_word_is_operation_enabled(0x0021)); // Ready To Switch On
         assert!(!status_word_is_operation_enabled(0x0040)); // Switch On Disabled
+    }
+
+    #[test]
+    fn confirmed_non_torque_accepts_only_drive_function_disabled_states() {
+        for status_word in [0x0000, 0x0040, 0x0021, 0x0231, 0x0023, 0x0008] {
+            assert!(
+                status_word_is_confirmed_non_torque(status_word),
+                "0x{status_word:04X} should be a confirmed non-torque state"
+            );
+        }
+
+        for status_word in [0x0027, 0x0237, 0x0007, 0x000F] {
+            assert!(
+                !status_word_is_confirmed_non_torque(status_word),
+                "0x{status_word:04X} can still produce commanded torque"
+            );
+        }
     }
 
     #[test]

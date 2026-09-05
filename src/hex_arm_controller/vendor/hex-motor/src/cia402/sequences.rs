@@ -165,9 +165,16 @@ pub fn build_set_target_writes(
             Ok(build_pp_position_writes(*rev))
         }
         (MotorTarget::Torque { nm }, MotorMode::Torque) => build_torque_writes(*nm, &ctx),
-        (MotorTarget::Mit { pos, vel, tor, kp, kd }, MotorMode::Mit) => {
-            build_mit_writes(*pos, *vel, *tor, *kp, *kd, &ctx)
-        }
+        (
+            MotorTarget::Mit {
+                pos,
+                vel,
+                tor,
+                kp,
+                kd,
+            },
+            MotorMode::Mit,
+        ) => build_mit_writes(*pos, *vel, *tor, *kp, *kd, &ctx),
         // 已被上面的 matches_mode 拒绝过；这里是 exhaustiveness 兜底。
         _ => Err(Error::TargetModeMismatch {
             expected: format!("{:?}", mode),
@@ -272,7 +279,12 @@ mod tests {
         assert_eq!(w.len(), 5);
         assert_eq!(
             cw_writes_only(&w),
-            vec![cw::SHUTDOWN, cw::SHUTDOWN, cw::SWITCH_ON, cw::ENABLE_OPERATION]
+            vec![
+                cw::SHUTDOWN,
+                cw::SHUTDOWN,
+                cw::SWITCH_ON,
+                cw::ENABLE_OPERATION
+            ]
         );
         let mode_w = &w[1];
         assert_eq!(mode_w.index, OD_MODE_OF_OPERATION);
@@ -316,7 +328,10 @@ mod tests {
         let w = build_disable_writes();
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].index, OD_CONTROL_WORD);
-        assert_eq!(u16::from_le_bytes([w[0].data[0], w[0].data[1]]), cw::SHUTDOWN);
+        assert_eq!(
+            u16::from_le_bytes([w[0].data[0], w[0].data[1]]),
+            cw::SHUTDOWN
+        );
     }
 
     #[test]
@@ -338,13 +353,16 @@ mod tests {
 
     #[test]
     fn target_disable_works_in_any_mode() {
-        assert!(build_set_target_writes(&MotorTarget::Disable, SetTargetContext::default()).is_ok());
+        assert!(
+            build_set_target_writes(&MotorTarget::Disable, SetTargetContext::default()).is_ok()
+        );
         assert!(build_set_target_writes(&MotorTarget::Disable, ctx_pv()).is_ok());
     }
 
     #[test]
     fn target_velocity_in_pv_mode_writes_60ff_f32() {
-        let w = build_set_target_writes(&MotorTarget::Velocity { rev_per_s: 1.5 }, ctx_pv()).unwrap();
+        let w =
+            build_set_target_writes(&MotorTarget::Velocity { rev_per_s: 1.5 }, ctx_pv()).unwrap();
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].index, OD_TARGET_VELOCITY);
         assert_eq!(w[0].subindex, 0);
@@ -479,8 +497,8 @@ mod tests {
                 pos: 0.1,
                 vel: 0.2,
                 tor: 0.3,
-                kp: 5.0,   // → 500
-                kd: 0.5,   // → 50
+                kp: 5.0, // → 500
+                kd: 0.5, // → 50
             },
             SetTargetContext {
                 current_mode: Some(MotorMode::Mit),
@@ -527,7 +545,11 @@ mod tests {
     fn target_mit_without_factor_cached_errs() {
         let r = build_set_target_writes(
             &MotorTarget::Mit {
-                pos: 0.0, vel: 0.0, tor: 0.0, kp: 1.0, kd: 0.0,
+                pos: 0.0,
+                vel: 0.0,
+                tor: 0.0,
+                kp: 1.0,
+                kd: 0.0,
             },
             SetTargetContext {
                 current_mode: Some(MotorMode::Mit),

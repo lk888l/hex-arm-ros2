@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-rosdep \
     python3-vcstool \
     python3-yaml \
+    can-utils \
+    iproute2 \
     ros-jazzy-controller-manager \
     ros-jazzy-diagnostic-updater \
     ros-jazzy-gz-ros2-control \
@@ -59,4 +61,3 @@ RUN echo 'source /opt/ros/jazzy/setup.bash' >> /root/.bashrc \
 
 WORKDIR /workspaces/hex_arm_ros2
 CMD ["sleep", "infinity"]
-

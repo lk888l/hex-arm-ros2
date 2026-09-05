@@ -2,11 +2,12 @@
 //!
 //! 每帧做三件事：
 //!
-//! 1. **liveness**：盖 `last_tpdo` 时间戳；offline → online 时发
+//! 1. **liveness**：成功解码后分别更新 `last_tpdo1` / `last_tpdo2`；offline → online 时发
 //!    [`Cia402Event::NodeOnline`]。
 //! 2. **decode**（M4+）：用 [`super::codec::decode_tpdo1`] /
-//!    [`super::codec::decode_tpdo2`] 把字节翻译成 `Measurements` 字段；TPDO2
-//!    顺带用 `status_word_to_logic` 算出 [`Logic`]。
+//!    [`super::codec::decode_tpdo2`] 把字节翻译成 `Measurements` 字段；每条
+//!    有效 TPDO 都会保留两路 `0x603F` last-error 诊断；只有 TPDO2 的
+//!    `0x6041` Fault bit 决定当前 [`Logic::Error`]。
 //! 3. **error edge detection**：`logic` 从 非-Error 跳到 Error 时发一次
 //!    [`Cia402Event::EnteredError`]。
 //!
@@ -22,9 +23,7 @@ use can_transport::{CanBus, CanFilter, CanFrame, CanId, CanIoError};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use super::codec::{
-    decode_tpdo1, decode_tpdo2, status_word_to_logic, Tpdo1Frame, Tpdo2Frame,
-};
+use super::codec::{decode_tpdo1, decode_tpdo2, status_word_to_logic, Tpdo1Frame, Tpdo2Frame};
 use super::events::Cia402Event;
 use super::motor_entry::{MotorEntry, MotorEntryInner};
 use super::types::Logic;
@@ -121,57 +120,73 @@ fn handle_frame(
 
     let now = Instant::now();
 
-    // ===== 解码 + 更新 measurements / logic =====
-    //
-    // 解码失败 (长度不够等) 不影响 liveness：仍然走 last_tpdo / online 更新。
+    // Decode before touching liveness.  A malformed frame must not keep a
+    // motor online or make stale feedback appear fresh.
+    let decoded = match kind {
+        TpdoKind::Tpdo1 => decode_tpdo1(frame.data()).map(DecodedTpdo::Tpdo1),
+        TpdoKind::Tpdo2 => decode_tpdo2(frame.data()).map(DecodedTpdo::Tpdo2),
+    };
+    let Some(decoded) = decoded else {
+        log::warn!(
+            "{} from nid 0x{nid:02X}: bad length {} (want >={})",
+            kind.tag(),
+            frame.data().len(),
+            match kind {
+                TpdoKind::Tpdo1 => 12,
+                TpdoKind::Tpdo2 => 10,
+            }
+        );
+        return;
+    };
+
+    // ===== update measurements / logic / independent freshness =====
 
     let (live_state, error_event, online_event) = {
         let mut inner = entry.inner.lock().unwrap();
         inner.last_tpdo = Some(now);
+        match kind {
+            TpdoKind::Tpdo1 => inner.last_tpdo1 = Some(now),
+            TpdoKind::Tpdo2 => inner.last_tpdo2 = Some(now),
+        }
         let became_online = !inner.online;
         inner.online = true;
 
-        let mut error_event: Option<Cia402Event> = None;
-        match kind {
-            TpdoKind::Tpdo1 => {
-                if let Some(f) = decode_tpdo1(frame.data()) {
-                    apply_tpdo1(&mut inner, f, velocity_window);
-                } else {
-                    log::warn!(
-                        "TPDO1 from nid 0x{nid:02X}: bad length {} (want >=12)",
-                        frame.data().len()
-                    );
-                }
+        let was_error = matches!(inner.logic, Some(Logic::Error { .. }));
+        match decoded {
+            DecodedTpdo::Tpdo1(f) => {
+                apply_tpdo1(&mut inner, f, velocity_window);
             }
-            TpdoKind::Tpdo2 => {
-                if let Some(f) = decode_tpdo2(frame.data()) {
-                    apply_tpdo2(&mut inner.measurements, f);
-                    // 重新计算 logic + 边沿事件
-                    let new_logic = status_word_to_logic(
-                        f.status_word,
-                        inner.target_mode,
-                        f.error_code,
-                    );
-                    let was_error = matches!(inner.logic, Some(Logic::Error { .. }));
-                    let is_error = matches!(new_logic, Logic::Error { .. });
-                    inner.logic = Some(new_logic.clone());
-                    if !was_error && is_error {
-                        if let Logic::Error { kind, raw_code } = new_logic {
-                            error_event = Some(Cia402Event::EnteredError {
-                                nid,
-                                kind,
-                                raw: raw_code,
-                            });
-                        }
-                    }
-                } else {
-                    log::warn!(
-                        "TPDO2 from nid 0x{nid:02X}: bad length {} (want >=10)",
-                        frame.data().len()
-                    );
-                }
+            DecodedTpdo::Tpdo2(f) => {
+                apply_tpdo2(&mut inner.measurements, f);
             }
         }
+
+        let last_error = [
+            inner.measurements.tpdo2_error_code,
+            inner.measurements.tpdo1_error_code,
+        ]
+        .into_iter()
+        .flatten()
+        .find(|code| *code != 0);
+        let new_logic = inner.measurements.status_word.map(|status_word| {
+            status_word_to_logic(status_word, inner.target_mode, last_error.unwrap_or(0))
+        });
+        let is_error = matches!(new_logic, Some(Logic::Error { .. }));
+        if let Some(new_logic) = new_logic {
+            inner.logic = Some(new_logic);
+        }
+        let error_event = if !was_error && is_error {
+            match inner.logic.clone() {
+                Some(Logic::Error { kind, raw_code }) => Some(Cia402Event::EnteredError {
+                    nid,
+                    kind,
+                    raw: raw_code,
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         let online_event = became_online.then_some(Cia402Event::NodeOnline { nid });
         // 把当前 inner 拍成 LiveState 给 publish 用 —— 锁还在；publish 在锁外做。
@@ -189,6 +204,12 @@ fn handle_frame(
     entry.publish(live_state);
 }
 
+#[derive(Clone, Copy)]
+enum DecodedTpdo {
+    Tpdo1(Tpdo1Frame),
+    Tpdo2(Tpdo2Frame),
+}
+
 fn apply_tpdo1(inner: &mut MotorEntryInner, f: Tpdo1Frame, velocity_window: Duration) {
     // 先取出标量再借 measurements，避免同时可变 + 不可变借 inner。
     let peak = inner.peak_torque_nm;
@@ -200,20 +221,184 @@ fn apply_tpdo1(inner: &mut MotorEntryInner, f: Tpdo1Frame, velocity_window: Dura
     let m = &mut inner.measurements;
     m.position_rev = Some(f.position_rev);
     m.timestamp_us = Some(f.timestamp_us);
+    m.tpdo1_error_code = Some(f.error_code);
     // torque: i16 ‰ of peak → Nm；没缓存 peak_torque 时留空。
     m.torque_nm = peak.map(|p| f.torque_permille as f32 / 1000.0 * p);
     // 样本不足 / 刚重置时 velocity 为 None，保留上一帧的值不动。
     if let Some(v) = velocity {
         m.velocity_rev_per_s = Some(v);
     }
-    // error_code 已经在 TPDO2 路径里处理；TPDO1 的 err 字段作为冗余日志触发器
-    if f.error_code != 0 {
-        log::trace!("TPDO1 error_code = 0x{:04X}", f.error_code);
-    }
 }
 
 fn apply_tpdo2(m: &mut super::types::Measurements, f: Tpdo2Frame) {
     m.status_word = Some(f.status_word);
+    m.control_word_readback = Some(f.control_word_readback);
     m.driver_temp_c = Some(f.driver_temp_c());
     m.motor_temp_c = Some(f.motor_temp_c());
+    m.tpdo2_error_code = Some(f.error_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{MotorErrorKind, MotorMode};
+
+    const NID: u8 = 1;
+    type Fixture = (
+        Arc<MotorEntry>,
+        Arc<RwLock<HashMap<u8, Arc<MotorEntry>>>>,
+        broadcast::Sender<Cia402Event>,
+    );
+
+    fn fixture() -> Fixture {
+        let entry = Arc::new(MotorEntry::new(NID));
+        let motors = Arc::new(RwLock::new(HashMap::from([(NID, entry.clone())])));
+        let (events, _) = broadcast::channel(16);
+        (entry, motors, events)
+    }
+
+    fn tpdo1(error_code: u16) -> CanFrame {
+        let mut payload = [0u8; 12];
+        payload[..4].copy_from_slice(&0.25f32.to_le_bytes());
+        payload[4..8].copy_from_slice(&1234u32.to_le_bytes());
+        payload[10..12].copy_from_slice(&error_code.to_le_bytes());
+        CanFrame::new_fd(TPDO1_BASE + NID as u16, &payload, true).unwrap()
+    }
+
+    fn tpdo2_with_status(error_code: u16, status_word: u16) -> CanFrame {
+        let mut payload = [0u8; 10];
+        payload[..2].copy_from_slice(&status_word.to_le_bytes());
+        payload[6..8].copy_from_slice(&0x000Fu16.to_le_bytes());
+        payload[8..10].copy_from_slice(&error_code.to_le_bytes());
+        CanFrame::new_fd(TPDO2_BASE + NID as u16, &payload, true).unwrap()
+    }
+
+    fn tpdo2(error_code: u16) -> CanFrame {
+        tpdo2_with_status(error_code, 0x0027)
+    }
+
+    #[test]
+    fn malformed_tpdos_do_not_refresh_liveness_or_snapshot() {
+        let (entry, motors, events) = fixture();
+        let short_frames = [
+            (
+                CanFrame::new_fd(TPDO1_BASE + NID as u16, &[0u8; 11], true).unwrap(),
+                TpdoKind::Tpdo1,
+            ),
+            (
+                CanFrame::new_fd(TPDO2_BASE + NID as u16, &[0u8; 9], true).unwrap(),
+                TpdoKind::Tpdo2,
+            ),
+        ];
+        for (frame, kind) in short_frames {
+            handle_frame(Ok(frame), kind, &motors, &events, Duration::from_millis(15));
+        }
+
+        let inner = entry.inner.lock().unwrap();
+        assert!(!inner.online);
+        assert!(inner.last_tpdo.is_none());
+        assert!(inner.last_tpdo1.is_none());
+        assert!(inner.last_tpdo2.is_none());
+        drop(inner);
+        assert!(!entry.snapshot.load_full().connection.online);
+    }
+
+    #[test]
+    fn tpdo_streams_have_independent_freshness() {
+        let (entry, motors, events) = fixture();
+        handle_frame(
+            Ok(tpdo2(0)),
+            TpdoKind::Tpdo2,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+
+        let snapshot = entry.snapshot.load_full();
+        assert!(snapshot.connection.last_tpdo.is_some());
+        assert!(snapshot.connection.last_tpdo1.is_none());
+        assert!(snapshot.connection.last_tpdo2.is_some());
+        assert_eq!(snapshot.measurements.control_word_readback, Some(0x000F));
+        assert!(!snapshot
+            .connection
+            .required_tpdos_fresh(Instant::now(), Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn retained_last_error_does_not_create_current_fault_without_status_fault_bit() {
+        let (entry, motors, events) = fixture();
+        entry.inner.lock().unwrap().target_mode = Some(MotorMode::Mit);
+
+        handle_frame(
+            Ok(tpdo2(0)),
+            TpdoKind::Tpdo2,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        handle_frame(
+            Ok(tpdo1(0x2310)),
+            TpdoKind::Tpdo1,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        assert_eq!(
+            entry.snapshot.load_full().logic,
+            Some(Logic::Enabled(MotorMode::Mit))
+        );
+
+        // 0x603F remains available as diagnostics but cannot override a clean
+        // current status word.
+        handle_frame(
+            Ok(tpdo2(0)),
+            TpdoKind::Tpdo2,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        let snapshot = entry.snapshot.load_full();
+        assert_eq!(snapshot.measurements.tpdo1_error_code, Some(0x2310));
+        assert_eq!(snapshot.logic, Some(Logic::Enabled(MotorMode::Mit)));
+
+        // The same exact last-error becomes the active fault cause only when a
+        // fresh TPDO2 sets 0x6041 bit 3.
+        handle_frame(
+            Ok(tpdo2_with_status(0x2310, 0x0008)),
+            TpdoKind::Tpdo2,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        assert!(matches!(
+            entry.snapshot.load_full().logic,
+            Some(Logic::Error {
+                kind: MotorErrorKind::OverCurrent,
+                raw_code: 0x2310
+            })
+        ));
+    }
+
+    #[test]
+    fn field_observed_8130_with_0231_is_disabled_last_error_not_current_fault() {
+        let (entry, motors, events) = fixture();
+        handle_frame(
+            Ok(tpdo1(0x8130)),
+            TpdoKind::Tpdo1,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        handle_frame(
+            Ok(tpdo2_with_status(0x8130, 0x0231)),
+            TpdoKind::Tpdo2,
+            &motors,
+            &events,
+            Duration::from_millis(15),
+        );
+        let snapshot = entry.snapshot.load_full();
+        assert_eq!(snapshot.logic, Some(Logic::Disabled));
+        assert_eq!(snapshot.measurements.tpdo1_error_code, Some(0x8130));
+        assert_eq!(snapshot.measurements.tpdo2_error_code, Some(0x8130));
+    }
 }

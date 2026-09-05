@@ -80,15 +80,15 @@ message JointState {
   Header header = 1;
   repeated float q = 2;
   repeated float dq = 3;
-  repeated float tau_est = 4;
+  repeated float tau_est = 4;  // calibrated joint-side torque, N*m
   repeated float temp = 5;
 }
 message JointSetpoint {
-  repeated float q = 1;
-  repeated float dq = 2;
-  repeated float kp = 3;
-  repeated float kd = 4;
-  repeated float tau_ff = 5;
+  repeated float q = 1;       // joint position, rad
+  repeated float dq = 2;      // joint velocity, rad/s
+  repeated float kp = 3;      // calibrated joint-side gain, N*m/rad
+  repeated float kd = 4;      // calibrated joint-side gain, N*m*s/rad
+  repeated float tau_ff = 5;  // calibrated joint-side feed-forward, N*m
 }
 message JointTrajectory {
   Header header = 1;
@@ -104,8 +104,8 @@ message ArmDescription {
   repeated float pos_max = 4;
   repeated float vel_max = 5;
   repeated float tau_max = 6;
-  repeated float default_kp = 7;
-  repeated float default_kd = 8;
+  repeated float default_kp = 7;  // calibrated joint-side gain, N*m/rad
+  repeated float default_kd = 8;  // calibrated joint-side gain, N*m*s/rad
   repeated string motor_models = 9;
   repeated TimeoutBehavior supported_timeouts = 10;
   optional float total_power_max_w = 20;
@@ -150,4 +150,3 @@ message DriverState {
   float feedback_age_s = 12;
   repeated MotorIdentity motors = 13;
 }
-

@@ -145,7 +145,10 @@ mod tests {
     #[test]
     fn target_variant_name() {
         assert_eq!(MotorTarget::Disable.variant_name(), "Disable");
-        assert_eq!(MotorTarget::Position { rev: 0.0 }.variant_name(), "Position");
+        assert_eq!(
+            MotorTarget::Position { rev: 0.0 }.variant_name(),
+            "Position"
+        );
     }
 
     #[test]

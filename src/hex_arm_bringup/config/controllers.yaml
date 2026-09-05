@@ -27,13 +27,14 @@ firefly_arm_controller:
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
     allow_integration_in_goal_trajectories: false
+    # Fail closed during hardware commissioning: an axis that materially lags
+    # the commanded path must not be reported as a successful trajectory.
     constraints:
-      stopped_velocity_tolerance: 0.05
+      stopped_velocity_tolerance: 0.02
       goal_time: 1.0
-      joint_1: {trajectory: 0.15, goal: 0.05}
-      joint_2: {trajectory: 0.15, goal: 0.05}
-      joint_3: {trajectory: 0.15, goal: 0.05}
-      joint_4: {trajectory: 0.15, goal: 0.05}
-      joint_5: {trajectory: 0.15, goal: 0.05}
-      joint_6: {trajectory: 0.15, goal: 0.05}
-
+      joint_1: {trajectory: 0.02, goal: 0.005}
+      joint_2: {trajectory: 0.02, goal: 0.005}
+      joint_3: {trajectory: 0.02, goal: 0.005}
+      joint_4: {trajectory: 0.02, goal: 0.005}
+      joint_5: {trajectory: 0.02, goal: 0.005}
+      joint_6: {trajectory: 0.02, goal: 0.005}

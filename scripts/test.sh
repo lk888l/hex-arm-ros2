@@ -14,7 +14,14 @@ case "${level}" in
     CARGO_TARGET_DIR="${workspace_dir}/build/hex_arm_controller/cargo" \
       cargo test --locked --manifest-path src/hex_arm_controller/Cargo.toml
     colcon test --event-handlers console_direct+ \
-      --packages-select hex_arm_msgs hex_arm_description hex_arm_bridge hex_arm_hardware
+      --packages-select \
+        hex_arm_msgs \
+        hex_arm_description \
+        hex_arm_bridge \
+        hex_arm_hardware \
+        hex_arm_bringup \
+        hex_arm_moveit_runtime \
+        hex_arm_moveit_config
     colcon test-result --verbose
     ;;
   protocol)
@@ -31,4 +38,3 @@ case "${level}" in
     exit 2
     ;;
 esac
-

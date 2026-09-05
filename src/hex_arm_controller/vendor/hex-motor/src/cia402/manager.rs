@@ -26,15 +26,29 @@ use crate::types::{MotorMode, MotorTarget};
 use super::discovery::{identify_once, run_discovery, run_liveness_monitor};
 use super::events::{Cia402Event, EventStream, DEFAULT_EVENTS_CAPACITY};
 use super::heartbeat::run_hb_broadcast;
-use super::initialize::run_initialize;
+use super::initialize::{
+    cleanup_session_heartbeat_consumer, run_initialize, SessionHeartbeatConsumers,
+};
 use super::motor_entry::MotorEntry;
 use super::sequences::{
-    build_clear_error_writes, build_disable_writes, build_set_mode_writes,
-    build_set_target_writes, SetTargetContext, INTER_WRITE_DELAY,
+    build_clear_error_writes, build_disable_writes, build_set_mode_writes, build_set_target_writes,
+    SetTargetContext, INTER_WRITE_DELAY,
 };
 use super::subscribe::{StatusStream, StreamOptions, Subscriber};
 use super::tpdo_listener::run_tpdo_listener;
 use super::types::{LiveState, Logic, MotorInfo, MotorLifecycle};
+
+const HEARTBEAT_LOST_ERROR_CODE: u16 = 0x8130;
+
+/// Authoritative CiA402 fault/status words read through SDO.
+///
+/// Recovery and shutdown deliberately do not trust an old TPDO cache for these
+/// gates: both values are read immediately before the guarded write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveDiagnostic {
+    pub error_code: u16,
+    pub status_word: u16,
+}
 
 /// 构造 [`Cia402Manager`] 时的可调参数。
 #[derive(Debug, Clone)]
@@ -65,11 +79,6 @@ pub struct Cia402ManagerOptions {
     /// 斜率）。调大更平滑、相位滞后更多；调小更跟手、噪声更大。
     pub velocity_window: Duration,
 
-    /// `initialize()` 里清心跳/CiA402 故障的最多尝试次数。固件清故障有个随
-    /// "心跳丢失→恢复"翻转的相位、单次约一半概率失败，每次尝试翻一次相位，
-    /// 所以多试几次基本必中。默认 6（最坏 ~6×(超时+100ms)，只在 init 时发生）。
-    pub init_fault_clear_attempts: u8,
-
     /// 是否广播我方心跳（`0x700 + heartbeat_node_id`）。默认 `true`。
     ///
     /// 控制电机时需要 `true`（电机端 0x1016 靠它判我们是否在线）。但**纯发现 /
@@ -91,7 +100,6 @@ impl Default for Cia402ManagerOptions {
             motor_heartbeat_period: Duration::from_millis(500),
             initialized_stale_threshold: Duration::from_millis(200),
             velocity_window: Duration::from_millis(15),
-            init_fault_clear_attempts: 6,
             broadcast_heartbeat: true,
         }
     }
@@ -105,6 +113,10 @@ pub struct Cia402Manager {
     /// 所有"独占 SDO 操作"(identify / initialize) 共享此集合：
     /// 同 nid 同时只能有一种在跑，否则 SDO 段会互撞响应帧。
     inflight_ops: Arc<StdMutex<HashSet<u8>>>,
+    /// Verified nodes touched by this manager's initialize path. Entries are
+    /// installed before the first CAN operation and survive error/cancellation
+    /// until confirmed-disable and guarded 0x1016 cleanup succeed.
+    session_heartbeat_consumers: SessionHeartbeatConsumers,
     events_tx: broadcast::Sender<Cia402Event>,
     cancel: CancellationToken,
     /// 后台 task 句柄。`drop` 时通过 `cancel` 让它们退出，不在 drop 里 await。
@@ -156,6 +168,7 @@ impl Cia402Manager {
         let motors: Arc<RwLock<HashMap<u8, Arc<MotorEntry>>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let inflight_ops: Arc<StdMutex<HashSet<u8>>> = Arc::new(StdMutex::new(HashSet::new()));
+        let session_heartbeat_consumers = Arc::new(StdMutex::new(HashMap::new()));
         let (events_tx, _) = broadcast::channel(opts.events_capacity);
         let cancel = CancellationToken::new();
 
@@ -200,6 +213,7 @@ impl Cia402Manager {
             opts,
             motors,
             inflight_ops,
+            session_heartbeat_consumers,
             events_tx,
             cancel,
             tasks,
@@ -253,7 +267,9 @@ impl Cia402Manager {
                 inner.lifecycle = MotorLifecycle::Identified;
             }
         }
-        let _ = self.events_tx.send(Cia402Event::Identified { nid, identity });
+        let _ = self
+            .events_tx
+            .send(Cia402Event::Identified { nid, identity });
         Ok(())
     }
 
@@ -264,8 +280,11 @@ impl Cia402Manager {
     ///   `Unknown` 节点会先返回 [`crate::error::Error::NotReady`]，调用方应先
     ///   等 `Identified` 事件或手动 `identify()`。
     /// - 与 identify / 其他 initialize 互斥。
-    /// - 失败时 lifecycle 退回 `Identified`（identity 已知）/ `Unknown`，
-    ///   电机端可能残留部分 TPDO 配置（v0.1 不主动撤销）；调用方可直接重试。
+    /// - 初始化不会自动 fault reset。若 0x6041 Fault 位已置位，会 fail-closed；
+    ///   排除原因后调用方必须显式 `clear_error()`，再重试 `initialize()`。
+    /// - 其他失败时 lifecycle 退回 `Identified`（identity 已知）/ `Unknown`。
+    ///   电机端可能残留 TPDO 配置；若本会话已尝试写 0x1016，则会保留逐节点
+    ///   清理记录，供错误路径或 shutdown 在确认 non-OE 后撤销消费者。
     pub async fn initialize(&self, nid: u8) -> Result<()> {
         let entry = {
             let g = self.motors.read().unwrap();
@@ -285,7 +304,14 @@ impl Cia402Manager {
         }
 
         let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "initialize")?;
-        run_initialize(self.bus.as_ref(), entry, &self.events_tx, &self.opts).await
+        run_initialize(
+            self.bus.as_ref(),
+            entry,
+            &self.events_tx,
+            &self.opts,
+            &self.session_heartbeat_consumers,
+        )
+        .await
     }
 
     /// 对所有 `Identified` / `NeedsReinit` 节点**并发**跑 `initialize`。
@@ -318,8 +344,8 @@ impl Cia402Manager {
     /// 切换电机的控制模式（M4）。
     ///
     /// 内部跑 `sequences::build_set_mode_writes` 给出的 CiA402 状态机 ramp：
-    /// `(若 Error 则 CW=0x80) → CW=0x06 → 0x6060=mode → CW=0x06 → CW=0x07 → CW=0x0F`，
-    /// 每条之间 sleep [`super::sequences::INTER_WRITE_DELAY`]。所有 SDO
+    /// `CW=0x06 → 0x6060=mode → CW=0x06 → CW=0x07 → CW=0x0F`；不会自动
+    /// fault reset。每条之间 sleep [`super::sequences::INTER_WRITE_DELAY`]。所有 SDO
     /// 下完后会**轮询 `entry.logic`** 直到等于 `Logic::Enabled(mode)`，最多
     /// 等 `Cia402ManagerOptions::mode_confirm_timeout`（默认 1 s）。
     ///
@@ -332,8 +358,7 @@ impl Cia402Manager {
         let entry = self.require_initialized(nid)?;
         let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "set_mode")?;
 
-        // **不自动清错**（设计取舍，见 DESIGN/对话）：清心跳故障只发生在
-        // `initialize()` 里。运行中（程序没退、心跳没断）正常切模式不会有 Fault；
+        // **不自动清错**：initialize / set_mode 等自动流程都不写 fault reset。
         // 一旦电机带 Fault（缓存 logic 或最新状态字任一显示），这里直接报
         // [`Error::InErrorState`] 让用户决定——手动 `clear_error` + 重新
         // `initialize`，而不是悄悄替用户清掉一个真实故障。
@@ -377,15 +402,180 @@ impl Cia402Manager {
         self.sdo_download_sequential(nid, &writes).await
     }
 
-    /// 清错（`CW = 0x80`）。一次性 SDO 写完即返回。
+    /// Send CiA402 Shutdown (`0x6040 = 0x0006`) to an identified node without
+    /// requiring normal initialization. This exists only for the narrow
+    /// heartbeat-fault recovery path, which must establish a newly confirmed
+    /// disabled state before it may remove `0x1016` on exit.
+    pub async fn disable_identified(&self, nid: u8) -> Result<()> {
+        self.require_identified(nid)?;
+        let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "disable_identified")?;
+        let writes = build_disable_writes();
+        self.sdo_download_sequential(nid, &writes).await
+    }
+
+    /// **显式**清错（`CW = 0x80`）。一次性 SDO 写完即返回。
     ///
-    /// 之后通常要再调一次 `set_mode` 才能继续控制；本调用本身不重新使能电机。
+    /// 允许处于 `Identified` / `NeedsReinit` / `Initialized` 的已知节点调用，
+    /// 因而 initialize 因 Fault 而失败后仍可由操作者显式恢复。之后必须重新
+    /// `initialize()` 或 `set_mode()`；本调用本身不初始化也不重新使能电机。
     pub async fn clear_error(&self, nid: u8) -> Result<()> {
-        let entry = self.require_initialized(nid)?;
+        let entry = {
+            let motors = self.motors.read().unwrap();
+            motors.get(&nid).cloned().ok_or(Error::UnknownNode(nid))?
+        };
+        {
+            let inner = entry.inner.lock().unwrap();
+            if matches!(
+                inner.lifecycle,
+                MotorLifecycle::Unknown | MotorLifecycle::Initializing
+            ) {
+                return Err(Error::NotReady {
+                    nid,
+                    lifecycle: format!("{:?}", inner.lifecycle),
+                });
+            }
+        }
         let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "clear_error")?;
-        let _ = entry;
         let writes = build_clear_error_writes();
         self.sdo_download_sequential(nid, &writes).await
+    }
+
+    /// Read the drive's current `0x603F` error code and `0x6041` status word.
+    ///
+    /// The node must already have an identified identity. This is intentionally
+    /// an SDO snapshot rather than a cached TPDO snapshot, so it can gate a
+    /// one-shot recovery command even when normal initialization refused a
+    /// faulted drive.
+    pub async fn drive_diagnostic(&self, nid: u8) -> Result<DriveDiagnostic> {
+        self.require_identified(nid)?;
+        let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "drive_diagnostic")?;
+        self.read_drive_diagnostic(nid).await
+    }
+
+    /// Explicitly reset **only** error `0x8130` while the drive is confirmed
+    /// non-OperationEnabled, then prove that it remains disabled and fault-free.
+    ///
+    /// This does not initialize the node, change mode, or enable output. Higher
+    /// layers must still enforce the robot identity and node allowlists before
+    /// calling it.
+    pub async fn recover_heartbeat_lost_disabled(&self, nid: u8) -> Result<()> {
+        self.require_identified(nid)?;
+        let _guard =
+            InflightGuard::acquire(&self.inflight_ops, nid, "recover_heartbeat_lost_disabled")?;
+        let before = self.read_drive_diagnostic(nid).await?;
+        validate_heartbeat_recovery_source(nid, before)?;
+
+        // Field firmware needs a clean rising edge and settle time; a lone
+        // repeated 0x80 write is not a reliable reset request.
+        let timeout = Some(self.opts.sdo_timeout);
+        sdo::download_u16(self.bus.as_ref(), nid, 0x6040, 0, 0x0000, timeout).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sdo::download_u16(self.bus.as_ref(), nid, 0x6040, 0, 0x0080, timeout).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sdo::download_u16(self.bus.as_ref(), nid, 0x6040, 0, 0x0000, timeout).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let deadline = Instant::now() + self.opts.mode_confirm_timeout;
+        loop {
+            let after = self.read_drive_diagnostic(nid).await?;
+            if heartbeat_recovery_confirmed(after) {
+                log::warn!(
+                    "nid 0x{nid:02X}: explicitly cleared heartbeat-lost error; drive remains disabled"
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Internal(format!(
+                    "nid 0x{nid:02X}: heartbeat-lost reset was not confirmed fault-free and disabled \
+                     (0x603F=0x{:04X}, 0x6041=0x{:04X})",
+                    after.error_code, after.status_word
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Disable this drive's consumer of the host heartbeat (`0x1016:01 = 0`)
+    /// only while an authoritative status read proves the drive is in a
+    /// confirmed non-torque CiA402 state. Read back `0x1016` and the status word
+    /// before returning.
+    ///
+    /// The manager's heartbeat broadcaster is still alive while this method
+    /// runs. Calling it for every controlled node before dropping the manager
+    /// prevents an orderly process exit from manufacturing error `0x8130`.
+    pub async fn disarm_consumer_heartbeat_disabled(&self, nid: u8) -> Result<()> {
+        self.require_identified(nid)?;
+        let _guard = InflightGuard::acquire(
+            &self.inflight_ops,
+            nid,
+            "disarm_consumer_heartbeat_disabled",
+        )?;
+        let before = self.read_drive_diagnostic(nid).await?;
+        validate_confirmed_non_torque(nid, before, "before heartbeat disarm")?;
+
+        let timeout = Some(self.opts.sdo_timeout);
+        sdo::download_u32(self.bus.as_ref(), nid, 0x1016, 1, 0, timeout).await?;
+        let consumer = sdo::upload_u32(self.bus.as_ref(), nid, 0x1016, 1, timeout).await?;
+        if consumer != 0 {
+            return Err(Error::Internal(format!(
+                "nid 0x{nid:02X}: heartbeat consumer disarm readback is 0x{consumer:08X}, expected 0"
+            )));
+        }
+
+        let after = self.read_drive_diagnostic(nid).await?;
+        validate_confirmed_non_torque(nid, after, "after heartbeat disarm")?;
+        self.session_heartbeat_consumers
+            .lock()
+            .unwrap()
+            .remove(&nid);
+        log::info!("nid 0x{nid:02X}: heartbeat consumer disarmed and drive confirmed disabled");
+        Ok(())
+    }
+
+    /// Confirm-disable and clean up only a verified node that this manager
+    /// session touched during `initialize()`.
+    ///
+    /// Untouched nodes return `Ok(false)` without any CAN access.  A touched
+    /// node must still have an identified identity and no concurrent exclusive
+    /// operation. The cleanup authoritatively reads 0x1016. Zero still requires
+    /// Shutdown/non-torque confirmation; the exact session value is disarmed only
+    /// after the same confirmation and then read back.
+    /// The tracking entry is retained on every failure so shutdown can retry.
+    pub async fn cleanup_session_heartbeat_consumer_disabled(&self, nid: u8) -> Result<bool> {
+        let Some(tracked_consumer) = self
+            .session_heartbeat_consumers
+            .lock()
+            .unwrap()
+            .get(&nid)
+            .copied()
+        else {
+            return Ok(false);
+        };
+
+        // Never issue SDO writes to an unknown/unidentified entry merely
+        // because a stale bookkeeping value exists.
+        self.require_identified(nid)?;
+        let _guard = InflightGuard::acquire(
+            &self.inflight_ops,
+            nid,
+            "cleanup_session_heartbeat_consumer_disabled",
+        )?;
+        cleanup_session_heartbeat_consumer(
+            self.bus.as_ref(),
+            nid,
+            &self.session_heartbeat_consumers,
+            &self.opts,
+        )
+        .await?;
+
+        let mut tracked = self.session_heartbeat_consumers.lock().unwrap();
+        if tracked
+            .get(&nid)
+            .is_some_and(|record| record.expected == tracked_consumer.expected)
+        {
+            tracked.remove(&nid);
+        }
+        Ok(true)
     }
 
     /// 改电机 Node-ID（出厂 / 批量配置工具用）。
@@ -450,7 +640,14 @@ impl Cia402Manager {
     /// 不要求 Initialized。
     pub async fn read_position(&self, nid: u8) -> Result<f32> {
         let _guard = InflightGuard::acquire(&self.inflight_ops, nid, "read_position")?;
-        sdo::upload_f32(self.bus.as_ref(), nid, 0x6064, 0, Some(self.opts.sdo_timeout)).await
+        sdo::upload_f32(
+            self.bus.as_ref(),
+            nid,
+            0x6064,
+            0,
+            Some(self.opts.sdo_timeout),
+        )
+        .await
     }
 
     /// 写 `0x6072`（Max Torque），限制**所有模式**下的最大力矩输出。
@@ -532,7 +729,9 @@ impl Cia402Manager {
     /// 你会先看到 connection 字段在变，等 TPDO 配好后才有 measurements / logic。
     pub fn subscribe_status(&self, nid: u8, opts: StreamOptions) -> Result<StatusStream> {
         if opts.capacity == 0 {
-            return Err(Error::Internal("subscribe_status: capacity must be > 0".into()));
+            return Err(Error::Internal(
+                "subscribe_status: capacity must be > 0".into(),
+            ));
         }
         let entry = self
             .motors
@@ -577,13 +776,10 @@ impl Cia402Manager {
     /// 拿到 lifecycle == Initialized 的 entry，否则返回 NotReady。
     fn require_initialized(&self, nid: u8) -> Result<Arc<MotorEntry>> {
         let g = self.motors.read().unwrap();
-        let entry = g
-            .get(&nid)
-            .cloned()
-            .ok_or_else(|| Error::NotReady {
-                nid,
-                lifecycle: "not in list".into(),
-            })?;
+        let entry = g.get(&nid).cloned().ok_or_else(|| Error::NotReady {
+            nid,
+            lifecycle: "not in list".into(),
+        })?;
         drop(g);
         let inner = entry.inner.lock().unwrap();
         if !matches!(inner.lifecycle, MotorLifecycle::Initialized) {
@@ -594,6 +790,43 @@ impl Cia402Manager {
         }
         drop(inner);
         Ok(entry)
+    }
+
+    /// Require an identity, but deliberately do not require Initialized. Fault
+    /// recovery and orderly shutdown must remain possible after initialization
+    /// has failed closed.
+    fn require_identified(&self, nid: u8) -> Result<Arc<MotorEntry>> {
+        let entry = self
+            .motors
+            .read()
+            .unwrap()
+            .get(&nid)
+            .cloned()
+            .ok_or(Error::UnknownNode(nid))?;
+        let inner = entry.inner.lock().unwrap();
+        if inner.identity.is_none()
+            || matches!(
+                inner.lifecycle,
+                MotorLifecycle::Unknown | MotorLifecycle::Initializing
+            )
+        {
+            return Err(Error::NotReady {
+                nid,
+                lifecycle: format!("{:?}", inner.lifecycle),
+            });
+        }
+        drop(inner);
+        Ok(entry)
+    }
+
+    async fn read_drive_diagnostic(&self, nid: u8) -> Result<DriveDiagnostic> {
+        let timeout = Some(self.opts.sdo_timeout);
+        let error_code = sdo::upload_u16(self.bus.as_ref(), nid, 0x603F, 0, timeout).await?;
+        let status_word = sdo::upload_u16(self.bus.as_ref(), nid, 0x6041, 0, timeout).await?;
+        Ok(DriveDiagnostic {
+            error_code,
+            status_word,
+        })
     }
 
     /// 顺序 SDO 下发；每条之间 sleep [`INTER_WRITE_DELAY`] 给电机 settle。
@@ -618,7 +851,44 @@ impl Cia402Manager {
     }
 }
 
-/// 轮询 [`MotorEntry::inner.logic`]（由 [`super::tpdo_listener`] 在每帧 TPDO2
+fn validate_confirmed_non_torque(
+    nid: u8,
+    diagnostic: DriveDiagnostic,
+    operation: &str,
+) -> Result<()> {
+    if !super::codec::status_word_is_confirmed_non_torque(diagnostic.status_word) {
+        return Err(Error::Internal(format!(
+            "nid 0x{nid:02X}: refusing {operation}: drive is not in a confirmed non-torque state \
+             (0x6041=0x{:04X})",
+            diagnostic.status_word
+        )));
+    }
+    Ok(())
+}
+
+fn validate_heartbeat_recovery_source(nid: u8, diagnostic: DriveDiagnostic) -> Result<()> {
+    validate_confirmed_non_torque(nid, diagnostic, "heartbeat-lost fault reset")?;
+    // 0x603F is only a last-error diagnostic. Never reset a drive merely to
+    // erase history: the current 0x6041 Fault bit must also be set.
+    if diagnostic.error_code != HEARTBEAT_LOST_ERROR_CODE
+        || !super::codec::status_word_has_fault(diagnostic.status_word)
+    {
+        return Err(Error::Internal(format!(
+            "nid 0x{nid:02X}: refusing heartbeat fault reset: expected live error 0x8130, \
+             got 0x603F=0x{:04X}, 0x6041=0x{:04X}",
+            diagnostic.error_code, diagnostic.status_word
+        )));
+    }
+    Ok(())
+}
+
+fn heartbeat_recovery_confirmed(diagnostic: DriveDiagnostic) -> bool {
+    // A successful reset may legitimately retain 0x8130 in 0x603F as history.
+    !super::codec::status_word_has_fault(diagnostic.status_word)
+        && super::codec::status_word_is_confirmed_non_torque(diagnostic.status_word)
+}
+
+/// 轮询 [`MotorEntry::inner.logic`]（由 [`super::tpdo_listener`] 在每个有效 TPDO
 /// 到达时刷新）直到等于 `Logic::Enabled(target)` 或超时 / 进入 Error。
 async fn wait_for_mode(
     entry: &Arc<MotorEntry>,
@@ -672,5 +942,75 @@ impl Drop for Cia402Manager {
         for h in self.tasks.drain(..) {
             h.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_and_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_recovery_gate_accepts_only_8130_fault_while_disabled() {
+        validate_heartbeat_recovery_source(
+            1,
+            DriveDiagnostic {
+                error_code: HEARTBEAT_LOST_ERROR_CODE,
+                status_word: 0x0008,
+            },
+        )
+        .unwrap();
+
+        for diagnostic in [
+            DriveDiagnostic {
+                error_code: 0x2310,
+                status_word: 0x0008,
+            },
+            DriveDiagnostic {
+                error_code: HEARTBEAT_LOST_ERROR_CODE,
+                status_word: 0x0007,
+            },
+            DriveDiagnostic {
+                error_code: HEARTBEAT_LOST_ERROR_CODE,
+                status_word: 0x000F,
+            },
+            DriveDiagnostic {
+                error_code: HEARTBEAT_LOST_ERROR_CODE,
+                status_word: 0x0027,
+            },
+            DriveDiagnostic {
+                error_code: 0,
+                status_word: 0x0008,
+            },
+        ] {
+            assert!(validate_heartbeat_recovery_source(1, diagnostic).is_err());
+        }
+    }
+
+    #[test]
+    fn recovery_confirmation_uses_current_status_not_retained_last_error() {
+        assert!(heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: HEARTBEAT_LOST_ERROR_CODE,
+            status_word: 0x0040,
+        }));
+        assert!(heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: 0x2310,
+            status_word: 0x0040,
+        }));
+        assert!(!heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: 0,
+            status_word: 0x0008,
+        }));
+        assert!(!heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: 0,
+            status_word: 0x0007,
+        }));
+        assert!(!heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: 0,
+            status_word: 0x000F,
+        }));
+        assert!(!heartbeat_recovery_confirmed(DriveDiagnostic {
+            error_code: 0,
+            status_word: 0x0027,
+        }));
     }
 }

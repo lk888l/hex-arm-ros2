@@ -1,18 +1,52 @@
 # COMMISSIONING TEMPLATE ONLY. This file is intentionally rejected by real
 # bringup. Copy it to a gitignored *.local.yaml and replace every placeholder
 # from read-only discovery and supervised per-axis commissioning.
-schema_version: 1
+# acceleration_rad_s2 is independently enforced by Rust; 0.1 is a provisional
+# commissioning value, not a measured capability.
+schema_version: 2
 validated: false
 calibrated: false
 robot_prefix: hexmeow/wsl/firefly_y6_0
 urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
+# Mandatory gravity acceleration expressed in base_link coordinates. Confirm
+# its direction for the physical mounting; schema v2 never guesses this value.
+gravity_vector_base_m_s2: [0.0, 0.0, -9.81]
+# Optional fixed tool mass model. Keep null until the attached auxiliary
+# device, its mount frame, and its inertial provenance have been reviewed.
+tip_payload: null
 
 bus:
+  # SocketCAN uses the host interface's existing bit timing. Select gs_usb for
+  # legacy direct USB access at the fixed 1M/5M CAN-FD rate.
+  transport: socket_can
+  interface: can0
   channel: 0
   adapter_vid: 0       # no dangerous default
   adapter_pid: 0       # no dangerous default
   heartbeat_node_id: 16
   hardware_timestamp: true
+  # This arm's verified wiring is node N -> joint_N. Keep this true so a
+  # swapped node assignment is rejected before any drive is initialized.
+  direct_joint_mapping: true
+  # Known non-arm devices are reported but excluded from arm initialization.
+  auxiliary_node_ids: [15]  # known gripper
+  # Read-only preflight checks this exact host link and USB adapter before any
+  # SocketCAN socket is opened. Replace the serial with the value from sysfs.
+  expected_link:
+    nominal_bitrate: 1000000
+    nominal_sample_point_permille: 800
+    nominal_sjw: 5
+    data_bitrate: 4000000
+    data_sample_point_permille: 800
+    data_sjw: 3
+    fd: true
+    restart_ms: 0
+    adapter:
+      driver: gs_usb
+      vendor_id: 4617   # 0x1209
+      product_id: 8995  # 0x2323
+      serial: REPLACE_WITH_USB_SERIAL
+      channel: 0
 
 controller:
   loop_hz: 1000
@@ -21,9 +55,11 @@ controller:
   feedback_timeout_ms: 100
   command_watchdog_ms: 100
 
-# Historical signs (-1,-1,+1,+1,+1,+1) and 0.85 torque scales are deliberately
-# not prefilled. joint_3's mechanical zero difference belongs in its explicit
-# zero_offset_rad after calibration, not in the geometry URDF.
+# Historical signs (-1,-1,+1,+1,+1,+1) and torque scales are deliberately not
+# prefilled. The speed and gains below are only the current low-authority
+# commissioning baseline; they do not make this template valid or calibrated.
+# joint_3's mechanical zero difference belongs in its explicit zero_offset_rad
+# after calibration, not in the geometry URDF.
 joints:
   - &uncommissioned
     name: joint_1
@@ -32,24 +68,31 @@ joints:
     direction: 0
     zero_offset_rad: 0.0
     torque_scale: 0.0
+    # Multiplies this axis's URDF G(q), independently of motor torque conversion.
+    gravity_compensation_scale: 1.0
     torque_permille: 0
     kp_kd_torque_permille: 0
-    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, velocity_rad_s: 0.2, torque_nm: 0.5}
-    default_kp: 5.0
-    default_kd: 0.8
+    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
+    default_kp: 2.0
+    default_kd: 0.3
   - <<: *uncommissioned
     name: joint_2
-    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, velocity_rad_s: 0.2, torque_nm: 0.5}
+    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
   - <<: *uncommissioned
     name: joint_3
-    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, velocity_rad_s: 0.2, torque_nm: 0.5}
+    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
   - <<: *uncommissioned
     name: joint_4
-    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, velocity_rad_s: 0.2, torque_nm: 0.5}
+    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
+    default_kp: 1.0
+    default_kd: 0.15
   - <<: *uncommissioned
     name: joint_5
-    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, velocity_rad_s: 0.2, torque_nm: 0.5}
+    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
+    default_kp: 1.0
+    default_kd: 0.15
   - <<: *uncommissioned
     name: joint_6
-    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, velocity_rad_s: 0.2, torque_nm: 0.5}
-
+    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
+    default_kp: 1.0
+    default_kd: 0.15

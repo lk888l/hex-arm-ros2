@@ -263,7 +263,7 @@ The URDF position limits are:
 
 Keep every test target inside these limits. The simulated MoveIt configuration
 may use the nominal URDF velocity limit of `6.0 rad/s`; the real commissioning
-profile remains independently capped at `0.2 rad/s` until the hardware is
+profile remains independently capped at `0.1 rad/s` until the hardware is
 validated.
 
 ### 4.1 Send a trajectory to mock hardware

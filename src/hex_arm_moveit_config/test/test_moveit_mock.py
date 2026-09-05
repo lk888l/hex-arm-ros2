@@ -12,6 +12,7 @@ from action_msgs.msg import GoalStatus
 from control_msgs.action import FollowJointTrajectory
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
+from moveit_msgs.srv import GetStateValidity
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -20,6 +21,11 @@ from sensor_msgs.msg import JointState
 
 JOINTS = [f"joint_{index}" for index in range(1, 7)]
 TARGET = [0.20, 0.20, 1.30, -0.20, 0.15, 0.10]
+SURVEYED_START = [0.0, -1.570, 3.140, 0.0, 0.0, 0.0]
+SURVEYED_CONTACT_PAIRS = {
+    ("link_1", "link_5"),
+    ("link_2", "link_4"),
+}
 
 
 def spin_until(node: Node, future, timeout: float):
@@ -40,13 +46,30 @@ class MoveItProbe(Node):
             FollowJointTrajectory,
             "/firefly_arm_controller/follow_joint_trajectory",
         )
+        self.validity_client = self.create_client(
+            GetStateValidity, "/check_state_validity"
+        )
         self.positions: dict[str, float] = {}
         self.create_subscription(JointState, "/joint_states", self._state, 10)
 
     def _state(self, message: JointState) -> None:
         self.positions.update(zip(message.name, message.position, strict=False))
 
-    def request(self, target: list[float], *, plan_only: bool):
+    def state_validity(self, positions: list[float]):
+        request = GetStateValidity.Request()
+        request.group_name = "arm"
+        request.robot_state.is_diff = False
+        request.robot_state.joint_state.name = JOINTS
+        request.robot_state.joint_state.position = positions
+        return spin_until(self, self.validity_client.call_async(request), 10.0)
+
+    def request(
+        self,
+        target: list[float],
+        *,
+        plan_only: bool,
+        start: list[float] | None = None,
+    ):
         goal = MoveGroup.Goal()
         goal.request.group_name = "arm"
         goal.request.pipeline_id = "ompl"
@@ -54,7 +77,10 @@ class MoveItProbe(Node):
         goal.request.allowed_planning_time = 5.0
         goal.request.max_velocity_scaling_factor = 0.1
         goal.request.max_acceleration_scaling_factor = 0.1
-        goal.request.start_state.is_diff = True
+        goal.request.start_state.is_diff = start is None
+        if start is not None:
+            goal.request.start_state.joint_state.name = JOINTS
+            goal.request.start_state.joint_state.position = start
         constraints = Constraints()
         constraints.name = "mock_joint_target"
         constraints.joint_constraints = [
@@ -118,6 +144,7 @@ def main() -> None:
         while not (
             node.client.wait_for_server(timeout_sec=0.25)
             and node.trajectory_client.wait_for_server(timeout_sec=0.25)
+            and node.validity_client.wait_for_service(timeout_sec=0.25)
         ):
             if process.poll() is not None:
                 output = process.stdout.read() if process.stdout else ""
@@ -129,6 +156,18 @@ def main() -> None:
         # constructed controller handle has completed DDS action discovery.
         # Let that independent client settle before the first execution.
         time.sleep(1.0)
+
+        surveyed_validity = node.state_validity(SURVEYED_START)
+        surveyed_pairs = {
+            tuple(sorted((contact.contact_body_1, contact.contact_body_2)))
+            for contact in surveyed_validity.contacts
+        }
+        if surveyed_validity.valid or surveyed_pairs != SURVEYED_CONTACT_PAIRS:
+            raise RuntimeError(
+                "strict mock semantics no longer expose the exact surveyed-fold "
+                "mesh contacts: "
+                f"valid={surveyed_validity.valid}, contacts={surveyed_pairs}"
+            )
 
         node.request(TARGET, plan_only=True)
         node.request(TARGET, plan_only=False)
@@ -159,6 +198,20 @@ def main() -> None:
         output = process.stdout.read() if process.stdout else ""
         if failed or process.returncode not in (0, -signal.SIGINT, 130):
             print(output, file=sys.stderr)
+        move_group_lines = [
+            line for line in output.splitlines() if "hex_arm_move_group" in line
+        ]
+        crash_markers = ("Segmentation fault", "exit code -11", "process has died")
+        if not failed and any(
+            marker in line for line in move_group_lines for marker in crash_markers
+        ):
+            print(output, file=sys.stderr)
+            raise RuntimeError("ordered-shutdown mock move_group exited uncleanly")
+        if not failed and not (
+            "hex_arm_move_group" in output and "process has finished cleanly" in output
+        ):
+            print(output, file=sys.stderr)
+            raise RuntimeError("mock move_group clean-exit confirmation is missing")
 
 
 def test_moveit_mock() -> None:

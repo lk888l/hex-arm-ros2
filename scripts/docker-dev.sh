@@ -4,6 +4,9 @@ set -euo pipefail
 workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-up}"
 gpu_mode="${HEX_ARM_GPU:-auto}"
+can_interface="${HEX_ARM_CAN_IFACE:-}"
+can_serial="${HEX_ARM_CAN_SERIAL:-C9E29601798421B29AC2D419C12D9502}"
+can_channel="${HEX_ARM_CAN_CHANNEL:-0}"
 gpu_enabled=0
 if (( $# > 0 )); then
   shift
@@ -24,6 +27,19 @@ case "${gpu_mode}" in
     exit 2
     ;;
 esac
+
+if [[ -n "${can_interface}" && ! "${can_interface}" =~ ^[[:alnum:]_.-]{1,15}$ ]]; then
+  echo "error: HEX_ARM_CAN_IFACE must be a conventional Linux interface name (1..15 bytes)" >&2
+  exit 2
+fi
+if [[ -n "${can_interface}" && ! "${can_serial}" =~ ^[[:xdigit:]]{32}$ ]]; then
+  echo "error: HEX_ARM_CAN_SERIAL must be the exact 32-digit USB serial" >&2
+  exit 2
+fi
+if [[ ! "${can_channel}" =~ ^[0-3]$ ]]; then
+  echo "error: HEX_ARM_CAN_CHANNEL must be one of: 0, 1, 2, 3" >&2
+  exit 2
+fi
 
 if ! uname -r | tr '[:upper:]' '[:lower:]' | grep -q microsoft; then
   platform="native Ubuntu"
@@ -74,8 +90,9 @@ if ! uname -r | tr '[:upper:]' '[:lower:]' | grep -q microsoft; then
     echo "hint: run 'echo \$XAUTHORITY' in the desktop terminal and retry there" >&2
     exit 1
   fi
-  if [[ ! -e /dev/dri ]]; then
-    echo "error: /dev/dri is missing; the Ubuntu GUI container requires a DRM device" >&2
+  if [[ "${gpu_enabled}" != "1" && ! -e /dev/dri ]]; then
+    echo "error: /dev/dri is missing; the non-NVIDIA Ubuntu GUI container requires a DRM device" >&2
+    echo "hint: on an NVIDIA host, install NVIDIA Container Toolkit and use HEX_ARM_GPU=auto or nvidia" >&2
     exit 1
   fi
   export HEX_ARM_XAUTHORITY="${host_xauthority}"
@@ -89,6 +106,132 @@ if [[ "${HEX_ARM_REAL:-0}" == "1" ]]; then
 fi
 
 compose=(docker compose "${compose_files[@]}")
+
+ensure_container_running() {
+  if ! docker inspect --format '{{.State.Running}}' ros2-jazzy-arm 2>/dev/null | grep -qx true; then
+    "${compose[@]}" up -d
+  fi
+}
+
+new_real_launch_token() {
+  local uuid token
+
+  if [[ ! -r /proc/sys/kernel/random/uuid ]]; then
+    echo "error: cannot generate a unique real-launch token from the kernel RNG" >&2
+    return 1
+  fi
+  IFS= read -r uuid </proc/sys/kernel/random/uuid
+  token="${uuid//-/}"
+  if [[ ! "${token}" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "error: kernel RNG returned an invalid real-launch token" >&2
+    return 1
+  fi
+  printf '%s\n' "${token}"
+}
+
+run_supervised_real_launch() {
+  local launch_token real_exec_pid real_exec_status wait_status second_wait_status
+  local requested_signal relay_attempted relay_status trap_count wait_trap_count
+
+  command -v setsid >/dev/null || {
+    echo "error: setsid is required for reliable host-to-container signal forwarding" >&2
+    return 1
+  }
+  launch_token="$(new_real_launch_token)"
+  real_exec_pid=""
+  real_exec_status=1
+  requested_signal=""
+  relay_attempted=0
+  relay_status=0
+  trap_count=0
+
+  relay_real_launch_signal() {
+    if [[ -z "${real_exec_pid}" || -z "${requested_signal}" || "${relay_attempted}" == "1" ]]; then
+      return 0
+    fi
+    relay_attempted=1
+    echo "host supervisor: relaying ${requested_signal} to real-launch token ${launch_token}; keeping the primary exec attached" >&2
+    # This second, non-TTY Docker exec has exactly one authority: ask the
+    # container helper to validate this invocation's token/PGID state and
+    # signal that negative PGID. It receives no CAN interface and cannot use a
+    # process-name-wide selector.
+    if setsid -w docker exec ros2-jazzy-arm \
+      /workspaces/hex_arm_ros2/scripts/supervised-real-launch.sh \
+      --forward-signal "${launch_token}" "${requested_signal}"; then
+      relay_status=0
+    else
+      relay_status="$?"
+      relay_attempted=0
+      echo "error: real-launch signal relay failed with status ${relay_status}; the primary exec remains attached" >&2
+    fi
+  }
+
+  record_real_launch_signal() {
+    local signal_name="$1"
+    trap_count=$((trap_count + 1))
+    if [[ -n "${requested_signal}" ]]; then
+      echo "host supervisor: ${requested_signal} is already pending; still waiting for verified cleanup" >&2
+      if [[ "${relay_attempted}" == "0" ]]; then
+        relay_real_launch_signal
+      fi
+      return 0
+    fi
+    requested_signal="${signal_name}"
+    relay_real_launch_signal
+  }
+
+  trap 'record_real_launch_signal INT' INT
+  trap 'record_real_launch_signal TERM' TERM
+  # Rust deliberately handles INT/TERM. Translate a host hangup to TERM.
+  trap 'record_real_launch_signal TERM' HUP
+
+  # Isolate the long-lived Compose client from the host terminal process group:
+  # the shell trap remains the only Ctrl-C recipient. `-w` keeps this wrapper
+  # alive until the original exec returns after container-side verification.
+  setsid -w "${compose[@]}" exec -T \
+    -e HEX_ARM_CAN_IFACE="${can_interface}" \
+    -e HEX_ARM_CAN_SERIAL="${can_serial}" \
+    -e HEX_ARM_CAN_CHANNEL="${can_channel}" \
+    -e HEX_ARM_REAL_LAUNCH_TOKEN="${launch_token}" \
+    ros2-jazzy-arm \
+    /workspaces/hex_arm_ros2/scripts/supervised-real-launch.sh "$@" &
+  real_exec_pid="$!"
+  relay_real_launch_signal
+
+  # A trapped signal interrupts Bash's wait even though it does not terminate
+  # the isolated Compose client. Resume waiting until that same client exits;
+  # do not substitute the short-lived relay exec's status for its result.
+  while true; do
+    wait_trap_count="${trap_count}"
+    if wait "${real_exec_pid}"; then
+      wait_status=0
+    else
+      wait_status="$?"
+    fi
+    if (( trap_count != wait_trap_count )) && kill -0 "${real_exec_pid}" 2>/dev/null; then
+      continue
+    fi
+    if (( trap_count != wait_trap_count )); then
+      if wait "${real_exec_pid}" 2>/dev/null; then
+        second_wait_status=0
+      else
+        second_wait_status="$?"
+      fi
+      if (( second_wait_status != 127 )); then
+        wait_status="${second_wait_status}"
+      fi
+    fi
+    real_exec_status="${wait_status}"
+    break
+  done
+
+  trap - INT TERM HUP
+  if [[ -n "${requested_signal}" && "${relay_status}" != "0" ]]; then
+    echo "error: ${requested_signal} was requested but its token-scoped relay was not confirmed" >&2
+    return 1
+  fi
+  return "${real_exec_status}"
+}
 
 case "${action}" in
   build)
@@ -106,12 +249,32 @@ case "${action}" in
     "${compose[@]}" down "$@"
     ;;
   shell)
-    "${compose[@]}" up -d
+    # Do not recreate an existing container with a different override set.
+    # In particular this preserves USB mappings from a prior HEX_ARM_REAL=1 up.
+    ensure_container_running
     exec "${compose[@]}" exec ros2-jazzy-arm bash "$@"
     ;;
+  real-launch)
+    if [[ -z "${can_interface}" ]]; then
+      echo "error: real-launch requires an explicit HEX_ARM_CAN_IFACE" >&2
+      echo "usage: HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 $0 real-launch {bringup|moveit} /absolute/container/profile.yaml [launch_arg:=value ...]" >&2
+      exit 2
+    fi
+    if (( $# < 2 )) || [[ "$1" != "bringup" && "$1" != "moveit" ]]; then
+      echo "error: real-launch requires target bringup or moveit plus an absolute container profile path" >&2
+      exit 2
+    fi
+    ensure_container_running
+    run_supervised_real_launch "$@"
+    ;;
   doctor)
-    "${compose[@]}" up -d
-    "${compose[@]}" exec -T -e HEX_ARM_EXPECT_NVIDIA="${gpu_enabled}" ros2-jazzy-arm bash -lc '
+    ensure_container_running
+    "${compose[@]}" exec -T \
+      -e HEX_ARM_EXPECT_NVIDIA="${gpu_enabled}" \
+      -e HEX_ARM_CAN_IFACE="${can_interface}" \
+      -e HEX_ARM_CAN_SERIAL="${can_serial}" \
+      -e HEX_ARM_CAN_CHANNEL="${can_channel}" \
+      ros2-jazzy-arm bash -lc '
       set -e
       source /opt/ros/jazzy/setup.bash
       display_number="${DISPLAY##*:}"
@@ -132,6 +295,110 @@ case "${action}" in
         fi
         echo "NVIDIA GPU acceleration: OK"
       fi
+      if [[ -n "${HEX_ARM_CAN_IFACE}" ]]; then
+        command -v ip >/dev/null || {
+          echo "error: iproute2 is missing; rebuild the development image" >&2
+          exit 1
+        }
+        command -v python3 >/dev/null || {
+          echo "error: python3 is required for strict SocketCAN JSON validation" >&2
+          exit 1
+        }
+        can_json_before="$(ip -details -statistics -json link show dev "${HEX_ARM_CAN_IFACE}")"
+        sleep 0.2
+        can_json_after="$(ip -details -statistics -json link show dev "${HEX_ARM_CAN_IFACE}")"
+        printf "%s\n%s\n" "${can_json_before}" "${can_json_after}" | python3 -c "
+import json, sys
+snapshots = [json.loads(line) for line in sys.stdin if line.strip()]
+def require(condition, message):
+    if not condition:
+        raise SystemExit(\"error: SocketCAN preflight: \" + message)
+require(len(snapshots) == 2, \"expected exactly two link-statistics samples\")
+before_links, links = snapshots
+require(len(before_links) == 1, \"expected exactly one interface in the first sample\")
+require(len(links) == 1, \"expected exactly one interface\")
+before_link = before_links[0]
+link = links[0]
+require(before_link.get(\"ifname\") == \"${HEX_ARM_CAN_IFACE}\", \"first-sample interface name mismatch\")
+require(link.get(\"ifname\") == \"${HEX_ARM_CAN_IFACE}\", \"interface name mismatch\")
+flags = link.get(\"flags\", [])
+require(\"UP\" in flags and \"LOWER_UP\" in flags, \"link is not UP/LOWER_UP\")
+require(link.get(\"operstate\") == \"UP\", \"operstate is not UP\")
+require(link.get(\"mtu\") == 72, \"MTU is not 72\")
+require(link.get(\"link_type\") == \"can\", \"link type is not CAN\")
+linkinfo = link.get(\"linkinfo\", {})
+require(linkinfo.get(\"info_kind\") == \"can\", \"link info kind is not CAN\")
+can = linkinfo.get(\"info_data\", {})
+require(\"FD\" in can.get(\"ctrlmode\", []), \"CAN-FD is not enabled\")
+require(can.get(\"state\") == \"ERROR-ACTIVE\", \"state is not ERROR-ACTIVE\")
+berr = can.get(\"berr_counter\", {})
+require(berr.get(\"tx\") == 0 and berr.get(\"rx\") == 0, \"TEC/REC are nonzero or missing\")
+require(can.get(\"restart_ms\") == 0, \"restart-ms is not fail-closed zero\")
+nominal = can.get(\"bittiming\", {})
+require(nominal.get(\"bitrate\") == 1000000, \"nominal bitrate is not 1M\")
+require(float(nominal.get(\"sample_point\", -1)) == 0.8, \"nominal sample point is not 0.800\")
+require(nominal.get(\"sjw\") == 5, \"nominal SJW is not 5\")
+data = can.get(\"data_bittiming\", {})
+require(data.get(\"bitrate\") == 4000000, \"data bitrate is not 4M\")
+require(float(data.get(\"sample_point\", -1)) == 0.8, \"data sample point is not 0.800\")
+require(data.get(\"sjw\") == 3, \"data SJW is not 3\")
+xstats = linkinfo.get(\"info_xstats\", {})
+for key in (\"restarts\", \"bus_error\", \"arbitration_lost\", \"error_warning\", \"error_passive\", \"bus_off\"):
+    require(xstats.get(key) == 0, \"nonzero or missing cumulative counter \" + key)
+before_stats = before_link.get(\"stats64\", {})
+stats = link.get(\"stats64\", {})
+before_rx = before_stats.get(\"rx\", {})
+before_tx = before_stats.get(\"tx\", {})
+rx = stats.get(\"rx\", {})
+tx = stats.get(\"tx\", {})
+for key in (\"errors\", \"over_errors\"):
+    require(rx.get(key) == 0, \"nonzero or missing RX counter \" + key)
+for key in (\"errors\", \"carrier_errors\", \"collisions\"):
+    require(tx.get(key) == 0, \"nonzero or missing TX counter \" + key)
+for direction, previous, current in ((\"RX\", before_rx, rx), (\"TX\", before_tx, tx)):
+    previous_dropped = previous.get(\"dropped\")
+    current_dropped = current.get(\"dropped\")
+    require(isinstance(previous_dropped, int) and isinstance(current_dropped, int),
+            direction + \" dropped counter is missing or invalid\")
+    require(current_dropped == previous_dropped,
+            direction + \" dropped counter changed during the 0.2 s sample: \" +
+            str(previous_dropped) + \" -> \" + str(current_dropped))
+"
+
+        netdev="/sys/class/net/${HEX_ARM_CAN_IFACE}"
+        test -d "${netdev}" || { echo "error: sysfs netdev ${netdev} is missing" >&2; exit 1; }
+        device="$(readlink -f "${netdev}/device")"
+        driver="$(basename "$(readlink -f "${device}/driver")")"
+        usb_device="${device}"
+        while [[ ! -r "${usb_device}/idVendor" || ! -r "${usb_device}/idProduct" ]]; do
+          parent="$(dirname "${usb_device}")"
+          [[ "${parent}" != "${usb_device}" ]] || {
+            echo "error: no USB adapter ancestor found for ${HEX_ARM_CAN_IFACE}" >&2
+            exit 1
+          }
+          usb_device="${parent}"
+        done
+        usb_vid="$(tr "[:upper:]" "[:lower:]" < "${usb_device}/idVendor")"
+        usb_pid="$(tr "[:upper:]" "[:lower:]" < "${usb_device}/idProduct")"
+        usb_serial="$(tr -d "[:space:]" < "${usb_device}/serial")"
+        dev_port="$(tr -d "[:space:]" < "${netdev}/dev_port")"
+        dev_id="$(tr -d "[:space:]" < "${netdev}/dev_id")"
+        [[ "${driver}" == "gs_usb" ]] || { echo "error: CAN driver is ${driver}, expected gs_usb" >&2; exit 1; }
+        [[ "${usb_vid}" == "1209" && "${usb_pid}" == "2323" ]] || {
+          echo "error: CAN adapter is ${usb_vid}:${usb_pid}, expected 1209:2323" >&2
+          exit 1
+        }
+        [[ "${usb_serial}" == "${HEX_ARM_CAN_SERIAL}" ]] || {
+          echo "error: CAN adapter serial mismatch: ${usb_serial}" >&2
+          exit 1
+        }
+        [[ "${dev_port}" -eq "${HEX_ARM_CAN_CHANNEL}" && "$((dev_id))" -eq "${HEX_ARM_CAN_CHANNEL}" ]] || {
+          echo "error: CAN adapter channel mismatch: dev_port=${dev_port}, dev_id=${dev_id}" >&2
+          exit 1
+        }
+        ip -details -statistics link show "${HEX_ARM_CAN_IFACE}"
+        echo "SocketCAN ${HEX_ARM_CAN_IFACE}: strict 1M/4M link and adapter preflight OK"
+      fi
       test -r /workspaces/hex_arm_ros2/install/setup.bash && echo "ROS workspace: built" || echo "ROS workspace: not built yet"
     '
     ;;
@@ -139,7 +406,7 @@ case "${action}" in
     "${compose[@]}" "${action}" "$@"
     ;;
   *)
-    echo "usage: HEX_ARM_GPU={auto|nvidia|none} $0 {build|up|down|shell|doctor|config|logs|ps} [arguments...]" >&2
+    echo "usage: HEX_ARM_GPU={auto|nvidia|none} HEX_ARM_CAN_IFACE=canN HEX_ARM_CAN_SERIAL=<32-hex> HEX_ARM_CAN_CHANNEL=N $0 {build|up|down|shell|doctor|real-launch|config|logs|ps} [arguments...]" >&2
     exit 2
     ;;
 esac
