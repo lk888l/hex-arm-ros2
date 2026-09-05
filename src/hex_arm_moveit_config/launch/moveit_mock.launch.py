@@ -1,6 +1,7 @@
+import os
 from pathlib import Path
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -18,6 +19,16 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 
 LIMIT_PROFILES = ("sim", "commissioning", "verified")
+
+
+def _move_group_environment() -> dict[str, str]:
+    runtime_prefix = Path(get_package_prefix("hex_arm_moveit_runtime"))
+    preload = runtime_prefix / "lib" / "libhex_arm_moveit_tem_shutdown.so"
+    if not preload.is_file():
+        raise RuntimeError(f"ordered-shutdown MoveIt preload is missing: {preload}")
+    inherited = os.environ.get("LD_PRELOAD")
+    value = f"{inherited}:{preload}" if inherited else str(preload)
+    return {"LD_PRELOAD": value}
 
 
 def _launch_setup(context):
@@ -97,9 +108,10 @@ def _launch_setup(context):
         output="log",
     )
     move_group = Node(
-        package="moveit_ros_move_group",
-        executable="move_group",
+        package="hex_arm_moveit_runtime",
+        executable="hex_arm_move_group",
         output="screen",
+        additional_env=_move_group_environment(),
         parameters=[
             moveit_config.to_dict(),
             {
@@ -142,6 +154,12 @@ def _launch_setup(context):
     def _shutdown_after_exit(event, callback_context, step):
         if callback_context.is_shutdown:
             return []
+        if event.returncode == 0:
+            reason = f"critical process {step} exited cleanly"
+            return [
+                LogInfo(msg=f"{reason}; shutting down dependent processes"),
+                EmitEvent(event=Shutdown(reason=reason)),
+            ]
         reason = f"critical process {step} exited with code {event.returncode}"
         return [
             LogInfo(msg=f"ERROR: {reason}"),

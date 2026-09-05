@@ -40,9 +40,12 @@ pub(crate) struct MotorEntryInner {
     pub online: bool,
     pub last_heartbeat: Option<Instant>,
     pub last_tpdo: Option<Instant>,
+    pub last_tpdo1: Option<Instant>,
+    pub last_tpdo2: Option<Instant>,
     pub nmt_state: Option<NmtState>,
-    /// 控制逻辑。由 [`crate::cia402::tpdo_listener`] 在 TPDO2 到达时
-    /// 根据 status_word + `target_mode` 解算并写入。
+    /// 控制逻辑。由 [`crate::cia402::tpdo_listener`] 在有效 TPDO 到达时，
+    /// 根据 `status_word` 的当前 Fault bit、两路 last-error 诊断码和
+    /// `target_mode` 解算并写入。非零 last-error 本身不会制造当前 Fault。
     pub logic: Option<Logic>,
     /// 最近一次 `set_mode` 设过的目标模式（v0.1 不读 0x6061，靠这里缓存）。
     /// 没设过 → 即使 status_word 显示 Operation Enabled 也只能报 Disabled，
@@ -78,6 +81,8 @@ impl MotorEntry {
                 online: false,
                 last_heartbeat: None,
                 last_tpdo: None,
+                last_tpdo1: None,
+                last_tpdo2: None,
                 nmt_state: None,
                 logic: None,
                 target_mode: None,
@@ -130,6 +135,8 @@ impl MotorEntryInner {
             connection: Connection {
                 last_heartbeat: self.last_heartbeat,
                 last_tpdo: self.last_tpdo,
+                last_tpdo1: self.last_tpdo1,
+                last_tpdo2: self.last_tpdo2,
                 online: self.online,
                 nmt_state: self.nmt_state,
             },
@@ -154,6 +161,8 @@ mod tests {
         assert!(g.identity.is_none());
         assert!(g.last_heartbeat.is_none());
         assert!(g.last_tpdo.is_none());
+        assert!(g.last_tpdo1.is_none());
+        assert!(g.last_tpdo2.is_none());
     }
 
     #[test]

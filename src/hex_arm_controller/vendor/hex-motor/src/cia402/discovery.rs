@@ -230,7 +230,9 @@ pub(crate) async fn identify_once(
     let product_name = match sdo::upload_string(bus, nid, 0x1008, 0, timeout).await {
         Ok(s) => Some(s),
         Err(e) => {
-            log::debug!("nid 0x{nid:02X}: 0x1008 not readable ({e}); proceeding without product name");
+            log::debug!(
+                "nid 0x{nid:02X}: 0x1008 not readable ({e}); proceeding without product name"
+            );
             None
         }
     };

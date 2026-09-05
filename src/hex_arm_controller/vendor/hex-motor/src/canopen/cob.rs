@@ -59,9 +59,9 @@ impl CommunicationObject {
     pub fn cob_id(self, node_id: u8) -> Result<u16> {
         let base = self.function_code();
         match self {
-            CommunicationObject::Nmt
-            | CommunicationObject::Sync
-            | CommunicationObject::Time => Ok(base),
+            CommunicationObject::Nmt | CommunicationObject::Sync | CommunicationObject::Time => {
+                Ok(base)
+            }
             _ => {
                 if node_id == 0 || node_id > 0x7F {
                     return Err(Error::InvalidNodeId(node_id));
@@ -181,12 +181,18 @@ mod tests {
 
     #[test]
     fn parse_heartbeat() {
-        assert_eq!(parse_cob_id(0x710), Some((CommunicationObject::Heartbeat, 0x10)));
+        assert_eq!(
+            parse_cob_id(0x710),
+            Some((CommunicationObject::Heartbeat, 0x10))
+        );
     }
 
     #[test]
     fn parse_tpdo1() {
-        assert_eq!(parse_cob_id(0x190), Some((CommunicationObject::Tpdo1, 0x10)));
+        assert_eq!(
+            parse_cob_id(0x190),
+            Some((CommunicationObject::Tpdo1, 0x10))
+        );
     }
 
     #[test]
@@ -197,7 +203,10 @@ mod tests {
     #[test]
     fn parse_emergency() {
         // 0x081 是 EMCY for node 1
-        assert_eq!(parse_cob_id(0x081), Some((CommunicationObject::Emergency, 1)));
+        assert_eq!(
+            parse_cob_id(0x081),
+            Some((CommunicationObject::Emergency, 1))
+        );
     }
 
     #[test]

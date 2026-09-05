@@ -1,8 +1,11 @@
+use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use prost::Message;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use zenoh::Session;
 
 use crate::runtime::ArmRuntime;
@@ -12,20 +15,86 @@ pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/robot_api.rs"));
 }
 
-pub async fn serve(session: Session, runtime: Arc<ArmRuntime>, urdf_xml: String) -> Result<()> {
-    spawn_description(session.clone(), runtime.clone());
-    spawn_arm_description(session.clone(), runtime.clone());
-    spawn_urdf(session.clone(), runtime.clone(), urdf_xml);
-    spawn_acquire(session.clone(), runtime.clone());
-    spawn_release(session.clone(), runtime.clone());
-    spawn_set_mode(session.clone(), runtime.clone());
-    spawn_clear_fault(session.clone(), runtime.clone());
-    spawn_event_log(session.clone(), runtime.clone());
-    spawn_discovery(session.clone(), runtime.clone());
-    spawn_set_gravity(session.clone(), runtime.clone());
-    spawn_command_subscriber(session.clone(), runtime.clone()).await?;
-    spawn_state_publisher(session, runtime);
-    Ok(())
+fn supported_timeout_behaviors() -> Vec<i32> {
+    // HOLD and RAMP_STOP are wire-compatible enum values, but neither has a
+    // commissioned real-time safety implementation in this driver. Advertising
+    // only FAULT keeps capability discovery aligned with submit_trajectory.
+    vec![pb::TimeoutBehavior::Fault as i32]
+}
+
+pub struct ProtocolTasks {
+    handles: Vec<JoinHandle<()>>,
+}
+
+impl ProtocolTasks {
+    /// Cancel and join all remaining Zenoh I/O tasks. The caller must first
+    /// latch ArmRuntime closing and complete ArmRuntime::shutdown: aborting a
+    /// query task while it owns an in-flight set_mode future would otherwise
+    /// cancel a CAN transition halfway through. Normal control follows this
+    /// ordering in main.rs; by this point tasks still alive are stuck only in
+    /// transport declaration/reply/publication work.
+    pub async fn cancel_and_join(self) -> Result<()> {
+        for handle in &self.handles {
+            handle.abort();
+        }
+        let mut failures = Vec::new();
+        for handle in self.handles {
+            if let Err(error) = handle.await {
+                if !error.is_cancelled() {
+                    failures.push(error.to_string());
+                }
+            }
+        }
+        anyhow::ensure!(
+            failures.is_empty(),
+            "one or more Zenoh protocol tasks failed: {}",
+            failures.join("; ")
+        );
+        Ok(())
+    }
+}
+
+pub async fn serve(
+    session: Session,
+    runtime: Arc<ArmRuntime>,
+    urdf_xml: String,
+) -> Result<ProtocolTasks> {
+    anyhow::ensure!(!runtime.is_closing(), "controller is shutting down");
+
+    // This is the only declaration performed before its task is spawned. Do
+    // it first so a subscriber setup failure cannot leave a partially detached
+    // API behind.
+    let command_subscriber = spawn_command_subscriber(session.clone(), runtime.clone()).await?;
+    let mut handles = vec![command_subscriber];
+    handles.push(spawn_description(session.clone(), runtime.clone()));
+    handles.push(spawn_arm_description(session.clone(), runtime.clone()));
+    handles.extend(spawn_urdf(session.clone(), runtime.clone(), urdf_xml));
+    handles.push(spawn_acquire(session.clone(), runtime.clone()));
+    handles.push(spawn_release(session.clone(), runtime.clone()));
+    handles.push(spawn_set_mode(session.clone(), runtime.clone()));
+    handles.push(spawn_clear_fault(session.clone(), runtime.clone()));
+    handles.push(spawn_event_log(session.clone(), runtime.clone()));
+    handles.push(spawn_discovery(session.clone(), runtime.clone()));
+    handles.extend(spawn_set_gravity(session.clone(), runtime.clone()));
+    handles.push(spawn_state_publisher(session, runtime.clone()));
+    Ok(ProtocolTasks { handles })
+}
+
+async fn next_while_running<Operation>(
+    closing: &mut watch::Receiver<bool>,
+    operation: Operation,
+) -> Option<Operation::Output>
+where
+    Operation: IntoFuture,
+{
+    if *closing.borrow() {
+        return None;
+    }
+    tokio::select! {
+        biased;
+        _ = closing.changed() => None,
+        output = operation.into_future() => Some(output),
+    }
 }
 
 fn encode<M: Message>(message: &M) -> Vec<u8> {
@@ -60,14 +129,21 @@ fn generic(result: Result<()>) -> pb::GenericResponse {
     }
 }
 
-fn spawn_description(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_description(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/description", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare description queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare description queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let message = pb::RobotDescription {
                 robot_index: runtime
                     .profile
@@ -87,24 +163,29 @@ fn spawn_description(session: Session, runtime: Arc<ArmRuntime>) {
                 supported_modes: vec![
                     pb::OperatingMode::Disabled as i32,
                     pb::OperatingMode::Active as i32,
-                    pb::OperatingMode::Passive as i32,
-                    pb::OperatingMode::GravityComp as i32,
                 ],
                 urdf_key: Some(format!("{}/urdf", runtime.profile.robot_prefix)),
             };
             reply(query, message).await;
         }
-    });
+    })
 }
 
-fn spawn_arm_description(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_arm_description(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/arm/description", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare arm description queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare arm description queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let joints = &runtime.profile.joints;
             let message = pb::ArmDescription {
                 dof: 6,
@@ -128,31 +209,36 @@ fn spawn_arm_description(session: Session, runtime: Arc<ArmRuntime>) {
                     .iter()
                     .map(|joint| joint.identity.model.clone())
                     .collect(),
-                supported_timeouts: vec![
-                    pb::TimeoutBehavior::Hold as i32,
-                    pb::TimeoutBehavior::RampStop as i32,
-                    pb::TimeoutBehavior::Fault as i32,
-                ],
+                supported_timeouts: supported_timeout_behaviors(),
                 total_power_max_w: None,
                 thermal_derate_temp: None,
             };
             reply(query, message).await;
         }
-    });
+    })
 }
 
-fn spawn_urdf(session: Session, runtime: Arc<ArmRuntime>, urdf_xml: String) {
+fn spawn_urdf(session: Session, runtime: Arc<ArmRuntime>, urdf_xml: String) -> Vec<JoinHandle<()>> {
+    let mut handles = Vec::new();
     for suffix in ["urdf", "arm/urdf"] {
         let session = session.clone();
         let runtime = runtime.clone();
         let xml = urdf_xml.clone();
-        tokio::spawn(async move {
+        let mut closing = runtime.closing_receiver();
+        handles.push(tokio::spawn(async move {
             let key = format!("{}/{}", runtime.profile.robot_prefix, suffix);
-            let queryable = session
-                .declare_queryable(&key)
-                .await
-                .expect("declare URDF queryable");
-            while let Ok(query) = queryable.recv_async().await {
+            let Some(queryable) =
+                next_while_running(&mut closing, session.declare_queryable(&key)).await
+            else {
+                return;
+            };
+            let queryable = queryable.expect("declare URDF queryable");
+            loop {
+                let Some(Ok(query)) =
+                    next_while_running(&mut closing, queryable.recv_async()).await
+                else {
+                    break;
+                };
                 reply(
                     query,
                     pb::UrdfResource {
@@ -165,18 +251,26 @@ fn spawn_urdf(session: Session, runtime: Arc<ArmRuntime>, urdf_xml: String) {
                 )
                 .await;
             }
-        });
+        }));
     }
+    handles
 }
 
-fn spawn_acquire(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_acquire(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/rpc/acquire_session", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare acquire queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare acquire queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let request: Result<pb::AcquireSessionRequest> = decode(&query);
             let response = match request.and_then(|request| {
                 runtime.acquire(request.client_name.unwrap_or_else(|| "anonymous".into()))
@@ -198,34 +292,48 @@ fn spawn_acquire(session: Session, runtime: Arc<ArmRuntime>) {
             };
             reply(query, response).await;
         }
-    });
+    })
 }
 
-fn spawn_release(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_release(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/rpc/release_session", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare release queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare release queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let result = match decode::<pb::ReleaseSessionRequest>(&query) {
                 Ok(request) => runtime.release(request.session_id).await,
                 Err(error) => Err(error),
             };
             reply(query, generic(result)).await;
         }
-    });
+    })
 }
 
-fn spawn_set_mode(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_set_mode(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/rpc/set_mode", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare mode queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare mode queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let result = match decode::<pb::SetModeRequest>(&query) {
                 Ok(request) => match mode_from_wire(request.mode) {
                     Ok(mode) => runtime.set_mode(request.session_id, mode).await,
@@ -235,47 +343,68 @@ fn spawn_set_mode(session: Session, runtime: Arc<ArmRuntime>) {
             };
             reply(query, generic(result)).await;
         }
-    });
+    })
 }
 
-fn spawn_clear_fault(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_clear_fault(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/rpc/clear_fault", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare clear fault queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare clear fault queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let result = match decode::<pb::ClearFaultRequest>(&query) {
                 Ok(request) => runtime.clear_fault(request.session_id).await,
                 Err(error) => Err(error),
             };
             reply(query, generic(result)).await;
         }
-    });
+    })
 }
 
-fn spawn_event_log(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_event_log(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/events/recent", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare event log queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare event log queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             reply(query, runtime.event_log_proto()).await;
         }
-    });
+    })
 }
 
-fn spawn_discovery(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_discovery(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let key = format!("{}/arm/rpc/discover", runtime.profile.robot_prefix);
-        let queryable = session
-            .declare_queryable(&key)
-            .await
-            .expect("declare discovery queryable");
-        while let Ok(query) = queryable.recv_async().await {
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare discovery queryable");
+        loop {
+            let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await
+            else {
+                break;
+            };
             let response = match decode::<pb::DiscoverMotorsRequest>(&query) {
                 Ok(request) => match runtime.discover(request.refresh).await {
                     Ok(motors) => pb::DiscoverMotorsResponse {
@@ -308,38 +437,56 @@ fn spawn_discovery(session: Session, runtime: Arc<ArmRuntime>) {
             };
             reply(query, response).await;
         }
-    });
+    })
 }
 
-fn spawn_set_gravity(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_set_gravity(session: Session, runtime: Arc<ArmRuntime>) -> Vec<JoinHandle<()>> {
+    let mut handles = Vec::new();
     for suffix in ["rpc/set_gravity", "arm/rpc/set_gravity"] {
         let session = session.clone();
         let runtime = runtime.clone();
-        tokio::spawn(async move {
+        let mut closing = runtime.closing_receiver();
+        handles.push(tokio::spawn(async move {
             let key = format!("{}/{}", runtime.profile.robot_prefix, suffix);
-            let queryable = session
-                .declare_queryable(&key)
-                .await
-                .expect("declare gravity queryable");
-            while let Ok(query) = queryable.recv_async().await {
+            let Some(queryable) =
+                next_while_running(&mut closing, session.declare_queryable(&key)).await
+            else {
+                return;
+            };
+            let queryable = queryable.expect("declare gravity queryable");
+            loop {
+                let Some(Ok(query)) =
+                    next_while_running(&mut closing, queryable.recv_async()).await
+                else {
+                    break;
+                };
                 let result = decode::<pb::SetGravityRequest>(&query).and_then(|request| {
                     let gravity = request.gravity.context("gravity vector missing")?;
                     runtime.set_gravity(request.session_id, [gravity.x, gravity.y, gravity.z])
                 });
                 reply(query, generic(result)).await;
             }
-        });
+        }));
     }
+    handles
 }
 
-async fn spawn_command_subscriber(session: Session, runtime: Arc<ArmRuntime>) -> Result<()> {
+async fn spawn_command_subscriber(
+    session: Session,
+    runtime: Arc<ArmRuntime>,
+) -> Result<JoinHandle<()>> {
     let key = format!("{}/arm/command", runtime.profile.robot_prefix);
     let subscriber = session
         .declare_subscriber(&key)
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    tokio::spawn(async move {
-        while let Ok(sample) = subscriber.recv_async().await {
+    let mut closing = runtime.closing_receiver();
+    Ok(tokio::spawn(async move {
+        loop {
+            let Some(Ok(sample)) = next_while_running(&mut closing, subscriber.recv_async()).await
+            else {
+                break;
+            };
             let bytes = sample.payload().to_bytes();
             match pb::JointTrajectory::decode(bytes.as_ref()) {
                 Ok(command) => {
@@ -350,18 +497,23 @@ async fn spawn_command_subscriber(session: Session, runtime: Arc<ArmRuntime>) ->
                 Err(error) => tracing::warn!(%error, "malformed joint command rejected"),
             }
         }
-    });
-    Ok(())
+    }))
 }
 
-fn spawn_state_publisher(session: Session, runtime: Arc<ArmRuntime>) {
+fn spawn_state_publisher(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
     tokio::spawn(async move {
         let period =
             Duration::from_secs_f64(1.0 / runtime.profile.controller.state_publish_hz as f64);
         let mut interval = tokio::time::interval(period);
         let mut last_event_seq = 0;
         loop {
-            interval.tick().await;
+            if next_while_running(&mut closing, interval.tick())
+                .await
+                .is_none()
+            {
+                break;
+            }
             let prefix = &runtime.profile.robot_prefix;
             let joint = encode(&runtime.joint_state_proto());
             let driver = encode(&runtime.driver_state_proto());
@@ -394,7 +546,7 @@ fn spawn_state_publisher(session: Session, runtime: Arc<ArmRuntime>) {
                 }
             }
         }
-    });
+    })
 }
 
 fn mode_from_wire(value: i32) -> Result<OperatingMode> {
@@ -404,5 +556,46 @@ fn mode_from_wire(value: i32) -> Result<OperatingMode> {
         Ok(pb::OperatingMode::Passive) => Ok(OperatingMode::Passive),
         Ok(pb::OperatingMode::GravityComp) => Ok(OperatingMode::GravityComp),
         _ => anyhow::bail!("unsupported or controller-owned operating mode"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arm_capabilities_advertise_only_the_commissioned_fault_timeout() {
+        assert_eq!(
+            supported_timeout_behaviors(),
+            vec![pb::TimeoutBehavior::Fault as i32]
+        );
+    }
+
+    #[tokio::test]
+    async fn protocol_waits_are_cancelled_by_the_shutdown_latch() {
+        let (closing_tx, mut closing_rx) = watch::channel(false);
+        let wait = tokio::spawn(async move {
+            next_while_running(&mut closing_rx, std::future::pending::<()>()).await
+        });
+        tokio::task::yield_now().await;
+        closing_tx.send_replace(true);
+
+        let result = tokio::time::timeout(Duration::from_millis(100), wait)
+            .await
+            .expect("protocol receive remained detached after shutdown")
+            .expect("protocol cancellation task panicked");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn stuck_zenoh_io_is_aborted_and_joined_after_backend_shutdown() {
+        let tasks = ProtocolTasks {
+            handles: vec![tokio::spawn(std::future::pending::<()>())],
+        };
+
+        tokio::time::timeout(Duration::from_millis(100), tasks.cancel_and_join())
+            .await
+            .expect("stuck protocol I/O prevented process shutdown")
+            .expect("expected task cancellation is not a protocol failure");
     }
 }

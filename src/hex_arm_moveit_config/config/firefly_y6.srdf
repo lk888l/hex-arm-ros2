@@ -6,17 +6,19 @@
     <chain base_link="base_link" tip_link="link_6"/>
   </group>
 
-  <group_state name="ready" group="arm">
+  <!-- Surveyed-pose planning reference only; not a calibrated home target.
+       joints 2 and 3 are inset 0.01 rad from their observed boundary poses so
+       numerical tolerance cannot place this state outside the allowed range. -->
+  <group_state name="commissioning_start" group="arm">
     <joint name="joint_1" value="0.0"/>
-    <joint name="joint_2" value="0.0"/>
-    <joint name="joint_3" value="1.57"/>
+    <joint name="joint_2" value="-1.56"/>
+    <joint name="joint_3" value="3.13"/>
     <joint name="joint_4" value="0.0"/>
     <joint name="joint_5" value="0.0"/>
     <joint name="joint_6" value="0.0"/>
   </group_state>
 
-  <!-- Only directly adjacent links are excluded. Unlike the historical
-       bring-up SRDF, non-adjacent self-collisions remain enabled. -->
+  <!-- Kinematically adjacent links share joint/interface geometry. -->
   <disable_collisions link1="base_link" link2="link_1" reason="Adjacent"/>
   <disable_collisions link1="link_1" link2="link_2" reason="Adjacent"/>
   <disable_collisions link1="link_2" link2="link_3" reason="Adjacent"/>

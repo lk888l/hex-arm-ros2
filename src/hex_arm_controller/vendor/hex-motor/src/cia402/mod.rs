@@ -22,15 +22,13 @@ mod motor_entry;
 mod tpdo_listener;
 mod velocity;
 
-pub use compressed_mit::{
-    CompressedMitMapping, CompressedMitTarget, DEFAULT_SHARED_COB_ID,
-};
+pub use compressed_mit::{CompressedMitMapping, CompressedMitTarget, DEFAULT_SHARED_COB_ID};
 pub use events::{Cia402Event, EventStream, EventStreamItem};
 pub use initialize::{
     default_tpdo1_recipe, default_tpdo2_recipe, DEFAULT_TPDO1_COMM, DEFAULT_TPDO1_ENTRIES,
     DEFAULT_TPDO2_COMM, DEFAULT_TPDO2_ENTRIES,
 };
-pub use manager::{Cia402Manager, Cia402ManagerOptions};
+pub use manager::{Cia402Manager, Cia402ManagerOptions, DriveDiagnostic};
 pub use subscribe::{
     OverflowPolicy, StatusStream, StatusStreamItem, StreamOptions, DEFAULT_STREAM_CAPACITY,
 };

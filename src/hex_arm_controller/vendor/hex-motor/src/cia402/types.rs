@@ -3,7 +3,7 @@
 //! 跨协议复用的通用类型见 [`crate::types`]；本模块只放 CiA402 形态电机
 //! 才有意义的概念。
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::canopen::nmt::NmtState;
 use crate::types::{MotorErrorKind, MotorIdentity, MotorMode};
@@ -100,8 +100,15 @@ pub struct Measurements {
     pub motor_temp_c: Option<f32>,
     /// 原始留一份方便排查。
     pub status_word: Option<u16>,
+    /// TPDO2 中回读的当前 `0x6040` 控制字。
+    pub control_word_readback: Option<u16>,
     pub mode_display: Option<u8>,
     pub error_register: Option<u8>,
+    /// `0x603F` last-error code reported by the latest valid TPDO1 / TPDO2.
+    /// These remain useful diagnostics after the CiA402 Fault bit clears, so a
+    /// nonzero value alone must not be treated as a current fault.
+    pub tpdo1_error_code: Option<u16>,
+    pub tpdo2_error_code: Option<u16>,
     /// 电机 `0x1013` 高分辨率时间戳，单位 μs（u32，~71min 回绕）。
     /// 速度滤波与 CSV 录制都用它。
     pub timestamp_us: Option<u32>,
@@ -111,9 +118,30 @@ pub struct Measurements {
 #[derive(Debug, Clone, Default)]
 pub struct Connection {
     pub last_heartbeat: Option<Instant>,
+    /// Last successfully decoded TPDO frame of either required kind.
     pub last_tpdo: Option<Instant>,
+    /// Last successfully decoded TPDO1 (position/timestamp/torque/error).
+    pub last_tpdo1: Option<Instant>,
+    /// Last successfully decoded TPDO2 (status/temperature/error).
+    pub last_tpdo2: Option<Instant>,
     pub online: bool,
     pub nmt_state: Option<NmtState>,
+}
+
+impl Connection {
+    /// Oldest timestamp of the two TPDO streams required for a complete state.
+    pub fn required_tpdo_stamp(&self) -> Option<Instant> {
+        match (self.last_tpdo1, self.last_tpdo2) {
+            (Some(tpdo1), Some(tpdo2)) => Some(tpdo1.min(tpdo2)),
+            _ => None,
+        }
+    }
+
+    /// Both position/torque (TPDO1) and status/temperature (TPDO2) must be fresh.
+    pub fn required_tpdos_fresh(&self, now: Instant, maximum_age: Duration) -> bool {
+        self.required_tpdo_stamp()
+            .is_some_and(|stamp| now.saturating_duration_since(stamp) <= maximum_age)
+    }
 }
 
 /// [`crate::cia402::Cia402Manager::status`] / [`crate::cia402::Cia402Manager::subscribe_status`]
@@ -152,6 +180,23 @@ mod tests {
             reason: ReinitReason::LeftOperational
         }
         .is_ready());
+    }
+
+    #[test]
+    fn required_tpdo_freshness_needs_both_streams() {
+        let now = Instant::now();
+        let mut connection = Connection {
+            last_tpdo1: Some(now - Duration::from_millis(5)),
+            ..Connection::default()
+        };
+        assert!(!connection.required_tpdos_fresh(now, Duration::from_millis(20)));
+
+        connection.last_tpdo2 = Some(now - Duration::from_millis(10));
+        assert!(connection.required_tpdos_fresh(now, Duration::from_millis(20)));
+        assert_eq!(connection.required_tpdo_stamp(), connection.last_tpdo2);
+
+        connection.last_tpdo1 = Some(now - Duration::from_millis(30));
+        assert!(!connection.required_tpdos_fresh(now, Duration::from_millis(20)));
     }
 
     fn motor_info(

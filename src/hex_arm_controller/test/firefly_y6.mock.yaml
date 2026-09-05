@@ -1,17 +1,25 @@
 # MOCK-ONLY integration profile. The deliberately impossible USB identity
 # prevents this fixture from opening physical hardware if used accidentally.
-schema_version: 1
+schema_version: 2
 validated: true
 calibrated: true
 robot_prefix: hexmeow/wsl/firefly_y6_test
 urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
+gravity_vector_base_m_s2: [0.0, 0.0, -9.81]
+tip_payload: null
 
 bus:
+  transport: gs_usb
+  interface: ""
   channel: 0
   adapter_vid: 65535
   adapter_pid: 65535
   heartbeat_node_id: 127
   hardware_timestamp: false
+  auxiliary_node_ids: []
+  # userspace gs_usb opens its own impossible mock VID/PID; SocketCAN
+  # expected_link preflight is intentionally not applicable to this fixture.
+  expected_link: null
 
 controller:
   loop_hz: 1000
@@ -27,9 +35,10 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: -2.86, position_upper_rad: 2.86, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5
   - name: joint_2
@@ -38,9 +47,10 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5
   - name: joint_3
@@ -49,9 +59,10 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5
   - name: joint_4
@@ -60,9 +71,10 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5
   - name: joint_5
@@ -71,9 +83,10 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: -1.54, position_upper_rad: 1.54, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5
   - name: joint_6
@@ -82,8 +95,9 @@ joints:
     direction: 1
     zero_offset_rad: 0.0
     torque_scale: 1.0
+    gravity_compensation_scale: 1.0
     torque_permille: 250
     kp_kd_torque_permille: 250
-    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, velocity_rad_s: 2.0, torque_nm: 5.0}
+    limits: {position_lower_rad: -2.79, position_upper_rad: 2.79, measured_position_margin_rad: 0.0, velocity_rad_s: 2.0, acceleration_rad_s2: 10.0, torque_nm: 5.0}
     default_kp: 10.0
     default_kd: 1.5

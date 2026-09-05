@@ -1,5 +1,9 @@
 services:
   ros2-jazzy-arm:
+    # NVIDIA Container Toolkit injects its own device nodes. Clear the generic
+    # Ubuntu /dev/dri mapping so NVIDIA-only hosts do not fail Compose device
+    # validation before a headless or X11 launch starts.
+    devices: !reset []
     gpus: all
     environment:
       NVIDIA_VISIBLE_DEVICES: all
