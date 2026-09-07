@@ -1,0 +1,207 @@
+# Meow latest-firmware commissioning template; rejected until validated/calibrated.
+# Reference: hex-gui/src/sixMotorMitTest.ts:13-25,38-70 (inspected 2026-09-05).
+# MIT is uncompressed 0x4102 at 500 Hz, selected by 0x4103:01=0.
+# Physical folded park q=[0,-1.57,3.14,0,0,0] rad corresponds to encoder Rev:
+# [0.000269,0.249714,0.251193,-0.00159,-0.004028,0.000018].
+# zero_offset_rad = park_q - direction * 2*pi * park_encoder_rev.
+# These are installation-specific references. After power-cycle or encoder change,
+# use fresh read-only readings at that exact physical pose with:
+# scripts/import-gui-mit-profile.py --profile <base.yaml> --output <new.local.yaml>
+#   --park-positions-rev M1 M2 M3 M4 M5 M6
+# Replace every identity/adapter placeholder from read-only discovery.
+# torque_scale=1: the Meow backend reads physical torque calibration from 0x4001.
+# GUI Kp=80 Nm/rad, Kd=15 Nm*s/rad, PD limit=500 permille, total=650 permille.
+# GUI velocity/acceleration 0.2 Rev/s and 0.2 Rev/s^2 are reference capabilities;
+# begin supervised commissioning with the existing 0.1 rad/s MoveIt limits.
+# torque_nm below bounds host feed-forward; read motor 0x4576 to check that
+# the total raw torque budget also leaves room for gravity plus PD.
+# Keep the physically verified base gravity vector and payload model.
+schema_version: 2
+validated: false
+calibrated: false
+robot_prefix: hexmeow/wsl/firefly_y6_0
+urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
+gravity_vector_base_m_s2:
+- 0.0
+- 0.0
+- -9.81
+tip_payload: null
+bus:
+  transport: socket_can
+  interface: can0
+  channel: 0
+  adapter_vid: 0
+  adapter_pid: 0
+  heartbeat_node_id: 16
+  hardware_timestamp: true
+  direct_joint_mapping: true
+  auxiliary_node_ids:
+  - 15
+  expected_link:
+    nominal_bitrate: 1000000
+    nominal_sample_point_permille: 800
+    nominal_sjw: 5
+    data_bitrate: 4000000
+    data_sample_point_permille: 800
+    data_sjw: 3
+    fd: true
+    restart_ms: 0
+    adapter:
+      driver: gs_usb
+      vendor_id: 4617
+      product_id: 8995
+      serial: REPLACE_WITH_USB_SERIAL
+      channel: 0
+  protocol: meow
+controller:
+  loop_hz: 500
+  state_publish_hz: 100
+  discovery_timeout_ms: 5000
+  feedback_timeout_ms: 100
+  command_watchdog_ms: 100
+  gravity_startup_slew_rate_nm_s: 5.0
+joints:
+- name: joint_1
+  node_id: 1
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: -1
+  zero_offset_rad: 0.0016901768476313085
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.0
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: -2.86
+    position_upper_rad: 2.86
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 0.5
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 0.2
+- name: joint_2
+  node_id: 2
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: -1
+  zero_offset_rad: -0.001000664202956969
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.3
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: -1.57
+    position_upper_rad: 2.09
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 5.0
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 5.0
+- name: joint_3
+  node_id: 3
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: 1
+  zero_offset_rad: 1.5617078331336383
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.7
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: 0.0
+    position_upper_rad: 3.14
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 5.0
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 5.0
+- name: joint_4
+  node_id: 4
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: 1
+  zero_offset_rad: 0.009990264638415543
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.7
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: -1.57
+    position_upper_rad: 1.57
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 1.0
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 1.0
+- name: joint_5
+  node_id: 5
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: 1
+  zero_offset_rad: 0.025308670417319375
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.0
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: -1.54
+    position_upper_rad: 1.54
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 0.5
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 0.2
+- name: joint_6
+  node_id: 6
+  identity:
+    vendor_id: 0
+    product_code: 0
+    revision: 0
+    serial_number: 0
+    model: UNVERIFIED
+  direction: 1
+  zero_offset_rad: -0.00011309733552923255
+  torque_scale: 1.0
+  gravity_compensation_scale: 0.0
+  torque_permille: 650
+  kp_kd_torque_permille: 500
+  limits:
+    position_lower_rad: -2.79
+    position_upper_rad: 2.79
+    measured_position_margin_rad: 0.0
+    velocity_rad_s: 1.2566370614359172
+    acceleration_rad_s2: 1.2566370614359172
+    torque_nm: 0.5
+  default_kp: 80.0
+  default_kd: 15.0
+  gravity_compensation_limit_nm: 0.1

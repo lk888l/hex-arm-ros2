@@ -24,8 +24,9 @@ use hex_arm_controller::commissioning::{
     SingleAxisDiagnosticMode, SingleAxisDiagnosticRequest,
 };
 use hex_arm_controller::discovery::{discover_read_only, DiscoveryOptions};
+use hex_arm_controller::meow_backend::MeowBackend;
 use hex_arm_controller::payload_dynamics::load_profile_dynamics;
-use hex_arm_controller::profile::{BusTransport, HardwareProfile};
+use hex_arm_controller::profile::{BusTransport, HardwareProfile, MotorProtocol};
 use hex_arm_controller::protocol;
 use hex_arm_controller::runtime::ArmRuntime;
 use hex_arm_controller::socketcan_preflight::HistoricalCanXStatsAcknowledgement;
@@ -55,6 +56,15 @@ struct Arguments {
         conflicts_with = "mock"
     )]
     validate_profile_only: bool,
+    /// Optional six-joint URDF pose for an offline gravity/motor-target report.
+    /// This computes a report only; it never commands a startup position.
+    #[arg(
+        long,
+        num_args = 6,
+        allow_hyphen_values = true,
+        requires = "validate_profile_only"
+    )]
+    check_pose_rad: Option<Vec<f32>>,
     /// Run the isolated real-hardware commissioning path for exactly one
     /// canonical joint. Requires an explicit motion delta, duration, and
     /// --allow-motion acknowledgement; starts neither ROS nor Zenoh.
@@ -459,6 +469,15 @@ async fn main() -> Result<()> {
         .as_ref()
         .context("real control/recovery requires --profile /absolute/path/to/verified.yaml")?;
     let profile = Arc::new(HardwareProfile::from_path(profile_path)?);
+    if !arguments.recover_heartbeat_lost.is_empty()
+        || arguments.commission_axis.is_some()
+        || arguments.diagnose_axis.is_some()
+    {
+        anyhow::ensure!(
+            profile.bus.protocol == MotorProtocol::Cia402,
+            "legacy CiA402 commissioning/recovery commands do not support Meow firmware; use the Meow runtime and supervised ROS trajectory path"
+        );
+    }
     if !arguments.recover_heartbeat_lost.is_empty() {
         return run_hardware_heartbeat_recovery(&arguments, profile).await;
     }
@@ -477,7 +496,49 @@ async fn main() -> Result<()> {
             );
         }
         println!(
-            "profile validation passed: six joints, dynamics model, and single-turn commissioning windows are valid"
+            "motor protocol: {:?}, loop_hz={}",
+            profile.bus.protocol, profile.controller.loop_hz
+        );
+        if let Some(pose) = &arguments.check_pose_rad {
+            anyhow::ensure!(
+                pose.iter().all(|q| q.is_finite()),
+                "check pose must be finite"
+            );
+            let gravity = dynamics.gravity_torque_with(pose, profile.gravity_vector_base_m_s2);
+            for ((joint, q), g) in profile.joints.iter().zip(pose).zip(gravity) {
+                anyhow::ensure!(
+                    (joint.limits.position_lower_rad..=joint.limits.position_upper_rad).contains(q),
+                    "{} check pose is outside command limits",
+                    joint.name
+                );
+                let scaled = g * joint.gravity_compensation_scale;
+                let tff = joint
+                    .gravity_compensation_limit_nm
+                    .map_or(scaled, |limit| scaled.clamp(-limit, limit));
+                let target = hex_arm_controller::conversion::ros_target_to_motor(
+                    hex_arm_controller::conversion::RosTarget {
+                        position_rad: *q,
+                        velocity_rad_s: 0.0,
+                        torque_nm: tff,
+                        kp_nm_rad: joint.default_kp,
+                        kd_nm_s_rad: joint.default_kd,
+                    },
+                    joint,
+                );
+                println!(
+                    "{} q_rad={:.6} motor_rev={:.6} G_nm={:.6} gravity_ff_nm={:.6} motor_ff_nm={:.6} kp_nm_rev={:.6} kd_nm_s_rev={:.6}",
+                    joint.name, q, target.position_rev, g, tff, target.torque_nm,
+                    target.kp_nm_rev, target.kd_nm_s_rev
+                );
+                anyhow::ensure!(
+                    tff.abs() <= joint.limits.torque_nm,
+                    "{} gravity feed-forward exceeds software torque limit",
+                    joint.name
+                );
+            }
+        }
+        println!(
+            "profile validation passed: six joints, dynamics model, and protocol-specific command windows are valid"
         );
         return Ok(());
     }
@@ -515,7 +576,10 @@ async fn run_normal_control(
         tracing::warn!("using simulated motor backend; no physical outputs exist");
         Arc::new(MockBackend::new())
     } else {
-        Arc::new(RealBackend::open(profile.clone()).await?)
+        match profile.bus.protocol {
+            MotorProtocol::Cia402 => Arc::new(RealBackend::open(profile.clone()).await?),
+            MotorProtocol::Meow => Arc::new(MeowBackend::open(profile.clone()).await?),
+        }
     };
     let runtime = Arc::new(ArmRuntime::new(profile.clone(), backend, dynamics));
     let initialization = tokio::select! {
@@ -4125,5 +4189,55 @@ mod tests {
             .0;
         assert!(body.contains("|| backend.shutdown()"));
         assert!(!body.contains("|| backend.disable_all_with_retry"));
+    }
+}
+
+#[cfg(test)]
+mod offline_pose_arguments {
+    use super::*;
+
+    #[test]
+    fn pose_report_requires_offline_validation_and_six_joint_angles() {
+        let args = Arguments::try_parse_from([
+            "controller",
+            "--profile",
+            "candidate.yaml",
+            "--validate-profile-only",
+            "--check-pose-rad",
+            "0",
+            "-1.57",
+            "3.14",
+            "0",
+            "0",
+            "0",
+        ])
+        .unwrap();
+        assert_eq!(args.check_pose_rad.as_ref().unwrap().len(), 6);
+        assert!(Arguments::try_parse_from([
+            "controller",
+            "--profile",
+            "candidate.yaml",
+            "--check-pose-rad",
+            "0",
+            "-1.57",
+            "3.14",
+            "0",
+            "0",
+            "0",
+        ])
+        .is_err());
+        assert!(Arguments::try_parse_from([
+            "controller",
+            "--profile",
+            "candidate.yaml",
+            "--validate-profile-only",
+            "--check-pose-rad",
+            "0",
+            "-1.57",
+            "3.14",
+            "0",
+            "0",
+        ])
+        .is_err());
     }
 }

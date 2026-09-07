@@ -75,6 +75,60 @@ impl CommandEnvelope {
 }
 
 #[derive(Debug)]
+struct GravityStartupRamp {
+    hold_targets: Vec<RosTarget>,
+    output_nm: [f32; DOF],
+    last_tick_ns: u64,
+}
+
+impl GravityStartupRamp {
+    fn new(now_ns: u64, hold_targets: Vec<RosTarget>) -> Self {
+        Self {
+            hold_targets,
+            output_nm: [0.0; DOF],
+            last_tick_ns: now_ns,
+        }
+    }
+
+    fn validate_hold_command(&self, targets: &[RosTarget]) -> Result<()> {
+        anyhow::ensure!(
+            targets.iter().zip(&self.hold_targets).all(|(target, hold)| {
+                (target.position_rad - hold.position_rad).abs() <= MEASURED_POSITION_EPSILON_RAD
+                    && target.velocity_rad_s.abs() <= MEASURED_VELOCITY_EPSILON_RAD_S
+            }),
+            "gravity startup is still ramping; keep the activation pose and wait for gravity_ready before commanding motion"
+        );
+        Ok(())
+    }
+
+    /// Every axis uses the same elapsed control tick. Return true only once
+    /// all outputs have reached the current, feedback-derived gravity target.
+    fn apply(&mut self, targets: &mut [RosTarget], rate_nm_s: f32, now_ns: u64) -> bool {
+        let dt_s = now_ns.saturating_sub(self.last_tick_ns) as f64 / 1_000_000_000.0;
+        self.last_tick_ns = now_ns;
+        let maximum_step = (rate_nm_s as f64 * dt_s) as f32;
+        let mut settled = true;
+        for (output, target) in self.output_nm.iter_mut().zip(targets) {
+            if !target.torque_nm.is_finite() {
+                // A slew limiter must not hide invalid dynamics behind a
+                // finite intermediate output; preserve it for validation.
+                settled = false;
+                continue;
+            }
+            let delta = target.torque_nm - *output;
+            if delta.abs() > maximum_step {
+                *output += delta.signum() * maximum_step;
+                settled = false;
+            } else {
+                *output = target.torque_nm;
+            }
+            target.torque_nm = *output;
+        }
+        settled
+    }
+}
+
+#[derive(Debug)]
 struct RuntimeData {
     /// Process shutdown is a one-way latch.  It is set before waiting for any
     /// in-flight mode transition so queued API work cannot reach hardware
@@ -93,6 +147,7 @@ struct RuntimeData {
     motors: Vec<MotorIdentitySnapshot>,
     initialized: bool,
     gravity: [f32; 3],
+    gravity_startup_ramp: Option<GravityStartupRamp>,
     events: VecDeque<pb::Event>,
     next_event_seq: u64,
 }
@@ -132,6 +187,7 @@ impl ArmRuntime {
                 motors: Vec::new(),
                 initialized: false,
                 gravity,
+                gravity_startup_ramp: None,
                 events: VecDeque::with_capacity(EVENT_CAPACITY),
                 next_event_seq: 1,
             }),
@@ -251,8 +307,29 @@ impl ArmRuntime {
             }
         }
 
-        let hold_targets =
-            (requested == OperatingMode::Active).then(|| self.hold_targets(&feedback));
+        let hold_targets = (requested == OperatingMode::Active)
+            .then(|| {
+                let mut targets = self.hold_targets(&feedback);
+                // Validate the eventual gravity target before enabling, even when
+                // the startup frame itself contains zero feed-forward.
+                // Include firmware gain quantization and the Tff + PD budget
+                // before zeroing Tff for a startup ramp and enabling any axis.
+                self.motor_targets(&targets)?;
+                if self
+                    .profile
+                    .controller
+                    .gravity_startup_slew_rate_nm_s
+                    .is_some()
+                {
+                    // Keep feedback-derived position and PD support during drive
+                    // activation; gravity ramps only after the ACTIVE commit.
+                    for target in &mut targets {
+                        target.torque_nm = 0.0;
+                    }
+                }
+                Ok::<_, anyhow::Error>(targets)
+            })
+            .transpose()?;
         let initial_motor_targets = hold_targets
             .as_ref()
             .map(|targets| self.motor_targets(targets))
@@ -328,6 +405,21 @@ impl ArmRuntime {
                 false
             } else {
                 data.safety = next_safety;
+                data.gravity_startup_ramp = (requested == OperatingMode::Active
+                    && self
+                        .profile
+                        .controller
+                        .gravity_startup_slew_rate_nm_s
+                        .is_some())
+                .then(|| {
+                    GravityStartupRamp::new(
+                        self.monotonic_ns(),
+                        active_targets
+                            .as_ref()
+                            .expect("ACTIVE hold prepared")
+                            .clone(),
+                    )
+                });
                 data.disable_pending = false;
                 data.next_disable_retry_at = None;
                 data.command = if let Some(targets) = active_targets {
@@ -426,6 +518,11 @@ impl ArmRuntime {
             data.safety.mode == OperatingMode::Active,
             "joint commands require ACTIVE mode"
         );
+        if automatic_gravity_feedforward {
+            if let Some(ramp) = &data.gravity_startup_ramp {
+                ramp.validate_hold_command(&targets)?;
+            }
+        }
         let rebase_from_feedback = data
             .command
             .as_ref()
@@ -532,7 +629,9 @@ impl ArmRuntime {
     }
 
     pub async fn run_control_loop(self: Arc<Self>) {
-        let mut interval = tokio::time::interval(Duration::from_micros(1000));
+        let mut interval = tokio::time::interval(Duration::from_secs_f64(
+            1.0 / self.profile.controller.loop_hz as f64,
+        ));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let initial = self.hold_targets(&self.backend.feedback());
         let mut interpolator = Interpolator::hold(initial, self.monotonic_ns());
@@ -556,6 +655,7 @@ impl ArmRuntime {
                 break;
             }
             let feedback = self.backend.feedback();
+            let now_ns = self.monotonic_ns();
             {
                 self.data.write().feedback = feedback.clone();
             }
@@ -600,7 +700,17 @@ impl ArmRuntime {
                         self.watchdog_fault_hold_and_disable(&feedback).await;
                         continue;
                     }
-                    if command.generation != generation {
+                    let startup_hold = if command.automatic_gravity_feedforward {
+                        self.data
+                            .read()
+                            .gravity_startup_ramp
+                            .as_ref()
+                            .map(|ramp| ramp.hold_targets.clone())
+                    } else {
+                        None
+                    };
+                    let holding_for_gravity = startup_hold.is_some();
+                    if !holding_for_gravity && command.generation != generation {
                         let velocity_limits: Vec<_> = self
                             .profile
                             .joints
@@ -615,7 +725,7 @@ impl ArmRuntime {
                             .collect();
                         if let Err(error) = command.apply_to_interpolator(
                             &mut interpolator,
-                            self.monotonic_ns(),
+                            now_ns,
                             &velocity_limits,
                             &acceleration_limits,
                         ) {
@@ -635,9 +745,18 @@ impl ArmRuntime {
                         }
                         generation = command.generation;
                     }
-                    let mut targets = interpolator.sample(self.monotonic_ns());
-                    if command.automatic_gravity_feedforward {
-                        self.apply_gravity_feedforward(&mut targets, &feedback);
+                    let mut targets = startup_hold.unwrap_or_else(|| interpolator.sample(now_ns));
+                    self.apply_command_gravity_feedforward(
+                        &mut targets,
+                        &feedback,
+                        command.automatic_gravity_feedforward,
+                        now_ns,
+                    );
+                    if holding_for_gravity && self.data.read().gravity_startup_ramp.is_none() {
+                        // No trajectory time elapses while gravity is starting.
+                        // The next command begins at the actual activation hold.
+                        interpolator = Interpolator::hold(targets.clone(), now_ns);
+                        generation = command.generation;
                     }
                     match self.motor_targets(&targets) {
                         Ok(targets) => {
@@ -702,7 +821,14 @@ impl ArmRuntime {
 
     pub fn joint_state_proto(&self) -> pb::JointState {
         let feedback = self.data.read().feedback.clone();
-        let (q, dq, tau, temp) = self.ros_joint_state_full(&feedback);
+        let (mut q, dq, tau, temp) = self.ros_joint_state_full(&feedback);
+        // ros2_control seeds its initial command from this state. Publish the
+        // same numerical endpoint representation as our activation hold, so
+        // an echoed hold cannot fail the otherwise strict command validator.
+        // Raw feedback remains unchanged for dynamics and fault decisions.
+        for (position, joint) in q.iter_mut().zip(&self.profile.joints) {
+            *position = canonical_feedback_position(*position, joint);
+        }
         pb::JointState {
             header: Some(self.header()),
             q,
@@ -800,12 +926,16 @@ impl ArmRuntime {
             .joints
             .iter()
             .zip(&self.profile.joints)
-            .map(|(state, joint)| RosTarget {
-                position_rad: motor_position_to_ros(state.position_rev, joint),
-                velocity_rad_s: 0.0,
-                torque_nm: 0.0,
-                kp_nm_rad: joint.default_kp,
-                kd_nm_s_rad: joint.default_kd,
+            .map(|(state, joint)| {
+                let measured = motor_position_to_ros(state.position_rev, joint);
+                let position_rad = canonical_feedback_position(measured, joint);
+                RosTarget {
+                    position_rad,
+                    velocity_rad_s: 0.0,
+                    torque_nm: 0.0,
+                    kp_nm_rad: joint.default_kp,
+                    kd_nm_s_rad: joint.default_kd,
+                }
             })
             .collect();
         self.apply_gravity_feedforward(&mut targets, feedback);
@@ -817,7 +947,43 @@ impl ArmRuntime {
         let gravity = self.data.read().gravity;
         let tau = self.dynamics.gravity_torque_with(&measured_q, gravity);
         for ((target, torque_nm), joint) in targets.iter_mut().zip(tau).zip(&self.profile.joints) {
-            target.torque_nm = torque_nm * joint.gravity_compensation_scale;
+            target.torque_nm =
+                joint.clamp_gravity_feedforward(torque_nm * joint.gravity_compensation_scale);
+        }
+    }
+
+    fn apply_command_gravity_feedforward(
+        &self,
+        targets: &mut [RosTarget],
+        feedback: &FeedbackSnapshot,
+        automatic: bool,
+        now_ns: u64,
+    ) {
+        if !automatic {
+            // Explicit tau_ff belongs to the client, including an explicit
+            // zero vector. It bypasses both the gravity clamp and startup ramp.
+            self.data.write().gravity_startup_ramp = None;
+            return;
+        }
+        self.apply_gravity_feedforward(targets, feedback);
+        let mut data = self.data.write();
+        if let (Some(ramp), Some(rate)) = (
+            data.gravity_startup_ramp.as_mut(),
+            self.profile.controller.gravity_startup_slew_rate_nm_s,
+        ) {
+            if ramp.apply(targets, rate, now_ns) {
+                // Continuous slew limiting would lag posture changes and
+                // under-compensate gravity. Only startup uses this limiter.
+                data.gravity_startup_ramp = None;
+                tracing::info!("gravity_ready: startup feed-forward reached the measured-pose target; position motion is now accepted");
+                self.push_event_locked(
+                    &mut data,
+                    pb::EventSeverity::Info,
+                    "gravity_ready",
+                    "gravity startup ramp complete; position motion is now accepted".into(),
+                    &[],
+                );
+            }
         }
     }
 
@@ -867,9 +1033,11 @@ impl ArmRuntime {
         targets: &[RosTarget],
     ) -> Result<[crate::conversion::MotorTarget; DOF]> {
         self.validate_targets(targets)?;
-        Ok(array::from_fn(|index| {
+        let motor_targets = array::from_fn(|index| {
             ros_target_to_motor(targets[index], &self.profile.joints[index])
-        }))
+        });
+        self.backend.validate_targets(motor_targets)?;
+        Ok(motor_targets)
     }
 
     fn ros_joint_state(&self, feedback: &FeedbackSnapshot) -> (Vec<f32>, Vec<f32>) {
@@ -940,8 +1108,14 @@ impl ArmRuntime {
         // target with a zero-velocity hold at the latest measured pose, using
         // the reviewed per-axis gains and current gravity compensation, while
         // the confirmed CiA402 disable sequence runs.
+        let mut hold = self.hold_targets(feedback);
+        if let Some(ramp) = &self.data.read().gravity_startup_ramp {
+            for (target, output) in hold.iter_mut().zip(ramp.output_nm) {
+                target.torque_nm = output;
+            }
+        }
         let hold_targets = self
-            .motor_targets(&self.hold_targets(feedback))
+            .motor_targets(&hold)
             .context("build feedback-derived watchdog hold target");
         self.latch_whole_arm_fault(
             FAULT_COMMAND_WATCHDOG,
@@ -1096,6 +1270,20 @@ impl ArmRuntime {
     }
 }
 
+fn canonical_feedback_position(measured: f32, joint: &crate::profile::JointProfile) -> f32 {
+    let lower = joint.limits.position_lower_rad;
+    let upper = joint.limits.position_upper_rad;
+    // Fixed-point quantization/f32 roundoff only; this never uses the wider
+    // measured_position_margin_rad or changes external command authority.
+    if measured < lower && lower - measured <= MEASURED_POSITION_EPSILON_RAD {
+        lower
+    } else if measured > upper && measured - upper <= MEASURED_POSITION_EPSILON_RAD {
+        upper
+    } else {
+        measured
+    }
+}
+
 fn vector_or(values: &[f32], default: f32) -> Result<Vec<f32>> {
     if values.is_empty() {
         return Ok(vec![default; DOF]);
@@ -1137,6 +1325,7 @@ mod tests {
         shutdown_calls: AtomicUsize,
         shutdown_complete: AtomicBool,
         enable_after_shutdown: AtomicBool,
+        reject_nonzero_feedforward: AtomicBool,
     }
 
     impl ShutdownOrderBackend {
@@ -1154,12 +1343,22 @@ mod tests {
                 shutdown_calls: AtomicUsize::new(0),
                 shutdown_complete: AtomicBool::new(false),
                 enable_after_shutdown: AtomicBool::new(false),
+                reject_nonzero_feedforward: AtomicBool::new(false),
             }
         }
     }
 
     #[async_trait]
     impl MotorBackend for ShutdownOrderBackend {
+        fn validate_targets(&self, targets: [crate::conversion::MotorTarget; DOF]) -> Result<()> {
+            anyhow::ensure!(
+                !self.reject_nonzero_feedforward.load(Ordering::Acquire)
+                    || targets.iter().all(|target| target.torque_nm == 0.0),
+                "test motor has insufficient PD/gravity headroom"
+            );
+            Ok(())
+        }
+
         async fn discover(&self, _refresh: bool) -> Result<Vec<MotorIdentitySnapshot>> {
             Ok(Vec::new())
         }
@@ -1228,6 +1427,7 @@ mod tests {
             gravity_vector_base_m_s2: [0.0, 0.0, -9.81],
             tip_payload: None,
             bus: BusProfile {
+                protocol: crate::profile::MotorProtocol::Cia402,
                 transport: BusTransport::GsUsb,
                 interface: String::new(),
                 channel: 0,
@@ -1245,6 +1445,7 @@ mod tests {
                 discovery_timeout_ms: 1000,
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
+                gravity_startup_slew_rate_nm_s: None,
             },
             joints: JOINT_NAMES
                 .iter()
@@ -1257,6 +1458,7 @@ mod tests {
                     zero_offset_rad: 0.0,
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
+                    gravity_compensation_limit_nm: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
                     limits: JointLimits {
@@ -1819,6 +2021,282 @@ mod tests {
         assert!(targets[1..]
             .iter()
             .all(|target| target.torque_nm.abs() < 1.0e-6));
+    }
+
+    fn runtime_with_startup_gravity() -> (ArmRuntime, Arc<MockBackend>) {
+        let template = runtime_for_safety_test();
+        let mut profile = (*template.profile).clone();
+        profile.gravity_vector_base_m_s2 = [0.0, 0.0, 9.81];
+        profile.controller.gravity_startup_slew_rate_nm_s = Some(5.0);
+        profile.joints[0].gravity_compensation_scale = 0.25;
+        profile.joints[0].gravity_compensation_limit_nm = Some(0.3);
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let dynamics = ArmDynamics::from_parts(
+            vec![([0.0; 3], identity, [0.0, 1.0, 0.0]); DOF],
+            vec![
+                (0.2, [1.0, 0.0, 0.0]),
+                (0.0, [0.0; 3]),
+                (0.0, [0.0; 3]),
+                (0.0, [0.0; 3]),
+                (0.0, [0.0; 3]),
+                (0.0, [0.0; 3]),
+            ],
+            [0.0, 0.0, -9.81],
+        );
+        let backend = Arc::new(MockBackend::new());
+        (
+            ArmRuntime::new(Arc::new(profile), backend.clone(), dynamics),
+            backend,
+        )
+    }
+
+    #[tokio::test]
+    async fn active_starts_with_zero_gravity_then_tracks_directly_after_bounded_ramp() {
+        let (runtime, backend) = runtime_with_startup_gravity();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("startup-gravity".into()).unwrap();
+        runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap();
+        assert!(backend
+            .feedback()
+            .joints
+            .iter()
+            .all(|joint| joint.torque_nm == 0.0));
+        let start = runtime
+            .data
+            .read()
+            .gravity_startup_ramp
+            .as_ref()
+            .unwrap()
+            .last_tick_ns;
+        let feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        let mut command = targets([0.0; DOF]);
+        runtime.apply_command_gravity_feedforward(
+            &mut command,
+            &feedback,
+            true,
+            start + 20_000_000,
+        );
+        assert!((command[0].torque_nm - 0.1).abs() < 1.0e-6);
+        assert!(runtime.data.read().gravity_startup_ramp.is_some());
+        runtime.apply_command_gravity_feedforward(
+            &mut command,
+            &feedback,
+            true,
+            start + 80_000_000,
+        );
+        assert!((command[0].torque_nm - 0.3).abs() < 1.0e-6);
+        assert!(runtime.data.read().gravity_startup_ramp.is_none());
+
+        let mut changed_q = [0.0; DOF];
+        changed_q[0] = std::f32::consts::FRAC_PI_2;
+        let changed_feedback = feedback_from_ros(&runtime, changed_q, [0.0; DOF]);
+        runtime.apply_command_gravity_feedforward(
+            &mut command,
+            &changed_feedback,
+            true,
+            start + 81_000_000,
+        );
+        assert!(
+            command[0].torque_nm.abs() < 1.0e-5,
+            "settled gravity must not lag feedback behind a continuous slew limiter"
+        );
+
+        runtime
+            .set_mode(session, OperatingMode::Disabled)
+            .await
+            .unwrap();
+        runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .data
+                .read()
+                .gravity_startup_ramp
+                .as_ref()
+                .unwrap()
+                .output_nm,
+            [0.0; DOF]
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_checks_eventual_firmware_torque_budget_before_any_enable() {
+        let (template, _) = runtime_with_startup_gravity();
+        let backend = Arc::new(ShutdownOrderBackend::new());
+        backend
+            .reject_nonzero_feedforward
+            .store(true, Ordering::Release);
+        let runtime = ArmRuntime::new(template.profile, backend.clone(), template.dynamics);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("insufficient-budget".into()).unwrap();
+        let error = runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("headroom"));
+        assert_eq!(backend.enable_calls.load(Ordering::Acquire), 0);
+        assert!(!backend.enabled.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn feedback_hold_snaps_only_endpoint_roundoff_and_external_commands_remain_strict() {
+        let template = runtime_for_safety_test();
+        let mut profile = (*template.profile).clone();
+        let joint = &mut profile.joints[1];
+        joint.direction = -1;
+        joint.zero_offset_rad = -0.001_000_664_2;
+        joint.limits.position_lower_rad = -1.57;
+        joint.limits.position_upper_rad = 2.09;
+        joint.limits.measured_position_margin_rad = 0.01;
+        let runtime = ArmRuntime::new(
+            Arc::new(profile),
+            Arc::new(MockBackend::new()),
+            template.dynamics,
+        );
+        let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        // Actual GUI node-2 park reference after signed Q8.24 quantization.
+        feedback.joints[1].position_rev =
+            (0.249714_f64 * 16_777_216.0).round() as f32 / 16_777_216.0;
+        let joint = &runtime.profile.joints[1];
+        let measured = motor_position_to_ros(feedback.joints[1].position_rev, joint);
+        assert!(measured < joint.limits.position_lower_rad);
+        assert!(runtime.measured_feedback_fault(&feedback).is_none());
+        let hold = runtime.hold_targets(&feedback);
+        assert_eq!(hold[1].position_rad, joint.limits.position_lower_rad);
+        runtime.validate_targets(&hold).unwrap();
+        runtime.data.write().feedback = feedback.clone();
+        let published = runtime.joint_state_proto();
+        assert_eq!(published.q[1], joint.limits.position_lower_rad);
+        let mut echoed_hold = hold.clone();
+        echoed_hold[1].position_rad = published.q[1];
+        runtime.validate_targets(&echoed_hold).unwrap();
+        assert_eq!(
+            runtime.data.read().feedback.joints[1].position_rev,
+            feedback.joints[1].position_rev
+        );
+        let mut external = hold.clone();
+        external[1].position_rad = measured;
+        assert!(runtime.validate_targets(&external).is_err());
+
+        let truly_outside = joint.limits.position_lower_rad - 0.001;
+        feedback.joints[1].position_rev = ros_target_to_motor(
+            RosTarget {
+                position_rad: truly_outside,
+                ..Default::default()
+            },
+            joint,
+        )
+        .position_rev;
+        assert!(
+            runtime.measured_feedback_fault(&feedback).is_none(),
+            "measurement margin is separate from command authority"
+        );
+        let hold = runtime.hold_targets(&feedback);
+        assert!(hold[1].position_rad < joint.limits.position_lower_rad);
+        assert!(runtime.validate_targets(&hold).is_err());
+    }
+
+    #[tokio::test]
+    async fn startup_accepts_hold_heartbeats_but_rejects_motion_until_gravity_ready() {
+        let (runtime, _) = runtime_with_startup_gravity();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("gravity-ready-gate".into()).unwrap();
+        runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap();
+        runtime
+            .submit_trajectory(streaming_command(session, vec![]))
+            .unwrap();
+        let mut motion = streaming_command(session, vec![]);
+        motion.points[0].q[0] = 0.01;
+        assert!(runtime
+            .submit_trajectory(motion.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("gravity_ready"));
+        let mut velocity = streaming_command(session, vec![]);
+        velocity.points[0].dq = vec![0.01; DOF];
+        assert!(runtime.submit_trajectory(velocity).is_err());
+        let start = runtime
+            .data
+            .read()
+            .gravity_startup_ramp
+            .as_ref()
+            .unwrap()
+            .last_tick_ns;
+        let feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        let mut command = targets([0.0; DOF]);
+        runtime.apply_command_gravity_feedforward(
+            &mut command,
+            &feedback,
+            true,
+            start + 100_000_000,
+        );
+        assert!(runtime
+            .data
+            .read()
+            .events
+            .iter()
+            .any(|event| event.code == "gravity_ready"));
+        runtime.submit_trajectory(motion).unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_zero_frame_does_not_hide_an_unsafe_eventual_gravity_target() {
+        let (runtime, backend) = runtime_with_startup_gravity();
+        let mut profile = (*runtime.profile).clone();
+        profile.joints[0].gravity_compensation_limit_nm = None;
+        profile.joints[0].limits.torque_nm = 0.1;
+        let runtime = ArmRuntime::new(Arc::new(profile), backend.clone(), runtime.dynamics);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("bad-gravity-ramp".into()).unwrap();
+        assert!(runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("torque exceeds software limit"));
+        assert!(!backend.is_enabled());
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut ramp = GravityStartupRamp::new(0, targets([0.0; DOF]));
+            let mut command = targets([0.0; DOF]);
+            command[0].torque_nm = invalid;
+            assert!(!ramp.apply(&mut command, 5.0, 1_000_000));
+            assert!(!command[0].torque_nm.is_finite());
+        }
+    }
+
+    #[test]
+    fn startup_ramp_uses_one_tick_for_all_axes_and_explicit_torque_bypasses_it() {
+        let mut ramp = GravityStartupRamp::new(10_000_000, targets([0.0; DOF]));
+        let mut command = targets([0.0; DOF]);
+        command[0].torque_nm = 1.0;
+        command[1].torque_nm = -1.0;
+        assert!(!ramp.apply(&mut command, 5.0, 30_000_000));
+        assert!((command[0].torque_nm - 0.1).abs() < 1.0e-6);
+        assert!((command[1].torque_nm + 0.1).abs() < 1.0e-6);
+        command[0].torque_nm = 1.0;
+        command[1].torque_nm = -1.0;
+        assert!(!ramp.apply(&mut command, 5.0, 30_000_000));
+        assert!((command[0].torque_nm - 0.1).abs() < 1.0e-6);
+
+        let (runtime, _) = runtime_with_startup_gravity();
+        runtime.data.write().gravity_startup_ramp =
+            Some(GravityStartupRamp::new(0, targets([0.0; DOF])));
+        let feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        let mut explicit = targets([0.0; DOF]);
+        explicit[0].torque_nm = -0.7; // Greater than the gravity-only 0.3 Nm clamp.
+        runtime.apply_command_gravity_feedforward(&mut explicit, &feedback, false, 1_000_000);
+        assert_eq!(explicit[0].torque_nm, -0.7);
+        assert!(runtime.data.read().gravity_startup_ramp.is_none());
+        runtime.apply_command_gravity_feedforward(&mut explicit, &feedback, true, 2_000_000);
+        assert!((explicit[0].torque_nm - 0.3).abs() < 1.0e-6);
     }
 
     #[tokio::test]

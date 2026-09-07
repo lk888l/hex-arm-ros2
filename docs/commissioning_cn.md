@@ -1,3 +1,5 @@
+最新 Meow 固件请使用 [MIT 部署说明](meow_mit_deployment_cn.md)。本页 0x6040/0x6060、压缩 MIT 和单轴诊断步骤属于旧 CiA402 后端。
+
 # 有监督的硬件调试
 
 [English](commissioning.md) | **中文**

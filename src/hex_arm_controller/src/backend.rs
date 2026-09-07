@@ -119,6 +119,11 @@ pub struct CompressedTargetReadback {
 pub trait MotorBackend: Send + Sync {
     async fn discover(&self, refresh: bool) -> Result<Vec<MotorIdentitySnapshot>>;
     async fn initialize_disabled(&self) -> Result<()>;
+    /// Validate firmware encoding/authority using read-back calibration before
+    /// any enable or target update. Legacy backends retain their own checks.
+    fn validate_targets(&self, _targets: [MotorTarget; DOF]) -> Result<()> {
+        Ok(())
+    }
     async fn enable_compressed_mit(&self, initial_targets: [MotorTarget; DOF]) -> Result<()>;
     async fn set_targets(&self, targets: [MotorTarget; DOF]) -> Result<()>;
     async fn disable_all(&self) -> Result<()>;
@@ -350,6 +355,10 @@ struct DiagnosticBaseline {
 
 impl RealBackend {
     pub async fn open(profile: Arc<HardwareProfile>) -> Result<Self> {
+        anyhow::ensure!(
+            profile.bus.protocol == crate::profile::MotorProtocol::Cia402,
+            "legacy CiA402 backend cannot open a Meow protocol profile"
+        );
         Self::open_with_diagnostic_xstats_acknowledgement(profile, None).await
     }
 
@@ -3071,6 +3080,7 @@ mod tests {
             gravity_vector_base_m_s2: [0.0, 0.0, -9.81],
             tip_payload: None,
             bus: crate::profile::BusProfile {
+                protocol: crate::profile::MotorProtocol::Cia402,
                 transport: BusTransport::GsUsb,
                 interface: String::new(),
                 channel: 0,
@@ -3083,6 +3093,7 @@ mod tests {
                 expected_link: None,
             },
             controller: crate::profile::ControllerProfile {
+                gravity_startup_slew_rate_nm_s: None,
                 loop_hz: 1000,
                 state_publish_hz: 100,
                 discovery_timeout_ms: 500,
@@ -3110,6 +3121,7 @@ mod tests {
                 zero_offset_rad: 0.0,
                 torque_scale: 1.0,
                 gravity_compensation_scale: 1.0,
+                gravity_compensation_limit_nm: None,
                 torque_permille: 200,
                 kp_kd_torque_permille: 100,
                 limits: crate::profile::JointLimits {

@@ -68,6 +68,7 @@ mod tests {
             zero_offset_rad: 0.25,
             torque_scale: 0.8,
             gravity_compensation_scale: 1.0,
+            gravity_compensation_limit_nm: None,
             torque_permille: 250,
             kp_kd_torque_permille: 250,
             limits: JointLimits {
