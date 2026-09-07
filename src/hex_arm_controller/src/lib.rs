@@ -3,6 +3,7 @@ pub mod commissioning;
 pub mod conversion;
 pub mod discovery;
 pub mod interpolation;
+pub mod meow_backend;
 pub mod payload_dynamics;
 pub mod profile;
 pub mod protocol;

@@ -1,6 +1,8 @@
 # Firefly Y6 ROS 2 驱动
 [English (英文版)](README.md)
 
+最新固件与上位机 MIT-pp-test 对齐的部署入口见 [Meow MIT 实机部署](docs/meow_mit_deployment_cn.md)。新 profile 使用 `bus.protocol: meow`；下文旧 CiA402 commissioning 记录保留作历史证据。
+
 
 面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、仿真与调试（commissioning）工作区。对外公开的运动接口是由 `joint_trajectory_controller` 暴露的标准 `control_msgs/action/FollowJointTrajectory` action：
 

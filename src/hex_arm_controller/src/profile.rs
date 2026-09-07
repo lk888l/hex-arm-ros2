@@ -55,6 +55,8 @@ pub struct TipPayloadProfile {
 #[serde(deny_unknown_fields)]
 pub struct BusProfile {
     #[serde(default)]
+    pub protocol: MotorProtocol,
+    #[serde(default)]
     pub transport: BusTransport,
     #[serde(default)]
     pub interface: String,
@@ -107,6 +109,14 @@ pub enum BusTransport {
     SocketCan,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotorProtocol {
+    #[default]
+    Cia402,
+    Meow,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControllerProfile {
@@ -115,6 +125,10 @@ pub struct ControllerProfile {
     pub discovery_timeout_ms: u64,
     pub feedback_timeout_ms: u64,
     pub command_watchdog_ms: u64,
+    /// Enable-time gravity ramp in joint-side Nm/s. Once settled, gravity
+    /// follows feedback directly, without a continuous slew limiter.
+    #[serde(default)]
+    pub gravity_startup_slew_rate_nm_s: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,6 +142,9 @@ pub struct JointProfile {
     pub torque_scale: f32,
     #[serde(default = "default_gravity_compensation_scale")]
     pub gravity_compensation_scale: f32,
+    /// Independent clamp on scaled gravity, before motor-unit conversion.
+    #[serde(default)]
+    pub gravity_compensation_limit_nm: Option<f32>,
     pub torque_permille: u16,
     pub kp_kd_torque_permille: u16,
     pub limits: JointLimits,
@@ -220,6 +237,11 @@ impl HardwareProfile {
             (1..=127).contains(&self.bus.heartbeat_node_id),
             "invalid host heartbeat node id"
         );
+        anyhow::ensure!(
+            self.bus.protocol != MotorProtocol::Meow
+                || self.bus.transport == BusTransport::SocketCan,
+            "Meow motor protocol requires socket_can transport"
+        );
         match self.bus.transport {
             BusTransport::GsUsb => {
                 anyhow::ensure!(
@@ -251,8 +273,9 @@ impl HardwareProfile {
             }
         }
         anyhow::ensure!(
-            self.controller.loop_hz == 1000,
-            "motor loop must be configured at 1000 Hz"
+            self.controller.loop_hz == 1000
+                || (self.bus.protocol == MotorProtocol::Meow && self.controller.loop_hz == 500),
+            "motor loop must be configured at 1000 Hz (Meow also supports 500 Hz)"
         );
         anyhow::ensure!(
             self.controller.state_publish_hz > 0 && self.controller.state_publish_hz <= 200,
@@ -270,6 +293,12 @@ impl HardwareProfile {
             (20..=1000).contains(&self.controller.command_watchdog_ms),
             "command watchdog outside 20..1000 ms"
         );
+        if let Some(rate) = self.controller.gravity_startup_slew_rate_nm_s {
+            anyhow::ensure!(
+                rate.is_finite() && rate > 0.0,
+                "gravity_startup_slew_rate_nm_s must be finite and positive"
+            );
+        }
         anyhow::ensure!(
             self.joints.len() == 6,
             "exactly six joint entries are required"
@@ -342,6 +371,18 @@ impl HardwareProfile {
                 "{} gravity compensation scale must be finite and in [0, 2]",
                 joint.name
             );
+            anyhow::ensure!(
+                self.bus.protocol != MotorProtocol::Meow || joint.torque_scale == 1.0,
+                "{} Meow protocol requires torque_scale=1; calibrate gravity with gravity_compensation_scale",
+                joint.name
+            );
+            if let Some(limit) = joint.gravity_compensation_limit_nm {
+                anyhow::ensure!(
+                    limit.is_finite() && limit >= 0.0 && limit <= joint.limits.torque_nm,
+                    "{} gravity_compensation_limit_nm must be finite, non-negative and no greater than the joint torque limit",
+                    joint.name
+                );
+            }
             anyhow::ensure!(
                 (1..=1000).contains(&joint.torque_permille),
                 "{} torque_permille is invalid",
@@ -479,12 +520,22 @@ impl HardwareProfile {
         Duration::from_millis(self.controller.command_watchdog_ms)
     }
 
-    /// Validate the deliberately narrow real-hardware command windows without
-    /// preventing an otherwise valid profile from being used for observation.
-    /// This is enforced again immediately before any drive can be enabled.
+    /// Validate protocol-specific command representation before enabling.
+    /// CiA402 compressed MIT keeps its verified single-turn seam guard;
+    /// Meow uses signed Q8.24 multi-turn position targets.
     pub fn validate_single_turn_command_windows(&self) -> Result<()> {
         for joint in &self.joints {
             let mapping = joint.compressed_mapping();
+            if self.bus.protocol == MotorProtocol::Meow {
+                anyhow::ensure!(
+                    [mapping.position_min, mapping.position_max]
+                        .iter()
+                        .all(|value| value.is_finite() && (-128.0..128.0).contains(value)),
+                    "{} Meow position window exceeds signed Q8.24 range [-128, 128) rev",
+                    joint.name
+                );
+                continue;
+            }
             validate_single_turn_command_window(
                 mapping.position_min,
                 mapping.position_max,
@@ -560,6 +611,14 @@ impl ExpectedSocketCanLink {
 }
 
 impl JointProfile {
+    pub fn clamp_gravity_feedforward(&self, torque_nm: f32) -> f32 {
+        // Preserve non-finite dynamics output for the caller's fault gate.
+        match self.gravity_compensation_limit_nm {
+            Some(limit) if torque_nm.is_finite() => torque_nm.clamp(-limit, limit),
+            _ => torque_nm,
+        }
+    }
+
     pub fn compressed_mapping(&self) -> CompressedMitMapping {
         let a =
             (self.limits.position_lower_rad - self.zero_offset_rad) / (self.direction as f32 * TAU);
@@ -609,6 +668,7 @@ mod tests {
             gravity_vector_base_m_s2: [0.0, 0.0, -9.81],
             tip_payload: None,
             bus: BusProfile {
+                protocol: MotorProtocol::Cia402,
                 transport: BusTransport::GsUsb,
                 interface: String::new(),
                 channel: 0,
@@ -626,6 +686,7 @@ mod tests {
                 discovery_timeout_ms: 1000,
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
+                gravity_startup_slew_rate_nm_s: None,
             },
             joints: JOINT_NAMES
                 .iter()
@@ -638,6 +699,7 @@ mod tests {
                     zero_offset_rad: 0.0,
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
+                    gravity_compensation_limit_nm: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
                     limits: JointLimits {
@@ -801,6 +863,7 @@ default_kd: 0.3
         .unwrap();
 
         assert_eq!(joint.gravity_compensation_scale, 1.0);
+        assert_eq!(joint.gravity_compensation_limit_nm, None);
     }
 
     #[test]
@@ -821,6 +884,97 @@ default_kd: 0.3
             profile.joints[3].gravity_compensation_scale = valid;
             profile.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn gravity_limits_and_startup_rate_are_optional_and_validated() {
+        let legacy: HardwareProfile =
+            serde_yaml::from_str(include_str!("../test/firefly_y6.mock.yaml")).unwrap();
+        assert_eq!(legacy.bus.protocol, MotorProtocol::Cia402);
+        assert_eq!(legacy.controller.gravity_startup_slew_rate_nm_s, None);
+        assert!(legacy
+            .joints
+            .iter()
+            .all(|joint| joint.gravity_compensation_limit_nm.is_none()));
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            profile.controller.gravity_startup_slew_rate_nm_s = Some(invalid);
+            assert!(profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("gravity_startup_slew_rate_nm_s"));
+        }
+        profile.controller.gravity_startup_slew_rate_nm_s = Some(5.0);
+        for invalid in [-0.1, 1.01, f32::NAN, f32::INFINITY] {
+            profile.joints[0].gravity_compensation_limit_nm = Some(invalid);
+            assert!(profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("gravity_compensation_limit_nm"));
+        }
+        for valid in [0.0, 0.2, 1.0] {
+            profile.joints[0].gravity_compensation_limit_nm = Some(valid);
+            profile.validate().unwrap();
+        }
+        let joint = &profile.joints[0];
+        assert_eq!(joint.clamp_gravity_feedforward(3.0), 1.0);
+        assert_eq!(joint.clamp_gravity_feedforward(-3.0), -1.0);
+        assert_eq!(joint.clamp_gravity_feedforward(0.2), 0.2);
+        assert!(joint.clamp_gravity_feedforward(f32::NAN).is_nan());
+        assert_eq!(
+            joint.clamp_gravity_feedforward(f32::INFINITY),
+            f32::INFINITY
+        );
+    }
+
+    #[test]
+    fn meow_profile_uses_socketcan_si_calibration_and_500_or_1000_hz() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        profile.bus.protocol = MotorProtocol::Meow;
+        assert!(profile
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("socket_can"));
+        profile.bus.transport = BusTransport::SocketCan;
+        profile.bus.interface = "can0".into();
+        profile.bus.expected_link = Some(expected_socketcan_link());
+        for loop_hz in [500, 1000] {
+            profile.controller.loop_hz = loop_hz;
+            profile.validate().unwrap();
+        }
+        profile.joints[0].torque_scale = 0.85;
+        assert!(profile
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("torque_scale=1"));
+        profile.joints[0].torque_scale = 1.0;
+        profile.controller.loop_hz = 500;
+        profile.bus.protocol = MotorProtocol::Cia402;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn meow_command_window_uses_multi_turn_q8_24_instead_of_single_turn_seam() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        profile.joints[0].zero_offset_rad = 2.0 * TAU;
+        assert!(profile.validate_single_turn_command_windows().is_err());
+        profile.bus.protocol = MotorProtocol::Meow;
+        profile.validate_single_turn_command_windows().unwrap();
+        profile.joints[0].zero_offset_rad = 129.0 * TAU;
+        assert!(profile
+            .validate_single_turn_command_windows()
+            .unwrap_err()
+            .to_string()
+            .contains("Q8.24"));
+        profile.joints[0].zero_offset_rad = f32::NAN;
+        assert!(profile.validate_single_turn_command_windows().is_err());
     }
 
     fn trial_tip_payload() -> TipPayloadProfile {

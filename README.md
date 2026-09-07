@@ -1,5 +1,7 @@
 ﻿# Firefly Y6 ROS 2 driver
 
+
+For the latest Meow firmware and the GUI MIT-pp-test gravity-compensated position baseline, see [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md). Select `bus.protocol: meow`; older CiA402 commissioning records below are historical evidence.
 [中文版 (Chinese)](README_cn.md)
 
 ROS 2 Jazzy driver, simulation, and commissioning workspace for the six-axis

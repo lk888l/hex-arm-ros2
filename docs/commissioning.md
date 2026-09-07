@@ -1,3 +1,5 @@
+For current Meow firmware use the [MIT deployment guide](meow_mit_deployment_cn.md). The 0x6040/0x6060, compressed-MIT and single-axis diagnostic procedures here apply to the legacy CiA402 backend.
+
 # Supervised hardware commissioning
 
 **English** | [中文](commissioning_cn.md)

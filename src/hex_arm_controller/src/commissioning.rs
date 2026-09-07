@@ -9799,11 +9799,13 @@ fn safety_abort_telemetry_sample(
     let joint = &profile.joints[selected_index];
     let gravity_torque =
         dynamics.gravity_torque_with(&measured_q, profile.gravity_vector_base_m_s2);
-    let gravity_ff = gravity_torque
-        .get(selected_index)
-        .copied()
-        .unwrap_or(f32::NAN)
-        * joint.gravity_compensation_scale;
+    let gravity_ff = joint.clamp_gravity_feedforward(
+        gravity_torque
+            .get(selected_index)
+            .copied()
+            .unwrap_or(f32::NAN)
+            * joint.gravity_compensation_scale,
+    );
     let diagnostic_target = ros_target_to_motor(
         RosTarget {
             position_rad: commanded_q,
@@ -10258,7 +10260,7 @@ fn build_safe_hold_targets_with_selected_gravity_scale(
                 )
             },
             velocity_rad_s: 0.0,
-            torque_nm: gravity_torque[index] * gravity_scale,
+            torque_nm: joint.clamp_gravity_feedforward(gravity_torque[index] * gravity_scale),
             kp_nm_rad: joint.default_kp,
             kd_nm_s_rad: joint.default_kd,
         }
@@ -10413,6 +10415,7 @@ mod tests {
             gravity_vector_base_m_s2: [0.0, 0.0, -9.81],
             tip_payload: None,
             bus: BusProfile {
+                protocol: crate::profile::MotorProtocol::Cia402,
                 transport: BusTransport::GsUsb,
                 interface: String::new(),
                 channel: 0,
@@ -10430,6 +10433,7 @@ mod tests {
                 discovery_timeout_ms: 2000,
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
+                gravity_startup_slew_rate_nm_s: None,
             },
             joints: (0..DOF)
                 .map(|index| JointProfile {
@@ -10446,6 +10450,7 @@ mod tests {
                     zero_offset_rad: 0.0,
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
+                    gravity_compensation_limit_nm: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
                     limits: JointLimits {
@@ -13608,6 +13613,19 @@ mod tests {
         assert!(targets[1..]
             .iter()
             .all(|target| target.torque_nm.abs() < 1.0e-6));
+        profile.joints[0].gravity_compensation_limit_nm = Some(0.1);
+        let clamped = build_safe_hold_targets(&profile, &dynamics, &[0.0; DOF], 0, 0.0).unwrap();
+        assert!((clamped[0].torque_nm - 0.1).abs() < 1.0e-6);
+        let override_clamped = build_safe_hold_targets_with_selected_gravity_scale(
+            &profile,
+            &dynamics,
+            &[0.0; DOF],
+            0,
+            0.0,
+            Some(1.0),
+        )
+        .unwrap();
+        assert!((override_clamped[0].torque_nm - 0.1).abs() < 1.0e-6);
     }
 
     #[test]
