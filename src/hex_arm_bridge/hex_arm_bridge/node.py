@@ -13,6 +13,8 @@ from hex_arm_msgs.srv import DiscoverMotors, SetGravity, SetOperatingMode
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.lifecycle import LifecycleNode, State, TransitionCallbackReturn
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState as RosJointState
 from std_srvs.srv import Trigger
@@ -365,8 +367,10 @@ class HexArmBridge(LifecycleNode):
         # Each group is internally serialized, but the executor may run the
         # three groups concurrently.
         self._management_callback_group = MutuallyExclusiveCallbackGroup()
-        self._command_callback_group = MutuallyExclusiveCallbackGroup()
-        self._state_callback_group = MutuallyExclusiveCallbackGroup()
+        self._stream_node = None
+        self._stream_executor = None
+        self._stream_thread = None
+        self._stream_stop = threading.Event()
         self._subscribers: list[Any] = []
         self._session_id = 0
         self._hardware_active = False
@@ -495,12 +499,15 @@ class HexArmBridge(LifecycleNode):
             self._state_pub = self.create_lifecycle_publisher(RosJointState, "/hex_arm/internal/state", state_qos)
             self._driver_pub = self.create_lifecycle_publisher(RosDriverState, "/hex_arm/driver_state", 10)
             self._diag_pub = self.create_lifecycle_publisher(DiagnosticArray, "/diagnostics", 10)
-            self._command_sub = self.create_subscription(
+            # Keep the 100 Hz data path out of Jazzy's shared worker-pool
+            # wait-set churn. Management services remain on the lifecycle node.
+            self._stream_node = Node(
+                "hex_arm_bridge_stream", context=self.context, use_global_arguments=False)
+            self._command_sub = self._stream_node.create_subscription(
                 RosJointState,
                 "/hex_arm/internal/command",
                 self._on_ros_command,
                 1,
-                callback_group=self._command_callback_group,
             )
             self._bridge_services.append(
                 self.create_service(
@@ -550,11 +557,8 @@ class HexArmBridge(LifecycleNode):
                     callback_group=self._management_callback_group,
                 )
             )
-            self._diag_timer = self.create_timer(
-                0.01,
-                self._publish_snapshot,
-                callback_group=self._state_callback_group,
-            )
+            self._diag_timer = self._stream_node.create_timer(0.01, self._publish_snapshot)
+            self._start_streaming()
             self.get_logger().info("bridge configured with fresh DISABLED-state observation")
             return TransitionCallbackReturn.SUCCESS
         except _BridgeShutdownRequested:
@@ -630,7 +634,38 @@ class HexArmBridge(LifecycleNode):
             self.get_logger().error(f"destroy release failed: {release_error}")
         super().destroy_node()
 
+    def _start_streaming(self) -> None:
+        self._stream_stop.clear()
+        self._stream_executor = SingleThreadedExecutor(context=self.context)
+        self._stream_executor.add_node(self._stream_node)
+
+        def spin():
+            try:
+                while not self._stream_stop.is_set():
+                    self._stream_executor.spin_once(timeout_sec=0.01)
+            except ExternalShutdownException:
+                pass
+            except Exception as error:
+                self.get_logger().error(f"stream executor failed: {error}")
+                self.request_stop()
+
+        self._stream_thread = threading.Thread(target=spin, name="hex_arm_stream")
+        self._stream_thread.start()
+
+    def _stop_streaming(self) -> None:
+        self._stream_stop.set()
+        if self._stream_executor is not None:
+            self._stream_executor.wake()
+        if self._stream_thread is not None:
+            self._stream_thread.join()
+            self._stream_thread = None
+        if self._stream_executor is not None:
+            self._stream_executor.remove_node(self._stream_node)
+            self._stream_executor.shutdown()
+            self._stream_executor = None
+
     def _destroy_ros_entities(self) -> None:
+        self._stop_streaming()
         with self._lock:
             timer = self._diag_timer
             self._diag_timer = None
@@ -643,11 +678,12 @@ class HexArmBridge(LifecycleNode):
             self._driver_pub = None
             self._diag_pub = None
 
+        stream_owner = self._stream_node or self
         entities = []
         if timer is not None:
-            entities.append(("diagnostic timer", self.destroy_timer, timer))
+            entities.append(("diagnostic timer", stream_owner.destroy_timer, timer))
         if command_sub is not None:
-            entities.append(("command subscription", self.destroy_subscription, command_sub))
+            entities.append(("command subscription", stream_owner.destroy_subscription, command_sub))
         entities.extend(("service", self.destroy_service, service) for service in services)
         entities.extend(
             ("lifecycle publisher", self.destroy_lifecycle_publisher, publisher)
@@ -659,6 +695,9 @@ class HexArmBridge(LifecycleNode):
                 destroy(entity)
             except Exception as error:
                 self.get_logger().warning(f"failed to destroy {label}: {error}")
+        if self._stream_node is not None:
+            self._stream_node.destroy_node()
+            self._stream_node = None
 
     def _query_with_retry(
         self, key: str, payload: bytes, response_type: Any, deadline: float
@@ -745,20 +784,21 @@ class HexArmBridge(LifecycleNode):
             self._wait_interruptibly(min(0.01, remaining))
 
     def _latch_runtime_gate_if_needed(self) -> bool:
-        with self._hardware_transition_lock:
-            with self._lock:
-                if self._runtime_gate_latched:
-                    return True
-                session_id = self._session_id
-                hardware_active = self._hardware_active
-                snapshot = _Snapshot(
-                    joint_state=self._snapshot.joint_state,
-                    driver_state=self._snapshot.driver_state,
-                    joint_received_at=self._snapshot.joint_received_at,
-                    driver_received_at=self._snapshot.driver_received_at,
-                )
-            if session_id == 0 or not hardware_active:
+        # Zenoh callbacks must never wait on a management transaction. A mode
+        # RPC can need those same receive workers to deliver its reply/state.
+        # This gate only reads the snapshot and revokes forwarding; the short
+        # data lock makes that atomic without holding the hardware RPC lock.
+        with self._lock:
+            if self._runtime_gate_latched:
+                return True
+            if self._session_id == 0 or not self._hardware_active:
                 return False
+            snapshot = _Snapshot(
+                joint_state=self._snapshot.joint_state,
+                driver_state=self._snapshot.driver_state,
+                joint_received_at=self._snapshot.joint_received_at,
+                driver_received_at=self._snapshot.driver_received_at,
+            )
             try:
                 error = _active_ownership_error(
                     snapshot,
@@ -770,24 +810,13 @@ class HexArmBridge(LifecycleNode):
                 error = f"runtime gate evaluation failed: {exception}"
             if error is None:
                 return False
-
-            newly_latched = False
-            with self._lock:
-                if (
-                    self._session_id == session_id
-                    and self._hardware_active
-                    and not self._runtime_gate_latched
-                ):
-                    self._hardware_active = False
-                    self._runtime_gate_latched = True
-                    self._runtime_gate_reason = error
-                    newly_latched = True
-                latched = self._runtime_gate_latched
-            if newly_latched:
-                self.get_logger().error(
-                    f"runtime safety gate latched, commands and internal state stopped: {error}"
-                )
-            return latched
+            self._hardware_active = False
+            self._runtime_gate_latched = True
+            self._runtime_gate_reason = error
+        self.get_logger().error(
+            f"runtime safety gate latched, commands and internal state stopped: {error}"
+        )
+        return True
 
     def _query(self, key: str, payload: bytes, response_type: Any) -> Any | None:
         timeout = _positive_timeout(
@@ -895,6 +924,11 @@ class HexArmBridge(LifecycleNode):
             self.get_logger().error(f"invalid Zenoh driver state: {error}")
 
     def _on_ros_command(self, message: RosJointState) -> None:
+        # During a serialized activation RPC the stream must keep publishing
+        # observations instead of waiting for the management lock.
+        with self._lock:
+            if not self._hardware_active:
+                return
         with self._hardware_transition_lock:
             if self._latch_runtime_gate_if_needed():
                 return

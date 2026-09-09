@@ -1,0 +1,10 @@
+# The Rust interpolator and MIT damping need the trajectory velocity too.
+# Position-only streaming supplies a zero endpoint velocity every 10 ms,
+# repeatedly stretching segments under acceleration limits and causing lag.
+firefly_arm_controller:
+  ros__parameters:
+    command_interfaces: [position, velocity]
+    # Keep a continuous reference when compliant MIT joints have a small
+    # measured holding error. Hardware activation seeds commands from feedback.
+    # Measured feedback still drives the normal path/goal tolerance checks.
+    interpolate_from_desired_state: true

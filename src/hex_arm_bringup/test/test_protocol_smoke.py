@@ -16,6 +16,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
 import zenoh
 
 from hex_arm_bridge.pb import robot_api_pb2 as pb
@@ -67,17 +68,23 @@ class BridgeProbe(Node):
         super().__init__("hex_arm_protocol_probe")
         self.change_state = self.create_client(ChangeState, "/hex_arm_bridge/change_state")
         self.received = {"state": False, "driver": False, "diagnostics": False}
+        self.driver = None
+        self.hold = None
+        self.publisher = self.create_publisher(JointState, "/hex_arm/internal/command", 1)
+        self.command_timer = self.create_timer(0.01, self.publish_hold)
+        self.activate = self.create_client(Trigger, "/hex_arm_bridge/activate_hardware")
+        self.deactivate = self.create_client(Trigger, "/hex_arm_bridge/deactivate_hardware")
         best_effort = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(
             JointState,
             "/hex_arm/internal/state",
-            lambda _: self.received.__setitem__("state", True),
+            self.state,
             best_effort,
         )
         self.create_subscription(
             DriverState,
             "/hex_arm/driver_state",
-            lambda _: self.received.__setitem__("driver", True),
+            self.driver_state,
             10,
         )
         self.create_subscription(
@@ -86,6 +93,55 @@ class BridgeProbe(Node):
             lambda _: self.received.__setitem__("diagnostics", True),
             10,
         )
+
+    def state(self, message):
+        self.received["state"] = True
+        if self.hold is None:
+            self.hold = message
+            self.hold.velocity = [0.0] * 6
+            self.hold.effort = []
+
+    def driver_state(self, message):
+        self.received["driver"] = True
+        self.driver = message
+
+    def publish_hold(self):
+        if self.hold is not None:
+            self.hold.header.stamp = self.get_clock().now().to_msg()
+            self.publisher.publish(self.hold)
+
+    def hold_active(self):
+        if not self.activate.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("hardware activation service missing")
+        # DDS endpoint matching must precede the 100 ms hardware watchdog.
+        deadline = time.monotonic() + 5.0
+        while self.publisher.get_subscription_count() == 0 and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.01)
+        if self.publisher.get_subscription_count() == 0:
+            raise RuntimeError("command stream has no bridge subscriber")
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.01)
+        result = _spin_future(self, self.activate.call_async(Trigger.Request()), 10.0)
+        if not result.success:
+            raise RuntimeError(result.message)
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.01)
+            if self.driver.fault_latched:
+                raise RuntimeError(f"continuous mock command stream failed: {self.driver.fault_reason}")
+        if self.driver.mode != pb.OPERATING_MODE_ACTIVE:
+            raise RuntimeError("continuous stream did not retain ACTIVE ownership")
+        # Prove that scheduling changes did not mask loss of the command source.
+        self.command_timer.cancel()
+        deadline = time.monotonic() + 1.0
+        while not self.driver.fault_latched and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.01)
+        if not self.driver.fault_latched or self.driver.fault_code != 0x1003:
+            raise RuntimeError("stopping the command stream did not trip the watchdog")
+        result = _spin_future(self, self.deactivate.call_async(Trigger.Request()), 10.0)
+        if not result.success:
+            raise RuntimeError(result.message)
 
     def transition(self, transition_id: int) -> None:
         request = ChangeState.Request()
@@ -105,13 +161,16 @@ def main() -> None:
     bridge_log = ""
     try:
         controller = subprocess.Popen(
-            [str(CONTROLLER), "--profile", str(PROFILE), "--mock"],
+            [str(CONTROLLER), "--profile", str(PROFILE), "--mock", "--zenoh-listen", "tcp/127.0.0.1:7449"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             start_new_session=True,
         )
-        session = zenoh.open(zenoh.Config())
+        config = zenoh.Config()
+        config.insert_json5("connect/endpoints", '["tcp/127.0.0.1:7449"]')
+        config.insert_json5("scouting/multicast/enabled", "false")
+        session = zenoh.open(config)
         deadline = time.monotonic() + 15.0
         description = None
         while description is None and time.monotonic() < deadline:
@@ -131,6 +190,7 @@ def main() -> None:
             [
                 str(BRIDGE), "--ros-args", "-p", f"robot_prefix:={PREFIX}",
                 "-p", "required_api_major:=0",
+                "-p", "zenoh_connect:=tcp/127.0.0.1:7449",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -147,6 +207,7 @@ def main() -> None:
             rclpy.spin_once(probe, timeout_sec=0.05)
         if not all(probe.received.values()):
             raise RuntimeError(f"bridge publications missing: {probe.received}")
+        probe.hold_active()
     except BaseException:
         failed = True
         raise

@@ -14,6 +14,7 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.events import Shutdown
+from launch.logging import launch_config
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
@@ -103,6 +104,12 @@ def _real_nodes(context):
     if activate_hardware not in ("true", "false"):
         raise RuntimeError("activate_hardware must be 'true' or 'false'")
     activate_hardware = activate_hardware == "true"
+    startup_ready = LaunchConfiguration("startup_ready", default="false").perform(context).lower()
+    if startup_ready not in ("true", "false"):
+        raise RuntimeError("startup_ready must be 'true' or 'false'")
+    startup_ready = activate_hardware and startup_ready == "true"
+    if startup_ready and profile.get("bus", {}).get("protocol") != "meow":
+        raise RuntimeError("ordered startup_ready requires a Meow hardware profile")
     controller_zenoh_args, bridge_zenoh_connect = _zenoh_routes(
         LaunchConfiguration("zenoh_connect").perform(context)
     )
@@ -130,6 +137,7 @@ def _real_nodes(context):
 
     xacro_file = PathJoinSubstitution([FindPackageShare("hex_arm_description"), "urdf", "firefly_y6.urdf.xacro"])
     controllers = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers.yaml"])
+    real_commands = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers_real.yaml"])
     description = {"robot_description": Command([
         FindExecutable(name="xacro"), " ", xacro_file, " backend:=real controllers_file:=", controllers
     ])}
@@ -165,39 +173,30 @@ def _real_nodes(context):
         parameters=[
             description,
             controllers,
+            real_commands,
             {"hardware_components_initial_state": {
                 "inactive": ["FireflyY6System"],
                 "shutdown_on_initial_state_failure": True,
             }},
         ],
         output="screen")
-    hardware_spawner = Node(
-        package="controller_manager", executable="hardware_spawner",
-        arguments=[
-            "FireflyY6System", "--activate",
-            "--controller-manager-timeout", "10.0",
-        ],
-        output="screen")
-    controller_spawner = Node(
-        package="controller_manager", executable="spawner",
-        arguments=[
-            "joint_state_broadcaster", "firefly_arm_controller",
-            "--activate-as-group",
-            "--controller-manager-timeout", "10.0",
-            "--switch-timeout", "10.0",
-        ],
-        output="screen")
-
-    def _after_hardware_activation(event, context):
-        if context.is_shutdown:
-            return []
-        if event.returncode != 0:
-            reason = f"hardware activation failed with exit code {event.returncode}"
-            return _shutdown_actions(reason)
-        return [
-            LogInfo(msg="FireflyY6System is active: activating controllers as a group"),
-            controller_spawner,
-        ]
+    startup = None
+    if activate_hardware:
+        report = str(Path(launch_config.log_dir) / "startup-ready.json")
+        startup_script = PathJoinSubstitution([
+            FindPackagePrefix("hex_arm_bringup"), "lib", "hex_arm_bringup", "commission-startup-ros.py"
+        ]).perform(context)
+        with open(startup_script, "rb") as installed_script:
+            installed_script.read(1)
+        startup = ExecuteProcess(
+            cmd=[
+                FindExecutable(name="python3"), startup_script,
+                "--profile", str(profile_path), "--allow-motion", "--activate-controllers",
+                "--output", report,
+                *([] if startup_ready else ["--hold-current"]),
+            ],
+            output="screen",
+        )
 
     startup_handlers = [
         RegisterEventHandler(OnStateTransition(
@@ -239,15 +238,11 @@ def _real_nodes(context):
             )),
             RegisterEventHandler(OnProcessStart(
                 target_action=control,
-                on_start=[hardware_spawner],
+                on_start=[startup],
             )),
             RegisterEventHandler(OnProcessExit(
-                target_action=hardware_spawner,
-                on_exit=_after_hardware_activation,
-            )),
-            RegisterEventHandler(OnProcessExit(
-                target_action=controller_spawner,
-                on_exit=_shutdown_after_failure("controller activation"),
+                target_action=startup,
+                on_exit=_shutdown_after_failure("controller startup"),
             )),
             RegisterEventHandler(OnProcessExit(
                 target_action=control,
@@ -299,6 +294,10 @@ def generate_launch_description() -> LaunchDescription:
                 "Explicitly activate ros2_control hardware and trajectory controllers. "
                 "The safe default is observation only."
             ),
+        ),
+        DeclareLaunchArgument(
+            "startup_ready", default_value="false", choices=["true", "false"],
+            description="After explicit activation, align J6 if needed and run J2 -> J4 -> J3, then hold.",
         ),
         DeclareLaunchArgument("use_rviz", default_value="true", choices=["true", "false"]),
         OpaqueFunction(function=_real_nodes),

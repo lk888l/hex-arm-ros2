@@ -32,3 +32,13 @@ def test_joint_two_undertracking_cannot_pass_the_goal_phase() -> None:
     # below the former 0.05 rad tolerance but must fail the commissioning gate.
     assert observed_goal_error_rad < 0.05
     assert observed_goal_error_rad > constraints["joint_2"]["goal"]
+
+
+def test_real_stream_keeps_velocity_without_relaxing_tolerances() -> None:
+    override = yaml.safe_load((PACKAGE_ROOT / "config" / "controllers_real.yaml").read_text())
+    real = override["firefly_arm_controller"]["ros__parameters"]
+    assert real["command_interfaces"] == ["position", "velocity"]
+    assert real["interpolate_from_desired_state"] is True
+    assert not real.get("open_loop_control", False)
+    assert "constraints" not in real
+    assert _constraints()["joint_3"]["goal"] == 0.005

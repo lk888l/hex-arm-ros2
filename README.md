@@ -1,77 +1,248 @@
-﻿# Firefly Y6 ROS 2 driver
+# Firefly Y6 ROS 2 driver
 
+**English** | [中文](README_cn.md)
 
-For the latest Meow firmware and the GUI MIT-pp-test gravity-compensated position baseline, see [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md). Select `bus.protocol: meow`; older CiA402 commissioning records below are historical evidence.
-[中文版 (Chinese)](README_cn.md)
+ROS 2 Jazzy driver, MoveIt 2 motion planning, and Gazebo simulation workspace for
+the six-axis Firefly Y6 arm. **To open the MoveIt 2 window without connecting an
+arm, follow the quick start below.**
 
-ROS 2 Jazzy driver, simulation, and commissioning workspace for the six-axis
-Firefly Y6 arm. The public motion interface is the standard
-`control_msgs/action/FollowJointTrajectory` action exposed by
-`joint_trajectory_controller`:
+Navigation: [MoveIt 2 quick start](#moveit-quick-start) ·
+[Other simulation modes](#simulation-modes) · [CLI control](#simulation-cli) ·
+[Troubleshooting](#troubleshooting) · [Docker setup](#docker-setup) ·
+[Real hardware](#real-hardware) · [Documentation](#documentation)
 
-```text
-/firefly_arm_controller/follow_joint_trajectory
+<a id="moveit-quick-start"></a>
+
+## MoveIt 2 simulation window: quick start
+
+This entry opens **RViz with the MotionPlanning panel** for inverse kinematics,
+collision checking, trajectory planning, and simulated execution. It uses
+ros2_control's `mock_components/GenericSystem`, with no USB/CAN hardware access.
+It does not simulate gravity or contact physics; use Gazebo for physics simulation.
+
+### 1. Enter the container from a host terminal
+
+On native Ubuntu 24.04, use a terminal opened from the graphical desktop. On first
+use or after changing the Dockerfile, run `./scripts/docker-dev.sh build` from
+the repository root to build the image. For daily use:
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh shell
 ```
 
-The project deliberately separates the ROS control loop from the USB/CAN-FD
-loop:
+Replace the repository path if needed. On WSL2, run the same scripts from the
+**Ubuntu/WSL terminal**, not PowerShell or Command Prompt; the helper selects
+WSLg automatically. If the container is already running, go straight to
+`./scripts/docker-dev.sh shell`.
 
-```text
-MoveIt / FollowJointTrajectory
-  -> ros2_control + firefly_arm_controller
-  -> hex_arm_hardware/SystemInterface
-  -> hex_arm_bridge (ROS lifecycle <-> Zenoh robot_api)
-  -> hex_arm_controller (Rust safety state machine, 1 kHz soft-real-time loop)
-  -> SocketCAN can0 (field) or userspace gs_usb (legacy) -> CAN-FD motors
+### 2. Start MoveIt 2 inside the container
+
+The container is named `ros2-jazzy-arm`, with prompt hostname `hex-arm-dev`.
+On first use or after source changes, run `./scripts/build.sh` from
+`/workspaces/hex_arm_ros2` to build the workspace. Once built, run the following
+in each new container terminal:
+
+```bash
+cd /workspaces/hex_arm_ros2
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
-The Rust process owns the motor bus and all safety decisions. The ROS bridge
-does not implement a trajectory action and cannot bypass the exclusive
-session or activation state machine.
+`hex_arm_moveit_config` is the ROS package; `moveit_mock.launch.py` is its launch
+file. It loads mock hardware, the joint state broadcaster, and
+`firefly_arm_controller`, then starts `move_group` and RViz with the MoveIt
+configuration. **This launch includes the required controllers; there is no need
+to start `hex_arm_bringup mock.launch.py` separately.** Leave the terminal running
+while using the RViz window.
 
-## Supported backends
+The default joint pose is `[0,-1.350,3.000,-0.300,0,0]` rad, named `startup_ready`. This initializes mock joints; real hardware starts from measured feedback.
 
-| Backend | Purpose | Hardware access |
+### 3. Plan and execute in the window
+
+1. Select planning group `arm` in **MotionPlanning**, using the current robot state as the start.
+2. Use RViz's **Interact** tool to drag the end-effector marker to a target position and orientation.
+3. Click **Plan** to inspect the preview. If planning fails, check reachability, collisions, and joint limits.
+4. Click **Plan & Execute** to plan and execute, then watch the simulated arm and joint states update.
+
+`Plan` produces a preview. `Plan & Execute` drives simulated joints when using
+this mock entry point. The named `commissioning_start` state is a planning
+reference, not a calibrated hardware home or a guaranteed valid target under the
+strict collision model.
+
+### Common launch arguments
+
+Place arguments after the launch filename, using `name:=value`.
+
+| Argument | Default | Meaning |
 |---|---|---|
-| `view` | URDF, joint direction, limits, and RViz inspection | none |
-| `mock` | ros2_control/JTC lifecycle and action integration | none |
-| `gz` | Gazebo Harmonic physics through `gz_ros2_control` | none |
-| `real` | Rust controller, Zenoh bridge, ros2_control | host `can0`, or `/dev/bus/usb` for legacy `gs_usb` |
-
-## Starting the Docker development environment
-
-### Native Ubuntu 24.04 (this machine)
-
-“Native Ubuntu” means that the computer boots Ubuntu directly, rather than
-running Ubuntu inside Windows. The current repository at
-`/home/kk/kk_data/ros2_project/hex-arm-ros2` is in this environment. Run:
+| `use_rviz` | `true` | Opens RViz automatically; `false` runs planning and simulated execution without a window |
+| `limits_profile` | `sim` | MoveIt velocity/acceleration limits; accepts `sim`, `commissioning`, or `verified`; use `sim` for routine simulation |
 
 ```bash
-cd /home/kk/kk_data/ros2_project/hex-arm-ros2
-./scripts/docker-dev.sh build
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh doctor
-./scripts/docker-dev.sh shell
+# Run MoveIt mock without a window
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py use_rviz:=false
+
+# Preview conservative low-speed limits in the simulation window
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py limits_profile:=commissioning
+
+# List launch arguments without starting nodes
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py --show-args
 ```
 
-`build` is needed only on first use or after changing the Dockerfile. A normal
-daily start is:
+Changing `limits_profile` only changes planning limits; the backend stays mock.
+See the [MoveIt simulation guide](docs/moveit_simulation.md) for limit values and
+collision-model details.
+
+Stop with `Ctrl+C` in the launch terminal and wait for all child processes to
+exit before switching modes. Run one arm launch at a time in the same
+`ROS_DOMAIN_ID` to avoid conflicting controllers, TF, and joint states.
+
+<a id="simulation-modes"></a>
+
+## Other simulation modes
+
+Run these commands in a **built and sourced container terminal**, choosing one
+mode at a time. MoveIt mock uses the `mock` backend and adds MoveIt planning
+services and the MotionPlanning panel to the ordinary mock setup.
+
+| Mode | Windows and capabilities | Use it for |
+|---|---|---|
+| **MoveIt mock** (above) | RViz + MotionPlanning + mock controllers | End-effector interaction, planning, simulated execution |
+| `view` | RViz + joint sliders, no trajectory controller | Inspecting the URDF, joint directions, and limits |
+| Ordinary `mock` | RViz + ros2_control mock hardware, no MoveIt panel | Testing trajectory actions and controller lifecycles |
+| `gz` | Gazebo Harmonic + optional RViz, no MoveIt panel | Physics simulation and trajectory control |
 
 ```bash
-cd /home/kk/kk_data/ros2_project/hex-arm-ros2
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh shell
+# URDF + joint sliders + RViz
+ros2 launch hex_arm_bringup view.launch.py
+
+# Ordinary mock: send joint trajectories from the CLI or a script
+ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
+
+# Gazebo physics + RViz
+ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 ```
 
-On native Ubuntu, the helper selects `compose.ubuntu.yaml` and passes the current
-X11 authorization cookie read-only. The generic AMD/Intel path maps `/dev/dri`;
-the NVIDIA override requests devices through Container Toolkit instead.
+These three commands do not load the MoveIt MotionPlanning panel. To open the
+planning window, use `ros2 launch hex_arm_moveit_config moveit_mock.launch.py`.
 
-#### Direct Docker Compose commands (without the helper)
+<a id="simulation-cli"></a>
 
-`docker compose` is Docker's Compose CLI. The following commands are equivalent
-to `docker-dev.sh` on native Ubuntu. Run them from an Ubuntu graphical desktop
-terminal and set `HEX_ARM_XAUTHORITY` in that terminal first:
+## Driving the simulated arm from the CLI (`ros2 action send_goal` reference)
+
+Start the ordinary `mock` or `gz` mode above. Open another host terminal,
+enter the same container with `./scripts/docker-dev.sh shell`, then run:
+
+```bash
+cd /workspaces/hex_arm_ros2
+source install/setup.bash
+ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
+  control_msgs/action/FollowJointTrajectory \
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+```
+
+A successful goal ends with `Goal finished with status: SUCCEEDED`
+(`error_code: 0`). Check feedback with `ros2 topic echo --once /joint_states`.
+This command sends a target directly to the trajectory controller, bypassing
+MoveIt planning and collision checking. Supply six joint angles in radians,
+within the URDF limits.
+
+<details>
+<summary>Expand: action syntax, trajectory fields, and usage details</summary>
+
+### Command format
+
+```text
+ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+```
+
+| Argument | Example | Meaning |
+|---|---|---|
+| Subcommand | `ros2 action send_goal` | Sends an action goal; `ros2 action` also supports `list`, `info`, and `type` |
+| Action server | `/firefly_arm_controller/follow_joint_trajectory` | The trajectory controller's action server. Start a `mock`/`gz` launch first, otherwise the CLI keeps printing `waiting` |
+| Action type | `control_msgs/action/FollowJointTrajectory` | Tells the CLI how to parse the YAML; must match this workspace |
+| Goal payload | YAML in double quotes | See field rules below |
+
+### YAML field rules
+
+- `trajectory.joint_names`: joint-name list. This example lists
+  `joint_1` ... `joint_6`; all six must be present (the controller sets
+  `allow_partial_joints_goal: false`, so partial goals are rejected).
+- `trajectory.points`: array of trajectory points (one in this example). Each
+  point has:
+  - `positions`: target angles in **radians**, exactly six values in
+    `joint_names` order. Keep them inside the URDF limits: joint_1 ±2.86,
+    joint_2 −1.57~2.09, joint_3 0~3.14, joint_4 ±1.57, joint_5 ±1.54,
+    joint_6 ±2.79. Note that the mock/gz configs do **not** enable command
+    limit clamping, so out-of-limit values are not automatically rejected —
+    make sure the numbers are safe yourself.
+  - `time_from_start`: offset from the moment the goal is accepted;
+    `{sec: 2, nanosec: 0}` means "reach within 2 seconds". The controller
+    smooths the motion with `interpolation_method: splines`.
+  - Optional: `velocities`, `accelerations`, `effort`; omitted fields are
+    interpolated by the controller.
+  - Add more points to build multi-segment trajectories, increasing
+    `time_from_start` for each.
+
+### Shell and usage details
+
+- Wrap the whole YAML in **double quotes** so spaces are not split into
+  separate shell arguments; the trailing `\` is just a line continuation and
+  can be removed to put everything on one line.
+- Source the environment first (interactive bash does this automatically;
+  otherwise run `source /opt/ros/jazzy/setup.bash` and
+  `source install/setup.bash`).
+- After sending, expect `Goal accepted with ID: ...` and then
+  `Goal finished with status: SUCCEEDED` (`error_code: 0`).
+- Verify the final pose with `ros2 topic echo --once /joint_states`; the
+  `position` values should match the goal.
+- A new goal cancels/replaces the goal currently being executed (default
+  controller behavior); `Ctrl-C` only exits the CLI client.
+- The same command works for `gz`; there the trajectory advances with the
+  Gazebo (simulation) clock.
+
+More GUI and CLI troubleshooting: [docs/gui_and_cli_simulation.md](docs/gui_and_cli_simulation.md).
+
+</details>
+
+<a id="troubleshooting"></a>
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| `ros2: command not found` | Enter the container with `./scripts/docker-dev.sh shell` on the host; inside, source `/opt/ros/jazzy/setup.bash` and `/workspaces/hex_arm_ros2/install/setup.bash` |
+| Package `hex_arm_moveit_config` or `hex_arm_moveit_runtime` not found | Run `./scripts/build.sh` in `/workspaces/hex_arm_ros2` inside the correct container, then source `install/setup.bash` again |
+| Sourcing reports missing `/workspaces/hex_arm_ros2/...` paths | Use `ros2-jazzy-arm` (hostname `hex-arm-dev`); do not reuse its symlink-install from the old `ros2-jazzy` container or the host |
+| No window, `could not connect to display`, or `Authorization required` | Run `./scripts/docker-dev.sh doctor` from the repository root in a **host graphical terminal**, fix the issue, then re-enter and relaunch; do not use `xhost +` |
+| Model/sliders appear, but no MotionPlanning panel | Stop that launch and use `hex_arm_moveit_config moveit_mock.launch.py` with `use_rviz:=true` |
+| Duplicate controllers, jumping joint states, or controller startup stalls | Check for other arm launches; stop them normally in their own terminals and leave only one mode running |
+| Plan fails, or a target collides or exceeds limits | Choose a reachable, collision-free target from the current state; `commissioning_start` is not a guaranteed valid demo target |
+
+See the [GUI and CLI simulation guide](docs/gui_and_cli_simulation.md) for more
+X11, WSLg, NVIDIA, and CLI troubleshooting.
+
+<a id="docker-setup"></a>
+
+## Docker development environment: advanced setup
+
+For daily use, follow the helper commands in the quick start. On native Ubuntu,
+`docker-dev.sh` selects `compose.ubuntu.yaml` and mounts the current X11
+credential read-only. On WSL2 it selects `compose.yaml` and WSLg sockets.
+`HEX_ARM_GPU=auto` adds `compose.nvidia.yaml` when a working NVIDIA GPU is detected;
+this requires NVIDIA Container Toolkit on the host.
+
+<details>
+<summary>Direct Docker Compose commands</summary>
+
+### Direct Docker Compose commands (without the helper)
+
+`docker compose` is Docker's Compose CLI. The following commands use
+the native Ubuntu AMD/Intel DRI path; NVIDIA hosts also need the override below.
+Run them from an Ubuntu graphical desktop terminal and set `HEX_ARM_XAUTHORITY`
+in that terminal first:
 
 ```bash
 cd /home/kk/kk_data/ros2_project/hex-arm-ros2
@@ -115,7 +286,12 @@ Set `HEX_ARM_XAUTHORITY` again in every new host terminal before running these
 Compose commands. Do not replace native Ubuntu's `compose.ubuntu.yaml` with the
 WSL2-only `compose.yaml`, and do not run `xhost +`.
 
-#### NVIDIA discrete GPU acceleration
+</details>
+
+<details>
+<summary>NVIDIA GPU: installation and verification</summary>
+
+### NVIDIA discrete GPU acceleration
 
 On native Ubuntu, the helper defaults to `HEX_ARM_GPU=auto`: it automatically
 adds `compose.nvidia.yaml` when a working NVIDIA GPU is detected, and otherwise
@@ -179,6 +355,11 @@ GLVND/OpenGL userspace dependencies; do not add the NVIDIA kernel or host driver
 packages to the Dockerfile. RViz/Gazebo shares GPU memory and compute with
 host CUDA workloads such as LeRobot training, so avoid running them together.
 
+</details>
+
+<details>
+<summary>WSL2 startup details</summary>
+
 ### WSL2 (Windows 10/11 only)
 
 WSL2 means **Windows Subsystem for Linux 2**, the Linux virtualization
@@ -203,101 +384,113 @@ environment requires the overly broad `xhost +` command. The existing image is
 already Ubuntu 24.04 (ROS 2 Jazzy), so a duplicate native-Ubuntu Dockerfile is
 unnecessary.
 
-Inside the container the prompt hostname is `hex-arm-dev`. The older
-`ros2-jazzy` container uses the hostname `ros2-dev`; do not source this
-workspace's generated `install/` tree there. A `--symlink-install` build is
-bound to the `/workspaces/hex_arm_ros2` mount used by `ros2-jazzy-arm`.
+</details>
 
-Build once inside `ros2-jazzy-arm`:
+<a id="real-hardware"></a>
 
-```bash
-cd /workspaces/hex_arm_ros2
-./scripts/build.sh
-source install/setup.bash
-```
+## Real hardware and commissioning references
 
-Then choose one graphical mode per terminal:
+### Selecting a CAN interface
+
+The driver is not tied to `can0`. The profile selects `bus.interface`; sysfs
+identifies the physical USB channel and serial independently of the netdev name.
+With control stopped, bind the existing arm profile to the chosen interface:
 
 ```bash
-# URDF + joint sliders + RViz
-ros2 launch hex_arm_bringup view.launch.py
-
-# ros2_control GenericSystem + trajectory controller + RViz
-ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
-
-# Gazebo Harmonic physics + RViz
-ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
+# Host repository directory; first configure and bring up the chosen 1M/4M link.
+export HEX_ARM_CAN_IFACE=can0
+python3 scripts/bind-can-profile.py \
+  --interface "$HEX_ARM_CAN_IFACE" \
+  --profile config/hardware/firefly_y6.meow.local.yaml \
+  --output config/hardware/firefly_y6.selected.local.yaml
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh real-launch bringup \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.selected.local.yaml \
+  activate_hardware:=false use_rviz:=false
 ```
 
-Stop a launch with `Ctrl-C` before starting another mode. If `source
-install/setup.bash` reports paths below `/workspaces/hex_arm_ros2` as missing,
-the shell is in the wrong container; enter it with
-`./scripts/docker-dev.sh shell` from the host.
+Replace `can0` with the actual interface. The input profile must belong to this
+arm; the example Meow local file is a site-specific capture and is not distributed
+in Git. Outputs are created exclusively, so choose a new filename if it exists.
+Motor identities, zero offsets, and motion parameters are retained. Restart
+control after rebinding; there is no live bus switching. Optional
+`HEX_ARM_CAN_SERIAL` and `HEX_ARM_CAN_CHANNEL` overrides remain supported; when
+omitted, the helper reads them from the selected interface. Full motor identity,
+adapter, and CAN timing checks remain active.
 
-## Driving the simulated arm from the CLI (`ros2 action send_goal` reference)
+### Folded reference and bounded startup trial
 
-After starting the `mock` or `gz` mode, run this in another terminal (with
-`source install/setup.bash` already applied):
+The power-off folded reference is `[0,-1.570,3.140,0,0,0]` rad. MoveIt mock now
+starts at `[0,-1.350,3.000,-0.300,0,0]`, also available as `startup_ready`.
+The physical startup order is **J2 → −1.350, J4 → −0.300, J3 → 3.000**. The
+fixed trial uses smooth 8/10/6-second segments and verifies arrival at each step.
 
 ```bash
-ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
-  control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+# Moves real motors: requires the confirmed folded reference and verified clear path.
+HEX_ARM_CAN_IFACE=can0 ./scripts/docker-dev.sh real-launch startup \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.local.yaml \
+  allow_startup_motion:=true
 ```
 
-### Command format
+This Meow-only commissioning entry checks identities, fresh feedback and torque
+budgets, ramps gravity at the fold, runs the fixed sequence, holds for 3 seconds,
+then confirms disable. Timeout, stale feedback, excessive speed or tracking error
+aborts the trial. It does not promote `calibrated` or start general MoveIt execution.
+Arrival uses the GUI's 0.003 Rev tolerance (about 0.01885 rad), which is distinct
+from the ROS trajectory controller's 0.005 rad acceptance.
 
-```text
-ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+The MIT-pp-test baseline is Kp=80 Nm/rad, Kd=15 Nm·s/rad and gravity scales
+`[0,0.3,0.7,0.7,0,0]`. Live trials on this arm without a gripper tuned the scales
+to `[0,1.0,1.05,0.7,0,0]`, with J3 PD limited to 450‰, other axes at 500‰,
+and the total budget unchanged at 650‰. The fixed startup succeeded with final
+J2/J3/J4 errors of approximately 0.0020/0.0043/0.0025 rad. These parameters are
+specific to this arm; see the [live record](docs/commissioning_evidence/2026-09-07-meow-startup.md).
+The backend reads factory calibration. The operator verified
+the intermediate folded path as physically clear despite mesh contacts. This fixed
+trial does not invoke MoveIt planning; the strict collision matrix is retained.
+The commissioning J4 lower bound is now −0.35 rad to include the requested target.
+
+**With J4 Kp=110, can2 completed ordered startup, MoveIt small-motion execution, and a 60-second hold. The earlier J4 tracking fault did not recur in that trial.**
+The subsequent 15 mrad J2 return exceeded the existing goal tolerance and stopped;
+bidirectional motion tuning remains open.
+Kp is `[80,80,120,110,80,80]`, with Kd=15 on every axis. From the verified folded pose:
+
+```bash
+HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
+  enable_execution:=true
 ```
 
-| Argument | Example | Meaning |
-|---|---|---|
-| Subcommand | `ros2 action send_goal` | Sends an action goal; `ros2 action` also supports `list`, `info`, and `type` |
-| Action server | `/firefly_arm_controller/follow_joint_trajectory` | The trajectory controller's action server. Start a `mock`/`gz` launch first, otherwise the CLI keeps printing `waiting` |
-| Action type | `control_msgs/action/FollowJointTrajectory` | Tells the CLI how to parse the YAML; must match this workspace |
-| Goal payload | YAML in double quotes | See field rules below |
+`startup_ready` defaults to true: after controller activation, align J6 if needed,
+then move J2 → J4 → J3 to `[0,-1.350,3.000,-0.300,0,0]` and continue holding.
+J2/J3/J4 hold their measured folded positions until their own turn. Small placement
+offsets are checked before enable without changing encoder calibration. Wait for
+`startup_ready reached and verified; controller continues holding` before executing in RViz.
+Use `startup_ready:=false` for measured-pose activation. Omit `enable_execution:=true`
+for observation only. J6 keeps its zero offset and moves within the selected profile.
+Successful trials cover this bounded startup and its target neighborhood; full travel and
+payload changes remain unverified. See the [current can2 deployment record](docs/commissioning_evidence/2026-09-08-can2-kp110-deployment.md).
 
-### YAML field rules
 
-- `trajectory.joint_names`: joint-name list. The order is **fixed** to
-  `joint_1` ... `joint_6`, and all six must be present (the controller sets
-  `allow_partial_joints_goal: false`, so partial goals are rejected).
-- `trajectory.points`: array of trajectory points (one in this example). Each
-  point has:
-  - `positions`: target angles in **radians**, exactly six values in
-    `joint_names` order. Keep them inside the URDF limits: joint_1 ±2.86,
-    joint_2 −1.57~2.09, joint_3 0~3.14, joint_4 ±1.57, joint_5 ±1.54,
-    joint_6 ±2.79. Note that the mock/gz configs do **not** enable command
-    limit clamping, so out-of-limit values are not automatically rejected —
-    make sure the numbers are safe yourself.
-  - `time_from_start`: offset from the moment the goal is accepted;
-    `{sec: 2, nanosec: 0}` means "reach within 2 seconds". The controller
-    smooths the motion with `interpolation_method: splines`.
-  - Optional: `velocities`, `accelerations`, `effort`; omitted fields are
-    interpolated by the controller.
-  - Add more points to build multi-segment trajectories, increasing
-    `time_from_start` for each.
+Real hardware has a separate observation/planning entry point; execution requires
+a calibrated profile and hardware validation. For the latest Meow firmware and
+GUI MIT-pp-test baseline, follow [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md)
+and select `bus.protocol: meow`. Successful simulation does not establish
+hardware readiness.
 
-### Shell and usage details
+Commissioning requires a physical emergency stop and read-only discovery on an
+unknown bus. For real launches in Docker, use the supervised
+`./scripts/docker-dev.sh real-launch` entry and wait for confirmed controller
+disable and exit when stopping. See the deployment guide and
+[commissioning checklist](docs/commissioning.md) for the full procedure.
 
-- Wrap the whole YAML in **double quotes** so spaces are not split into
-  separate shell arguments; the trailing `\` is just a line continuation and
-  can be removed to put everything on one line.
-- Source the environment first (interactive bash does this automatically;
-  otherwise run `source /opt/ros/jazzy/setup.bash` and
-  `source install/setup.bash`).
-- After sending, expect `Goal accepted with ID: ...` and then
-  `Goal finished with status: SUCCEEDED` (`error_code: 0`).
-- Verify the final pose with `ros2 topic echo --once /joint_states`; the
-  `position` values should match the goal.
-- A new goal cancels/replaces the goal currently being executed (default
-  controller behavior); `Ctrl-C` only exits the CLI client.
-- The same command works for `gz`; there the trajectory advances with the
-  Gazebo (simulation) clock.
+<details>
+<summary>Historical CiA402 reference: discovery, supervised startup, and safety boundary</summary>
 
-More GUI and CLI troubleshooting: [docs/gui_and_cli_simulation.md](docs/gui_and_cli_simulation.md).
-
+The following preserves the older CiA402 commissioning context. Its `can2`
+connection, axis parameters, and single-turn windows are historical records.
+Use the deployment guide for Meow configuration, units, and calibration instead
+of carrying over those parameters.
 
 ## Real hardware: read-only discovery first
 
@@ -535,6 +728,34 @@ treats `link_6` as a provisional flange tip. Its launch contract and mock
 regression are tested offline, but no real motor motion or real MoveIt
 trajectory execution is claimed.
 
+</details>
+
+## Control interface and architecture
+
+The public motion interface is the standard
+`control_msgs/action/FollowJointTrajectory` action exposed by
+`joint_trajectory_controller`:
+
+```text
+/firefly_arm_controller/follow_joint_trajectory
+```
+
+The real-hardware execution path separates the ROS control loop from the
+USB/CAN-FD loop:
+
+```text
+MoveIt / FollowJointTrajectory
+  -> ros2_control + firefly_arm_controller
+  -> hex_arm_hardware/SystemInterface
+  -> hex_arm_bridge (ROS lifecycle <-> Zenoh robot_api)
+  -> hex_arm_controller (Rust safety state machine, 1 kHz soft-real-time loop)
+  -> SocketCAN can0 (field) or userspace gs_usb (legacy) -> CAN-FD motors
+```
+
+The Rust process owns the motor bus and all safety decisions. The ROS bridge
+does not implement a trajectory action and cannot bypass the exclusive
+session or activation state machine.
+
 ## Reproducibility
 
 `hex_arm.repos` pins upstream source revisions. The checked-in
@@ -550,6 +771,8 @@ silently fetch mutable branches.
 
 ## Test levels
 
+Run these commands in a built and sourced container terminal:
+
 ```bash
 ./scripts/test.sh unit
 ./scripts/test.sh protocol
@@ -560,6 +783,23 @@ silently fetch mutable branches.
 `unit` is hardware-free. `protocol` starts the Rust controller with its mock
 motor backend and validates Zenoh discovery/events plus the ROS lifecycle bridge.
 `mock` exercises FollowJointTrajectory send/cancel and controller lifecycle. `gz`
-launches Gazebo headlessly and verifies two trajectories. Real commissioning is a separate, supervised checklist in
-`docs/commissioning.md`.
+launches Gazebo headlessly and verifies two trajectories. Real commissioning uses
+a separate [supervised checklist](docs/commissioning.md).
 
+For a separate headless smoke test of MoveIt planning, strict collision checking,
+and mock execution, run this after building and sourcing the workspace:
+
+```bash
+python3 src/hex_arm_moveit_config/test/test_moveit_mock.py
+```
+
+<a id="documentation"></a>
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [MoveIt simulation guide](docs/moveit_simulation.md) | Simulation window, limit profiles, collision models, and real MoveIt planning entry |
+| [GUI and CLI simulation guide](docs/gui_and_cli_simulation.md) | X11/WSLg/NVIDIA diagnosis, action usage, and Python examples |
+| [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md) | New firmware protocol, parameter units, profiles, and current deployment flow |
+| [Commissioning checklist](docs/commissioning.md) | Hardware discovery, calibration, supervised operation, and historical validation records |

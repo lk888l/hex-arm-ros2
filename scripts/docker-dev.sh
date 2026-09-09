@@ -5,8 +5,8 @@ workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-up}"
 gpu_mode="${HEX_ARM_GPU:-auto}"
 can_interface="${HEX_ARM_CAN_IFACE:-}"
-can_serial="${HEX_ARM_CAN_SERIAL:-C9E29601798421B29AC2D419C12D9502}"
-can_channel="${HEX_ARM_CAN_CHANNEL:-0}"
+can_serial="${HEX_ARM_CAN_SERIAL:-}"
+can_channel="${HEX_ARM_CAN_CHANNEL:-}"
 gpu_enabled=0
 if (( $# > 0 )); then
   shift
@@ -32,13 +32,23 @@ if [[ -n "${can_interface}" && ! "${can_interface}" =~ ^[[:alnum:]_.-]{1,15}$ ]]
   echo "error: HEX_ARM_CAN_IFACE must be a conventional Linux interface name (1..15 bytes)" >&2
   exit 2
 fi
-if [[ -n "${can_interface}" && ! "${can_serial}" =~ ^[[:xdigit:]]{32}$ ]]; then
+if [[ -n "${can_serial}" && ! "${can_serial}" =~ ^[[:xdigit:]]{32}$ ]]; then
   echo "error: HEX_ARM_CAN_SERIAL must be the exact 32-digit USB serial" >&2
   exit 2
 fi
-if [[ ! "${can_channel}" =~ ^[0-3]$ ]]; then
+if [[ -n "${can_channel}" && ! "${can_channel}" =~ ^[0-3]$ ]]; then
   echo "error: HEX_ARM_CAN_CHANNEL must be one of: 0, 1, 2, 3" >&2
   exit 2
+fi
+
+# Names such as can0/can7 do not identify the physical USB channel. Resolve
+# omitted fingerprint fields from the explicitly selected netdev, never a
+# machine-specific serial or an interface-name suffix.
+if [[ -n "${can_interface}" && ( -z "${can_serial}" || -z "${can_channel}" ) ]]; then
+  binding="$(python3 "${workspace_dir}/scripts/bind-can-profile.py" --interface "${can_interface}")"
+  read -r detected_serial detected_channel <<<"${binding}"
+  can_serial="${can_serial:-${detected_serial}}"
+  can_channel="${can_channel:-${detected_channel}}"
 fi
 
 if ! uname -r | tr '[:upper:]' '[:lower:]' | grep -q microsoft; then
@@ -257,11 +267,11 @@ case "${action}" in
   real-launch)
     if [[ -z "${can_interface}" ]]; then
       echo "error: real-launch requires an explicit HEX_ARM_CAN_IFACE" >&2
-      echo "usage: HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 $0 real-launch {bringup|moveit} /absolute/container/profile.yaml [launch_arg:=value ...]" >&2
+      echo "usage: HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 $0 real-launch {bringup|moveit|startup} /absolute/container/profile.yaml [launch_arg:=value ...]" >&2
       exit 2
     fi
-    if (( $# < 2 )) || [[ "$1" != "bringup" && "$1" != "moveit" ]]; then
-      echo "error: real-launch requires target bringup or moveit plus an absolute container profile path" >&2
+    if (( $# < 2 )) || [[ "$1" != "bringup" && "$1" != "moveit" && "$1" != "startup" ]]; then
+      echo "error: real-launch requires target bringup, moveit or startup plus an absolute container profile path" >&2
       exit 2
     fi
     ensure_container_running

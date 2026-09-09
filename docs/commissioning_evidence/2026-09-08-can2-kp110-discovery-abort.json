@@ -1,0 +1,7 @@
+{
+  "time": "2026-09-08T06:05:51.036300+00:00",
+  "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml",
+  "steps": [],
+  "passed": false,
+  "error": "ROS operation timed out"
+}

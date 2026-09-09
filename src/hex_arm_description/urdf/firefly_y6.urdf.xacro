@@ -3,6 +3,8 @@
   <xacro:arg name="backend" default="view"/>
   <xacro:arg name="controllers_file" default=""/>
   <xacro:arg name="state_timeout_sec" default="0.100"/>
+  <xacro:arg name="initial_positions_file" default=""/>
+  <xacro:property name="initial_positions" value="${xacro.load_yaml('$(arg initial_positions_file)')['initial_positions'] if '$(arg initial_positions_file)' else dict(joint_1=0.0, joint_2=0.0, joint_3=1.57, joint_4=0.0, joint_5=0.0, joint_6=0.0)}"/>
 
   <!-- Geometry, inertials, joint origins, axes, and limits remain owned by the
        pinned upstream package. The contract test compares every field. -->
@@ -10,7 +12,7 @@
   <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.ros2_control.xacro"/>
 
   <xacro:if value="${'$(arg backend)' != 'view'}">
-    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)"/>
+    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)" initial_positions="${initial_positions}"/>
   </xacro:if>
 
   <xacro:if value="${'$(arg backend)' == 'gz'}">

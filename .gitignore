@@ -1,12 +1,74 @@
+# ROS 2 / colcon build outputs (including separate native/container builds)
 build/
 install/
 log/
+/build-*/
+/build_*/
+/install-*/
+/install_*/
+/log-*/
+/log_*/
+/logs/
 .colcon/
-.pytest_cache/
-__pycache__/
-*.pyc
+.ros/
+
+# CMake-generated files and local build presets
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+CMakeUserPresets.json
+
+# Rust build outputs, including vendored crates; keep Cargo.lock tracked
 target/
+*.rs.bk
+
+# Python environments, bytecode, test caches and coverage
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime logs and default rosbag recording directories
+*.log
+*.log.*
+rosbag2_*/
+
+# Machine-specific motor identities, calibration and profile backups
+config/hardware/*.local.yaml
+config/hardware/*.local.yaml.*
+config/hardware/*.local.yml
+config/hardware/*.local.yml.*
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Local experiments, editors and OS metadata
+/.tmp/
+/.tmp-*/
+/tmp/
+*.tmp
+*.swp
+*.swo
+*~
 .idea/
 .vscode/
-config/hardware/*.local.yaml
+.DS_Store
+Thumbs.db
 
+# Keep source, URDF/meshes, example profiles and curated documentation/evidence.
+# Store raw CAN captures and large trial outputs under log/.

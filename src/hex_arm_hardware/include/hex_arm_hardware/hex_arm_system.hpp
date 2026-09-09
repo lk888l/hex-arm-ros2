@@ -23,6 +23,7 @@ class HexArmSystem final : public hardware_interface::SystemInterface
 {
 public:
   RCLCPP_SHARED_PTR_DEFINITIONS(HexArmSystem)
+  ~HexArmSystem() override;
 
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareComponentInterfaceParams & params) override;
@@ -33,6 +34,8 @@ public:
   hardware_interface::CallbackReturn on_configure(
     const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_cleanup(
+    const rclcpp_lifecycle::State & previous_state) override;
+  hardware_interface::CallbackReturn on_shutdown(
     const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
@@ -50,7 +53,7 @@ private:
   void receive_state(sensor_msgs::msg::JointState::ConstSharedPtr message);
   bool call_safety_service(
     const rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr & client,
-    const std::string & operation);
+    const std::string & operation, bool wait_for_discovery = true);
   bool state_is_fresh() const;
   void stop_io_thread();
 
@@ -80,7 +83,9 @@ private:
   rclcpp::Node::SharedPtr io_node_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr executor_;
   std::thread executor_thread_;
+  std::atomic_bool stop_io_{false};
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr state_subscription_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr command_endpoint_;
   std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>> command_publisher_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr activate_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr deactivate_client_;

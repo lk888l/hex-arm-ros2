@@ -1,70 +1,213 @@
 # Firefly Y6 ROS 2 驱动
-[English (英文版)](README.md)
 
-最新固件与上位机 MIT-pp-test 对齐的部署入口见 [Meow MIT 实机部署](docs/meow_mit_deployment_cn.md)。新 profile 使用 `bus.protocol: meow`；下文旧 CiA402 commissioning 记录保留作历史证据。
+[English](README.md) | **中文**
 
+面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、MoveIt 2 运动规划与 Gazebo 仿真工作区。
+**只想打开 MoveIt 2 窗口，直接按下面的快速启动操作即可，无需连接机械臂。**
 
-面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、仿真与调试（commissioning）工作区。对外公开的运动接口是由 `joint_trajectory_controller` 暴露的标准 `control_msgs/action/FollowJointTrajectory` action：
+导航：[MoveIt 2 快速启动](#moveit-quick-start) · [其他模拟模式](#simulation-modes) ·
+[命令行驱动](#simulation-cli) · [常见问题](#troubleshooting) ·
+[Docker 进阶配置](#docker-setup) · [真机入口](#real-hardware) · [文档索引](#documentation)
 
-```text
-/firefly_arm_controller/follow_joint_trajectory
+<a id="moveit-quick-start"></a>
+
+## MoveIt 2 模拟窗口：快速启动
+
+此入口打开的是 **RViz + MotionPlanning 面板**，支持逆运动学、碰撞检测、轨迹规划和
+模拟执行。底层使用 ros2_control 的 `mock_components/GenericSystem`；不访问 USB/CAN
+硬件，也不模拟重力、接触等物理效果。需要物理仿真时使用后面的 Gazebo 模式。
+
+### 1. 在宿主机终端进入容器
+
+本地 Ubuntu 24.04：从图形桌面的终端执行。首次使用或 Dockerfile 改动后，先在仓库
+根目录运行 `./scripts/docker-dev.sh build` 构建镜像；日常启动只需：
+
+```bash
+cd /home/kk/kk_data/ros2_project/hex-arm-ros2
+./scripts/docker-dev.sh up
+./scripts/docker-dev.sh shell
 ```
 
-本项目刻意将 ROS 控制回路与 USB/CAN-FD 回路分离：
+仓库位置不同则替换第一行。WSL2 用户在 **Ubuntu/WSL 终端**中执行同一组脚本，
+不要从 PowerShell/CMD 启动；脚本会自动选择 WSLg 配置。
+容器已经运行时可直接执行 `./scripts/docker-dev.sh shell`。
 
-```text
-MoveIt / FollowJointTrajectory
-  -> ros2_control + firefly_arm_controller
-  -> hex_arm_hardware/SystemInterface
-  -> hex_arm_bridge（ROS lifecycle <-> Zenoh robot_api）
-  -> hex_arm_controller（Rust 安全状态机，1 kHz 软实时回路）
-  -> SocketCAN can0（现场）或用户态 gs_usb（旧路径）-> CAN-FD 电机
+### 2. 在容器内启动 MoveIt 2
+
+正确容器名为 `ros2-jazzy-arm`，提示符主机名为 `hex-arm-dev`。
+首次使用或源码改动后，在 `/workspaces/hex_arm_ros2` 下先运行 `./scripts/build.sh`
+构建工作区。已构建时，每次新开容器终端执行：
+
+```bash
+cd /workspaces/hex_arm_ros2
+source install/setup.bash
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ```
 
-Rust 进程拥有电机总线及全部安全决策权。ROS 桥接层不实现轨迹 action，也无法绕过独占会话或激活状态机。
+这里 `hex_arm_moveit_config` 是 ROS 包名，`moveit_mock.launch.py` 是该包的启动文件。
+它会依次加载模拟硬件、关节状态广播器和 `firefly_arm_controller`，随后启动
+`move_group` 与带 MoveIt 配置的 RViz。**这一条 launch 已包含所需控制器，不必再运行
+`hex_arm_bringup mock.launch.py`。** 保持这个终端运行，桌面会出现 RViz 窗口。
 
-## 支持的驱动后端（backend）
+默认关节姿态为 `[0, -1.350, 3.000, -0.300, 0, 0]` rad，命名状态为 `startup_ready`。这只设置模拟关节的初始显示；真机按实测反馈启动。
 
-| 后端 | 用途 | 硬件访问 |
+### 3. 在窗口里规划并模拟执行
+
+1. 在 **MotionPlanning** 中选择规划组 `arm`，以当前机器人状态作为起点。
+2. 使用 RViz 的 **Interact** 工具拖动末端交互标记，设置目标位置和姿态。
+3. 点击 **Plan** 检查轨迹预览；规划失败时先检查目标是否可达、有无碰撞或超限。
+4. 点击 **Plan & Execute** 规划并执行，观察模拟机械臂与关节状态更新。
+
+`Plan` 只生成预览；`Plan & Execute` 在此 mock 入口下驱动模拟关节。
+配置中的 `commissioning_start` 仅是规划参考，不是已标定的真机 home，也不保证
+在严格碰撞模型下可以规划到达。
+
+### 常用启动参数
+
+参数写在 launch 文件名之后，格式为 `参数名:=值`。
+
+| 参数 | 默认值 | 说明 |
 |---|---|---|
-| `view` | URDF、关节方向、限位与 RViz 检查 | 无 |
-| `mock` | ros2_control/JTC 生命周期与 action 集成测试 | 无 |
-| `gz` | 通过 `gz_ros2_control` 使用 Gazebo Harmonic 物理仿真 | 无 |
-| `real` | Rust 控制器、Zenoh 桥接、ros2_control | 宿主机 `can0`，或旧 `gs_usb` 的 `/dev/bus/usb` |
-
-## Docker 开发环境启动
-
-### 本地 Ubuntu 24.04（当前机器）
-
-“本地 Ubuntu”是指电脑直接安装并启动 Ubuntu，而不是在 Windows 中运行 Ubuntu。
-当前仓库路径 `/home/kk/kk_data/ros2_project/hex-arm-ros2` 属于这种情况。在 Ubuntu
-桌面的终端中执行：
+| `use_rviz` | `true` | 自动打开 RViz；设为 `false` 可运行无界面的规划与模拟执行 |
+| `limits_profile` | `sim` | MoveIt 速度/加速度限位配置，可选 `sim`、`commissioning`、`verified`；日常模拟使用 `sim` |
 
 ```bash
-cd /home/kk/kk_data/ros2_project/hex-arm-ros2
-./scripts/docker-dev.sh build
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh doctor
-./scripts/docker-dev.sh shell
+# 无界面运行 MoveIt mock
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py use_rviz:=false
+
+# 在模拟窗口中体验保守低速限位
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py limits_profile:=commissioning
+
+# 查看启动参数，不启动节点
+ros2 launch hex_arm_moveit_config moveit_mock.launch.py --show-args
 ```
 
-`build` 只需在首次使用或 Dockerfile 改动后执行。以后日常启动通常只需要：
+选择 `limits_profile` 只改变规划限位，后端始终是 mock。各配置的具体数值与碰撞模型
+说明见 [MoveIt 仿真指南](docs/moveit_simulation_cn.md)。
+
+停止时在 launch 终端按 `Ctrl+C`，等待所有子进程退出。切换模式前先停止当前 launch；
+同一个 `ROS_DOMAIN_ID` 下不要同时启动多套机械臂 launch，以免控制器、TF 和关节状态冲突。
+
+<a id="simulation-modes"></a>
+
+## 其他模拟模式：按用途选择
+
+以下命令均在**已经构建并 source 的容器终端**中执行，一次选择一种模式。
+MoveIt mock 使用 `mock` 后端；它与普通 mock 的区别是额外提供 MoveIt 规划服务和面板。
+
+| 模式 | 窗口与功能 | 适合做什么 |
+|---|---|---|
+| **MoveIt mock**（上文） | RViz + MotionPlanning + 模拟控制器 | 拖动末端、规划、模拟执行 |
+| `view` | RViz + 关节滑块，无轨迹控制器 | 检查 URDF、关节方向和限位 |
+| 普通 `mock` | RViz + ros2_control 模拟硬件，无 MoveIt 面板 | 测试轨迹 action 和控制器生命周期 |
+| `gz` | Gazebo Harmonic + 可选 RViz，无 MoveIt 面板 | 物理仿真与轨迹控制 |
 
 ```bash
-cd /home/kk/kk_data/ros2_project/hex-arm-ros2
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh shell
+# URDF + 关节滑块 + RViz
+ros2 launch hex_arm_bringup view.launch.py
+
+# 普通 mock：通过命令行或脚本发送关节轨迹
+ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
+
+# Gazebo 物理仿真 + RViz
+ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 ```
 
-脚本在本地 Ubuntu 中自动使用 `compose.ubuntu.yaml`，并只读传入当前 X11 授权
-cookie。AMD/Intel 通用路径映射 `/dev/dri`；NVIDIA override 改由 Container
-Toolkit 注入设备。
+这三条命令都不会加载 MoveIt MotionPlanning 面板。需要规划窗口时，使用上文的
+`ros2 launch hex_arm_moveit_config moveit_mock.launch.py`。
 
-#### 不使用辅助脚本：原生 Docker Compose 命令
+<a id="simulation-cli"></a>
 
-`docker compose` 是 Docker 自带的 Compose CLI。以下命令与本地 Ubuntu 下的
-`docker-dev.sh` 等价。必须从 Ubuntu 图形桌面的终端执行，并在当前终端设置
-`HEX_ARM_XAUTHORITY`：
+## 用命令行驱动模拟机械臂（`ros2 action send_goal` 详解）
+
+先启动上文的普通 `mock` 或 `gz` 模式。另开一个宿主机终端，通过
+`./scripts/docker-dev.sh shell` 进入同一个容器，然后执行：
+
+```bash
+cd /workspaces/hex_arm_ros2
+source install/setup.bash
+ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
+  control_msgs/action/FollowJointTrajectory \
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+```
+
+执行成功时应看到 `Goal finished with status: SUCCEEDED`（`error_code: 0`）。
+用 `ros2 topic echo --once /joint_states` 检查反馈。此命令直接给轨迹控制器发送目标，
+不会经过 MoveIt 的规划和碰撞检查；六个关节角以弧度填写，并遵守 URDF 限位。
+
+<details>
+<summary>展开：action 命令格式、轨迹字段与使用细节</summary>
+
+### 命令格式
+
+```text
+ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+```
+
+| 参数 | 本例取值 | 说明 |
+|---|---|---|
+| 子命令 | `ros2 action send_goal` | 发送 action goal 的 CLI 子命令；`ros2 action` 还支持 `list`、`info`、`type` |
+| action server | `/firefly_arm_controller/follow_joint_trajectory` | 轨迹控制器暴露的 action 服务端。必须先启动 mock/gz launch，否则 CLI 会一直显示 waiting |
+| action 类型 | `control_msgs/action/FollowJointTrajectory` | 决定 YAML 的解析方式，必须与工程一致 |
+| goal 内容 | 双引号包裹的 YAML | 字段规则见下 |
+
+### YAML 字段规则
+
+- `trajectory.joint_names`：关节名列表。本例按 `joint_1` ~ `joint_6` 排列，必须 6 个全部给出（控制器配置了 `allow_partial_joints_goal: false`，缺关节会被拒绝）。
+- `trajectory.points`：轨迹点数组，本例只给 1 个点。每个点包含：
+  - `positions`：目标角度，单位**弧度（rad）**，数量必须等于 6 且按 `joint_names` 顺序。建议保持在 URDF 限位内：joint_1 ±2.86、joint_2 −1.57~2.09、joint_3 0~3.14、joint_4 ±1.57、joint_5 ±1.54、joint_6 ±2.79。注意 mock/gz 配置**未启用命令限位拦截**，超限位置不会被自动钳制，请自行确保数值安全。
+  - `time_from_start`：相对目标被接受时刻的时间偏移，`{sec: 2, nanosec: 0}` 表示 2 秒内到达；控制器使用 `interpolation_method: splines`（样条插值）平滑运动。
+  - 可选字段：`velocities`、`accelerations`、`effort`；不填时由控制器自行插值。
+  - 可以放多个点组成多段轨迹，每段的 `time_from_start` 递增即可。
+
+### Shell 与使用细节
+
+- 整段 YAML 用**双引号**包住，防止空格被拆成多个 shell 参数；行尾的 `\` 是续行符，全部写成一行也可以。
+- 先 source 环境（交互式 bash 会自动加载；否则手动执行 `source /opt/ros/jazzy/setup.bash` 与 `source install/setup.bash`）。
+- 发送后应看到 `Goal accepted with ID: ...`；执行完成输出 `Goal finished with status: SUCCEEDED`（`error_code: 0`）。
+- 验证实际到达位置：`ros2 topic echo --once /joint_states`，`position` 应与目标一致。
+- 再发一个新 goal 会取消/替换正在执行的旧 goal（控制器默认行为）；`Ctrl-C` 只结束 CLI 客户端本身。
+- gz 模式使用同样的命令；gz 走仿真时间，轨迹按 Gazebo 时钟推进。
+
+更多图形界面与命令行排查见
+[docs/gui_and_cli_simulation_cn.md](docs/gui_and_cli_simulation_cn.md)。
+
+</details>
+
+<a id="troubleshooting"></a>
+
+## 常见问题
+
+| 现象 | 处理方法 |
+|---|---|
+| `ros2: command not found` | 从宿主机用 `./scripts/docker-dev.sh shell` 进入容器；容器内执行 `source /opt/ros/jazzy/setup.bash` 和 `source /workspaces/hex_arm_ros2/install/setup.bash` |
+| 找不到 `hex_arm_moveit_config` 或 `hex_arm_moveit_runtime` | 在正确容器的 `/workspaces/hex_arm_ros2` 下执行 `./scripts/build.sh`，成功后重新 `source install/setup.bash` |
+| source 报 `/workspaces/hex_arm_ros2/...` 路径缺失 | 确认进入的是 `ros2-jazzy-arm`（主机名 `hex-arm-dev`）；不要在旧 `ros2-jazzy` 容器或宿主机复用容器生成的 symlink-install |
+| 窗口不出现，或报 `could not connect to display` / `Authorization required` | 在**宿主机图形终端、仓库根目录**运行 `./scripts/docker-dev.sh doctor`；修复后重新进入容器并启动。不要使用 `xhost +` |
+| 只有模型/滑块，没有 MotionPlanning | 停止当前 launch，改用 `hex_arm_moveit_config moveit_mock.launch.py`，并保留 `use_rviz:=true` |
+| 控制器重名、关节状态跳动或启动卡在控制器阶段 | 检查是否同时运行了其他机械臂 launch；在各自的 launch 终端正常退出后，只保留一个模式 |
+| Plan 失败、目标显示碰撞或超限 | 从当前状态设置一个可达、无碰撞的目标；不要把 `commissioning_start` 当作必定有效的初始演示目标 |
+
+更多 X11、WSLg、NVIDIA 与 CLI 排查见
+[图形界面和命令行模拟指南](docs/gui_and_cli_simulation_cn.md)。
+
+<a id="docker-setup"></a>
+
+## Docker 开发环境（进阶）
+
+日常启动使用前面的 `docker-dev.sh` 即可。本地 Ubuntu 自动选择
+`compose.ubuntu.yaml`，并只读传入当前 X11 授权 cookie；WSL2 自动选择
+`compose.yaml` 与 WSLg socket。`HEX_ARM_GPU=auto` 会在检测到可用 NVIDIA GPU 时
+叠加 `compose.nvidia.yaml`，需要宿主机已安装 NVIDIA Container Toolkit。
+
+<details>
+<summary>原生 Docker Compose 命令</summary>
+
+### 不使用辅助脚本：原生 Docker Compose 命令
+
+`docker compose` 是 Docker 自带的 Compose CLI。以下命令对应本地 Ubuntu 的
+AMD/Intel DRI 路径；NVIDIA 主机还需叠加下一项中的 override。
+必须从 Ubuntu 图形桌面的终端执行，并在当前终端设置 `HEX_ARM_XAUTHORITY`：
 
 ```bash
 cd /home/kk/kk_data/ros2_project/hex-arm-ros2
@@ -108,7 +251,12 @@ docker compose -f compose.ubuntu.yaml down
 命令。请不要把本地 Ubuntu 的 `compose.ubuntu.yaml` 换成 WSL2 使用的
 `compose.yaml`，也不需要执行 `xhost +`。
 
-#### NVIDIA 独立显卡加速
+</details>
+
+<details>
+<summary>NVIDIA 独立显卡：安装与验证</summary>
+
+### NVIDIA 独立显卡加速
 
 本地 Ubuntu 上，脚本默认使用 `HEX_ARM_GPU=auto`：检测到可用 NVIDIA GPU 时
 自动叠加 `compose.nvidia.yaml`；没有 NVIDIA GPU 时保持 `/dev/dri` 通用路径。
@@ -170,6 +318,11 @@ override 使用标准 Compose `!reset` 标签；若 `docker compose config` 无�
 写入 Dockerfile。若同时进行 LeRobot 等 CUDA 训练，RViz/Gazebo 会与训练任务
 共享显存和算力，建议错峰运行。
 
+</details>
+
+<details>
+<summary>WSL2 启动说明</summary>
+
 ### WSL2（仅 Windows 10/11）
 
 WSL2 是 **Windows Subsystem for Linux 2**，即 Windows 内置的 Linux 虚拟化
@@ -191,77 +344,103 @@ cd /home/kk_wsl/ros2_ws/code/hex_arm_ros2
 不需要执行权限过宽的 `xhost +`。现有镜像本身已经是 Ubuntu 24.04（ROS 2
 Jazzy），因此无需再复制维护一份内容相同的 Ubuntu Dockerfile。
 
-容器内的提示符主机名为 `hex-arm-dev`。较旧的 `ros2-jazzy` 容器使用主机名 `ros2-dev`；请勿在其中 source 本工作区生成的 `install/` 目录树。`--symlink-install` 构建绑定在 `ros2-jazzy-arm` 使用的 `/workspaces/hex_arm_ros2` 挂载点上。
+</details>
 
-在 `ros2-jazzy-arm` 内构建一次：
+<a id="real-hardware"></a>
 
-```bash
-cd /workspaces/hex_arm_ros2
-./scripts/build.sh
-source install/setup.bash
-```
+## 真机入口与调试参考
 
-然后每个终端选择一个图形化模式：
+### CAN 接口可以选择
 
-```bash
-# URDF + 关节滑块 + RViz
-ros2 launch hex_arm_bringup view.launch.py
-
-# ros2_control GenericSystem + 轨迹控制器 + RViz
-ros2 launch hex_arm_bringup mock.launch.py use_rviz:=true
-
-# Gazebo Harmonic 物理仿真 + RViz
-ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
-```
-
-在启动另一种模式之前，请先按 `Ctrl-C` 停止当前 launch。如果 `source
-install/setup.bash` 报错称 `/workspaces/hex_arm_ros2` 下的路径缺失，说明当前
-所在的容器不对；请在宿主机执行 `./scripts/docker-dev.sh shell` 进入正确容器。
-
-## 用命令行驱动模拟机械臂（`ros2 action send_goal` 详解）
-
-mock / gz 模式启动后，在另一个终端（已 `source install/setup.bash`）执行：
+驱动没有写死 `can0`。接口名由 profile 的 `bus.interface` 指定；物理通道及
+USB 序列号由 sysfs 识别，不从 `canN` 的数字猜测。切换端口时，在停止控制器后
+为所选接口生成一份新的配置，电机身份、零点和运动参数会保留：
 
 ```bash
-ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
-  control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+# 宿主机仓库目录；先确保所选接口已按 1M/4M 配置并启用。
+export HEX_ARM_CAN_IFACE=can0
+python3 scripts/bind-can-profile.py \
+  --interface "$HEX_ARM_CAN_IFACE" \
+  --profile config/hardware/firefly_y6.meow.local.yaml \
+  --output config/hardware/firefly_y6.selected.local.yaml
+
+./scripts/docker-dev.sh doctor
+./scripts/docker-dev.sh real-launch bringup \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.selected.local.yaml \
+  activate_hardware:=false use_rviz:=false
 ```
 
-### 命令格式
+把 `can0` 换成实际接口即可。输入 profile 必须属于这台机械臂；上例
+`firefly_y6.meow.local.yaml` 是本机采集的本地文件，不随 Git 分发。
+工具不覆盖已有输出，重新选择时请使用新文件名。运行过程中不热切换总线。
+`HEX_ARM_CAN_SERIAL`、`HEX_ARM_CAN_CHANNEL` 仍可显式指定；省略时脚本读取所选
+接口的实际值。控制器仍会核对完整六轴身份、CAN 时序及适配器。
 
-```text
-ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
+### 折叠参考与顺序启动试验
+
+断电折叠参考为 `[0, -1.570, 3.140, 0, 0, 0]` rad；理想启动姿态为
+`[0, -1.350, 3.000, -0.300, 0, 0]` rad。
+`moveit_mock.launch.py` 默认直接显示理想姿态，RViz 的命名状态为
+`startup_ready`。真实启动顺序是 **J2 → −1.350、J4 → −0.300、J3 → 3.000**，
+各阶段分别用 8、10、6 秒的平滑轨迹，并等待反馈到位后再进入下一阶段。
+
+已确认参考姿态、无负载及实物路径无碰撞后，可使用专门的有界 Meow 试验入口：
+
+```bash
+# 会使能真实电机并移动；在已确认的折叠参考姿态运行。
+HEX_ARM_CAN_IFACE=can0 ./scripts/docker-dev.sh real-launch startup \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.local.yaml \
+  allow_startup_motion:=true
 ```
 
-| 参数 | 本例取值 | 说明 |
-|---|---|---|
-| 子命令 | `ros2 action send_goal` | 发送 action goal 的 CLI 子命令；`ros2 action` 还支持 `list`、`info`、`type` |
-| action server | `/firefly_arm_controller/follow_joint_trajectory` | 轨迹控制器暴露的 action 服务端。必须先启动 mock/gz launch，否则 CLI 会一直显示 waiting |
-| action 类型 | `control_msgs/action/FollowJointTrajectory` | 决定 YAML 的解析方式，必须与工程一致 |
-| goal 内容 | 双引号包裹的 YAML | 字段规则见下 |
+它先做完整身份/反馈/力矩预算检查，原位渐入重力补偿，然后执行固定顺序；
+结束后保持 3 秒并确认失能。任一步超时、反馈失效、速度或跟踪超限都会停止。
+此入口不会设置 `calibrated: true`，也不会自动启动 MoveIt 执行。到位容差沿用
+GUI 的 0.003 Rev（约 0.01885 rad），不等于 ROS 轨迹控制器的 0.005 rad 验收。
 
-### YAML 字段规则
+MIT-pp-test 的 Kp/Kd 基线为 **80 Nm/rad、15 Nm·s/rad**。GUI 基线重力比例为
+`[0,0.3,0.7,0.7,0,0]`；本机无夹爪实测后调整为 `[0,1.0,1.05,0.7,0,0]`，
+J3 的 PD 预算为 450‰，其余轴为 500‰，总输出预算仍为 650‰。
+固定顺序已在真机完成，最终 J2/J3/J4 误差约 0.0020/0.0043/0.0025 rad。
+这些是本机参数，具体范围和证据见 [现场记录](docs/commissioning_evidence/2026-09-07-meow-startup.md)。
+出厂校准由驱动读取。中间折叠路径的网格接触已由本次
+操作者确认不构成实物碰撞；该固定试验不使用 MoveIt 规划，严格碰撞矩阵仍保留。
+J4 commissioning 下限为 −0.35 rad，以包含 −0.300 rad 目标。
 
-- `trajectory.joint_names`：关节名列表。**顺序固定**为 `joint_1` ~ `joint_6`，且必须 6 个全部给出（控制器配置了 `allow_partial_joints_goal: false`，缺关节会被拒绝）。
-- `trajectory.points`：轨迹点数组，本例只给 1 个点。每个点包含：
-  - `positions`：目标角度，单位**弧度（rad）**，数量必须等于 6 且按 `joint_names` 顺序。建议保持在 URDF 限位内：joint_1 ±2.86、joint_2 −1.57~2.09、joint_3 0~3.14、joint_4 ±1.57、joint_5 ±1.54、joint_6 ±2.79。注意 mock/gz 配置**未启用命令限位拦截**，超限位置不会被自动钳制，请自行确保数值安全。
-  - `time_from_start`：相对目标被接受时刻的时间偏移，`{sec: 2, nanosec: 0}` 表示 2 秒内到达；控制器使用 `interpolation_method: splines`（样条插值）平滑运动。
-  - 可选字段：`velocities`、`accelerations`、`effort`；不填时由控制器自行插值。
-  - 可以放多个点组成多段轨迹，每段的 `time_from_start` 递增即可。
+**J4 Kp=110 下，can2 已通过顺序启动、MoveIt 小步执行和 60 秒保持，该轮未复现此前的 J4 跟踪超限。**
+后续 15 mrad 的 J2 回程触发原有到位保护，双向运动仍待调优。当前 Kp 为
+`[80,80,120,110,80,80]`、全部 Kd=15。以已核对的折叠姿态执行：
 
-### Shell 与使用细节
+```bash
+HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
+  enable_execution:=true
+```
 
-- 整段 YAML 用**双引号**包住，防止空格被拆成多个 shell 参数；行尾的 `\` 是续行符，全部写成一行也可以。
-- 先 source 环境（交互式 bash 会自动加载；否则手动执行 `source /opt/ros/jazzy/setup.bash` 与 `source install/setup.bash`）。
-- 发送后应看到 `Goal accepted with ID: ...`；执行完成输出 `Goal finished with status: SUCCEEDED`（`error_code: 0`）。
-- 验证实际到达位置：`ros2 topic echo --once /joint_states`，`position` 应与目标一致。
-- 再发一个新 goal 会取消/替换正在执行的旧 goal（控制器默认行为）；`Ctrl-C` 只结束 CLI 客户端本身。
-- gz 模式使用同样的命令；gz 走仿真时间，轨迹按 Gazebo 时钟推进。
+`startup_ready` 默认 true：控制器就绪后处理 J6 偏差，再严格按 J2→J4→J3
+到 `[0,-1.350,3.000,-0.300,0,0]` 并持续保持。J2/J3/J4 在各自动作前保持实测折叠位置，
+小摆放偏差在使能前检查，不重新设置零偏。等待日志
+`startup_ready reached and verified; controller continues holding` 后再操作 RViz 执行。需要原位保持时加
+`startup_ready:=false`；仅观察时省略 `enable_execution:=true`。
+J6 保留零偏，自动回零仍在 profile 范围内限速进行。已有成功试验仅覆盖受限启动与目标邻域，
+完整行程和带负载运动尚未验收。运行、停止及参数范围见
+[当前 can2 真机部署记录](docs/commissioning_evidence/2026-09-08-can2-kp110-deployment.md)。
 
-更多图形界面与命令行排查见
-[docs/gui_and_cli_simulation_cn.md](docs/gui_and_cli_simulation_cn.md)。
 
+真机已有独立的观察/规划入口；执行需要完成 profile 标定和实机验收。
+最新 Meow 固件与上位机 MIT-pp-test 对齐的部署流程见
+[Meow MIT 实机部署](docs/meow_mit_deployment_cn.md)，使用 `bus.protocol: meow`。
+模拟规划或执行成功，不代表真机已完成验证。
+
+真机调试需具备物理急停，未知总线先做只读发现。在 Docker 中运行真机时使用
+`./scripts/docker-dev.sh real-launch` 受监督入口，停止后等待控制器确认失能并退出。
+完整步骤见部署文档与 [commissioning 清单](docs/commissioning_cn.md)。
+
+<details>
+<summary>历史 CiA402 参考：总线发现、受监督启动与安全边界</summary>
+
+以下保留旧 CiA402 调试背景，其中 `can2`、轴参数和单圈窗口均为历史记录。
+新 Meow 固件的配置、单位与标定要求以部署文档为准，不直接沿用旧参数。
 
 ## 真机：先做只读发现
 
@@ -431,6 +610,29 @@ MoveIt 执行。`link_6` 暂时作为规划末端，仍需审查已标定的工�
 其 launch 契约和 mock 回归已做离线测试，但本文不声称已经执行过真机电机动作或
 MoveIt 真机轨迹。
 
+</details>
+
+## 控制接口与架构
+
+对外公开的运动接口是由 `joint_trajectory_controller` 暴露的标准 `control_msgs/action/FollowJointTrajectory` action：
+
+```text
+/firefly_arm_controller/follow_joint_trajectory
+```
+
+真机执行链路将 ROS 控制回路与 USB/CAN-FD 回路分离：
+
+```text
+MoveIt / FollowJointTrajectory
+  -> ros2_control + firefly_arm_controller
+  -> hex_arm_hardware/SystemInterface
+  -> hex_arm_bridge（ROS lifecycle <-> Zenoh robot_api）
+  -> hex_arm_controller（Rust 安全状态机，1 kHz 软实时回路）
+  -> SocketCAN can0（现场）或用户态 gs_usb（旧路径）-> CAN-FD 电机
+```
+
+Rust 进程拥有电机总线及全部安全决策权。ROS 桥接层不实现轨迹 action，也无法绕过独占会话或激活状态机。
+
 ## 可复现性
 
 `hex_arm.repos` 固定了上游源码的修订版本。仓库中检入的 `xpkg_urdf_firefly_y6` 包是指定描述修订版本的可溯源快照（provenance-preserving snapshot），包含原始网格文件。仅在更新或审计上游源码时运行：
@@ -443,6 +645,8 @@ vcs import . < hex_arm.repos
 
 ## 测试级别
 
+以下命令在已经构建并 source 的容器终端中执行：
+
 ```bash
 ./scripts/test.sh unit
 ./scripts/test.sh protocol
@@ -450,4 +654,24 @@ vcs import . < hex_arm.repos
 ./scripts/test.sh gz
 ```
 
-`unit` 不依赖硬件。`protocol` 使用 mock 电机后端启动 Rust 控制器，并验证 Zenoh 发现/事件以及 ROS 生命周期桥接。`mock` 测试 FollowJointTrajectory 的发送/取消和控制器生命周期。`gz` 以无头模式启动 Gazebo 并验证两条轨迹。真实调试是 `docs/commissioning.md` 中一份单独的、有人监督的检查清单。
+`unit` 不依赖硬件。`protocol` 使用 mock 电机后端启动 Rust 控制器，并验证 Zenoh
+发现/事件以及 ROS 生命周期桥接。`mock` 测试 FollowJointTrajectory 的发送/取消和
+控制器生命周期。`gz` 以无头模式启动 Gazebo 并验证两条轨迹。真机调试使用独立的
+[有人监督的检查清单](docs/commissioning_cn.md)。
+
+MoveIt 的规划、严格碰撞检查与模拟执行有独立的无界面冒烟测试，在构建并 source 后运行：
+
+```bash
+python3 src/hex_arm_moveit_config/test/test_moveit_mock.py
+```
+
+<a id="documentation"></a>
+
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [MoveIt 仿真指南](docs/moveit_simulation_cn.md) | 模拟窗口、限速配置、碰撞模型与 MoveIt 真机规划入口 |
+| [图形界面与命令行模拟指南](docs/gui_and_cli_simulation_cn.md) | X11/WSLg/NVIDIA 诊断、action 与 Python 驱动示例 |
+| [Meow MIT 实机部署](docs/meow_mit_deployment_cn.md) | 新固件协议、参数单位、profile 与当前部署流程 |
+| [Commissioning 清单](docs/commissioning_cn.md) | 硬件发现、标定、受监督操作与历史验收记录 |

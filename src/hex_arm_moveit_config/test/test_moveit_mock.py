@@ -157,6 +157,17 @@ def main() -> None:
         # Let that independent client settle before the first execution.
         time.sleep(1.0)
 
+        # Validate the actual GenericSystem state, not just the YAML/SRDF.
+        expected_start = [0.0, -1.350, 3.000, -0.300, 0.0, 0.0]
+        deadline = time.monotonic() + 5.0
+        while not all(name in node.positions for name in JOINTS) and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        observed = [node.positions.get(name, float("inf")) for name in JOINTS]
+        if any(abs(actual - expected) > 1.0e-5 for actual, expected in zip(observed, expected_start)):
+            raise RuntimeError(f"mock did not start at the requested ready pose: {observed}")
+        if not node.state_validity(expected_start).valid:
+            raise RuntimeError("requested mock ready pose is not collision-free")
+
         surveyed_validity = node.state_validity(SURVEYED_START)
         surveyed_pairs = {
             tuple(sorted((contact.contact_body_1, contact.contact_body_2)))

@@ -7,7 +7,7 @@ set -Eeuo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: supervised-real-launch.sh {bringup|moveit} /absolute/container/profile.yaml [launch_arg:=value ...]
+usage: supervised-real-launch.sh {bringup|moveit|startup} /absolute/container/profile.yaml [launch_arg:=value ...]
        supervised-real-launch.sh --forward-signal <32-lowercase-hex-token> {INT|TERM}
 EOF
 }
@@ -184,8 +184,12 @@ case "${target}" in
     launch_package="hex_arm_moveit_config"
     launch_file="moveit_real.launch.py"
     ;;
+  startup)
+    launch_package="hex_arm_bringup"
+    launch_file="startup.launch.py"
+    ;;
   *)
-    echo "error: real-launch target must be one of: bringup, moveit" >&2
+    echo "error: real-launch target must be one of: bringup, moveit, startup" >&2
     usage
     exit 2
     ;;

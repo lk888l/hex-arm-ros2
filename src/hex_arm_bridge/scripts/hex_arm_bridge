@@ -34,8 +34,14 @@ def main() -> None:
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:
-        while rclpy.ok() and not stop_requested.is_set():
+        while rclpy.ok() and not stop_requested.is_set() and not node._shutdown_requested.is_set():
             executor.spin_once(timeout_sec=0.1)
+            # Jazzy may immediately rebuild the wait set while a callback
+            # group is still busy. Yield the GIL explicitly: otherwise this
+            # loop can starve both its workers and native Zenoh callbacks.
+            # A 1 ms yield fits well inside the 10 ms streaming period and
+            # also makes a pending shutdown wake this loop immediately.
+            stop_requested.wait(0.001)
     except (KeyboardInterrupt, ExternalShutdownException):
         node.request_stop()
         pass
