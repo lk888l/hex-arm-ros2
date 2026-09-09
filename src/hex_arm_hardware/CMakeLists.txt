@@ -32,6 +32,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_joint_mapping test/test_joint_mapping.cpp)
   target_include_directories(test_joint_mapping PRIVATE include)
   ament_target_dependencies(test_joint_mapping sensor_msgs)
+  ament_add_gtest(test_io_shutdown test/test_io_shutdown.cpp)
+  target_link_libraries(test_io_shutdown ${PROJECT_NAME})
 endif()
 
 ament_export_include_directories(include)

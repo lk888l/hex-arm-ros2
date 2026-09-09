@@ -1,0 +1,78 @@
+{
+  "time": "2026-09-08T03:08:04.639161+00:00",
+  "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml",
+  "steps": [
+    {
+      "step": "startup_j2",
+      "started_at": 2936.442180881,
+      "duration_sec": 8,
+      "initial": [
+        -4.5688822865486145e-05,
+        -1.5677013397216797,
+        3.136993885040283,
+        0.0015051430091261864,
+        0.0006325431168079376,
+        -0.0009298920631408691
+      ],
+      "target": [
+        0.0,
+        -1.35,
+        3.14,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "actual": [
+        -7.527507841587067e-05,
+        -1.3518620729446411,
+        3.136927604675293,
+        0.0006808526813983917,
+        0.0003160834312438965,
+        -0.0006231814622879028
+      ],
+      "status": 4,
+      "error_code": 0,
+      "message": "Goal successfully reached!"
+    },
+    {
+      "step": "startup_j4",
+      "started_at": 2944.752212605,
+      "duration_sec": 10,
+      "initial": [
+        -7.527507841587067e-05,
+        -1.3518620729446411,
+        3.136927604675293,
+        0.0006808526813983917,
+        0.0003160834312438965,
+        -0.0006231814622879028
+      ],
+      "target": [
+        0.0,
+        -1.35,
+        3.14,
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "actual": [
+        -7.527507841587067e-05,
+        -1.3518414497375488,
+        3.136918544769287,
+        -0.10103188455104828,
+        0.000440794974565506,
+        -0.0006138086318969727
+      ],
+      "status": 6,
+      "error_code": -4,
+      "message": "Aborted due to path tolerance violation"
+    }
+  ],
+  "passed": false,
+  "error": "fixed startup FJT failed: {'step': 'startup_j4', 'started_at': 2944.752212605, 'duration_sec': 10, 'initial': [-7.527507841587067e-05, -1.3518620729446411, 3.136927604675293, 0.0006808526813983917, 0.0003160834312438965, -0.0006231814622879028], 'target': [0.0, -1.35, 3.14, -0.3, 0.0, 0.0], 'actual': [-7.527507841587067e-05, -1.3518414497375488, 3.136918544769287, -0.10103188455104828, 0.000440794974565506, -0.0006138086318969727], 'status': 6, 'error_code': -4, 'message': 'Aborted due to path tolerance violation'}",
+  "deactivated": true,
+  "state_stream": {
+    "samples": 1748,
+    "maximum_gap_sec": 0.01068167999983416
+  },
+  "scope": "Latest real startup coordinator: J2 succeeded, J4 path tolerance abort; not a passed deployment result."
+}

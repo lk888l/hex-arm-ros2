@@ -51,6 +51,7 @@ def _launch_setup(context):
             mappings={
                 "backend": "mock",
                 "controllers_file": str(controllers_file),
+                "initial_positions_file": str(moveit_share / "config" / "initial_positions.yaml"),
             },
         )
         .robot_description_semantic(file_path="config/firefly_y6.srdf")

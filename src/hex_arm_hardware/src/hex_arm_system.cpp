@@ -48,6 +48,15 @@ bool has_interface(
 
 }  // namespace
 
+HexArmSystem::~HexArmSystem()
+{
+  // ResourceManager can destroy a failed component without on_cleanup.
+  // Remote disable belongs to lifecycle/supervisor handling; always reclaim
+  // the local executor before std::thread's destructor is reached.
+  active_.store(false);
+  stop_io_thread();
+}
+
 hardware_interface::CallbackReturn HexArmSystem::on_init(
   const hardware_interface::HardwareComponentInterfaceParams & params)
 {
@@ -137,13 +146,18 @@ hardware_interface::CallbackReturn HexArmSystem::on_configure(
   state_subscription_ = io_node_->create_subscription<sensor_msgs::msg::JointState>(
     state_topic_, rclcpp::SensorDataQoS(),
     std::bind(&HexArmSystem::receive_state, this, std::placeholders::_1));
-  auto command_endpoint = io_node_->create_publisher<sensor_msgs::msg::JointState>(
+  command_endpoint_ = io_node_->create_publisher<sensor_msgs::msg::JointState>(
     command_topic_, rclcpp::QoS(1).reliable());
   command_publisher_ =
-    std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(command_endpoint);
+    std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(command_endpoint_);
   activate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(activate_service_);
   deactivate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(deactivate_service_);
-  executor_thread_ = std::thread([this]() {executor_->spin();});
+  stop_io_.store(false);
+  executor_thread_ = std::thread([this]() {
+      while (!stop_io_.load() && rclcpp::ok(io_node_->get_node_base_interface()->get_context())) {
+        executor_->spin_once(std::chrono::milliseconds(20));
+      }
+    });
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -155,6 +169,19 @@ hardware_interface::CallbackReturn HexArmSystem::on_cleanup(
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+hardware_interface::CallbackReturn HexArmSystem::on_shutdown(
+  const rclcpp_lifecycle::State &)
+{
+  const bool was_active = active_.exchange(false);
+  bool stopped = true;
+  if (was_active && io_node_ && rclcpp::ok(io_node_->get_node_base_interface()->get_context())) {
+    stopped = call_safety_service(deactivate_client_, "shutdown", false);
+  }
+  stop_io_thread();
+  return stopped ? hardware_interface::CallbackReturn::SUCCESS :
+         hardware_interface::CallbackReturn::ERROR;
+}
+
 hardware_interface::CallbackReturn HexArmSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
@@ -162,19 +189,22 @@ hardware_interface::CallbackReturn HexArmSystem::on_activate(
     std::unique_lock<std::mutex> lock(state_mutex_);
     const bool have_fresh_state = state_condition_.wait_for(
       lock, activation_timeout_, [this]() {
-        return have_state_ &&
+        // DDS matching must precede motor enable and the 100 ms watchdog.
+        return command_endpoint_ && command_endpoint_->get_subscription_count() > 0 &&
+               have_state_ &&
                (std::chrono::steady_clock::now() - last_state_time_) <= state_timeout_;
       });
     if (!have_fresh_state) {
       RCLCPP_ERROR(
         io_node_->get_logger(),
-        "activation rejected: no fresh six-joint feedback within %.3f s",
+        "activation rejected: fresh six-joint feedback and matched command subscriber required within %.3f s",
         activation_timeout_.count());
       return hardware_interface::CallbackReturn::ERROR;
     }
     command_position_ = pending_position_;
     std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
   }
+  RCLCPP_INFO(io_node_->get_logger(), "Feedback fresh and command subscriber matched; requesting enable");
   if (!call_safety_service(activate_client_, "activate")) {
     return hardware_interface::CallbackReturn::ERROR;
   }
@@ -186,7 +216,7 @@ hardware_interface::CallbackReturn HexArmSystem::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
   active_.store(false);
-  return call_safety_service(deactivate_client_, "deactivate") ?
+  return call_safety_service(deactivate_client_, "deactivate", false) ?
          hardware_interface::CallbackReturn::SUCCESS : hardware_interface::CallbackReturn::ERROR;
 }
 
@@ -194,7 +224,7 @@ hardware_interface::CallbackReturn HexArmSystem::on_error(
   const rclcpp_lifecycle::State &)
 {
   active_.store(false);
-  (void)call_safety_service(deactivate_client_, "error stop");
+  (void)call_safety_service(deactivate_client_, "error stop", false);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -266,16 +296,39 @@ void HexArmSystem::receive_state(sensor_msgs::msg::JointState::ConstSharedPtr me
 
 bool HexArmSystem::call_safety_service(
   const rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr & client,
-  const std::string & operation)
+  const std::string & operation, bool wait_for_discovery)
 {
-  if (!client || !client->wait_for_service(service_timeout_)) {
-    RCLCPP_ERROR(io_node_->get_logger(), "%s service unavailable", operation.c_str());
+  if (!client || !io_node_) {
+    return false;
+  }
+  const auto context = io_node_->get_node_base_interface()->get_context();
+  const auto deadline = std::chrono::steady_clock::now() + service_timeout_;
+  while (rclcpp::ok(context) && !client->service_is_ready()) {
+    // Discovery belongs to activation. A vanished stop service cannot
+    // acknowledge disable; fail promptly so the independent Rust owner and
+    // supervisor can finish shutdown, including lifecycle error recovery.
+    if (!wait_for_discovery || std::chrono::steady_clock::now() >= deadline) {
+      RCLCPP_ERROR(io_node_->get_logger(), "%s service unavailable", operation.c_str());
+      return false;
+    }
+    client->wait_for_service(std::chrono::milliseconds(20));
+  }
+  if (!rclcpp::ok(context)) {
     return false;
   }
   auto future = client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
-  if (future.wait_for(service_timeout_) != std::future_status::ready) {
-    RCLCPP_ERROR(io_node_->get_logger(), "%s service timed out", operation.c_str());
-    return false;
+  while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+    // SIGINT stops the ROS executor as well. Waiting the full RPC deadline
+    // here can deadlock controller-manager teardown until SIGKILL escalation.
+    const bool service_gone = !client->service_is_ready();
+    if (!rclcpp::ok(context) || service_gone || std::chrono::steady_clock::now() >= deadline) {
+      client->remove_pending_request(future);
+      if (rclcpp::ok(context)) {
+        RCLCPP_ERROR(io_node_->get_logger(), "%s service %s", operation.c_str(),
+          service_gone ? "disappeared while waiting" : "timed out");
+      }
+      return false;
+    }
   }
   const auto response = future.get();
   if (!response->success) {
@@ -292,6 +345,7 @@ bool HexArmSystem::state_is_fresh() const
 
 void HexArmSystem::stop_io_thread()
 {
+  stop_io_.store(true);
   if (executor_) {
     executor_->cancel();
   }
@@ -304,6 +358,7 @@ void HexArmSystem::stop_io_thread()
   deactivate_client_.reset();
   activate_client_.reset();
   command_publisher_.reset();
+  command_endpoint_.reset();
   state_subscription_.reset();
   executor_.reset();
   io_node_.reset();

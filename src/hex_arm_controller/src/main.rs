@@ -47,6 +47,17 @@ struct Arguments {
     /// hardware profile, initializes a drive, sends NMT/PDO, or starts control.
     #[arg(long, default_value_t = false)]
     discover_only: bool,
+
+    /// Bounded operator-verified folded -> J2 -> J4 -> J3 startup trial.
+    /// Does not certify general calibration; always disables after a short hold.
+    #[arg(long, requires = "allow_startup_motion",
+        conflicts_with_all = ["discover_only", "validate_profile_only", "mock", "commission_axis",
+            "diagnose_axis", "recover_heartbeat_lost", "zenoh_connect", "zenoh_listen"])]
+    startup_sequence: bool,
+    /// Acknowledge the physical folded reference and verified collision-free sequence.
+    #[arg(long, requires = "startup_sequence")]
+    allow_startup_motion: bool,
+
     /// Parse the profile, load the dynamics model, and verify that every real
     /// command window avoids the unverified single-turn seam. Opens no CAN bus.
     #[arg(
@@ -549,7 +560,37 @@ async fn main() -> Result<()> {
         return run_hardware_diagnostic(&arguments, profile, dynamics).await;
     }
 
+    if arguments.startup_sequence {
+        return run_meow_startup_sequence(profile, dynamics).await;
+    }
+
     run_normal_control(&arguments, profile, dynamics).await
+}
+
+async fn run_meow_startup_sequence(
+    profile: Arc<HardwareProfile>,
+    dynamics: hex_arm_dynamics::ArmDynamics,
+) -> Result<()> {
+    anyhow::ensure!(
+        profile.bus.protocol == MotorProtocol::Meow,
+        "the fixed startup sequence supports Meow firmware only"
+    );
+    let mut termination_signals = TerminationSignals::install()?;
+    let backend = MeowBackend::open(profile.clone()).await?;
+    let operation = tokio::select! {
+        biased;
+        signal = termination_signals.received() => {
+            Err(anyhow::anyhow!("startup sequence interrupted: {:?}", signal))
+        },
+        result = async {
+            backend.initialize_disabled().await?;
+            tracing::info!("Firefly Y6 controller ready and DISABLED");
+            hex_arm_controller::meow_startup::run(&backend, &profile, &dynamics).await
+        } => result,
+    };
+    tracing::info!("controller stopping; disabling drives and disarming heartbeat consumers");
+    let cleanup = backend.shutdown().await;
+    combine_operation_and_cleanup("fixed startup sequence", operation, cleanup)
 }
 
 /// Start the control plane before any potentially slow real-CAN work.  The
@@ -4239,5 +4280,18 @@ mod offline_pose_arguments {
             "0",
         ])
         .is_err());
+    }
+    #[test]
+    fn startup_trial_is_explicit_and_cannot_mix_with_general_control() {
+        let base = ["driver", "--profile", "/tmp/arm.yaml", "--startup-sequence"];
+        assert!(Arguments::try_parse_from(base).is_err());
+        let mut explicit = base.to_vec();
+        explicit.push("--allow-startup-motion");
+        assert!(Arguments::try_parse_from(&explicit).is_ok());
+        for extra in ["--mock", "--discover-only", "--validate-profile-only"] {
+            let mut conflicting = explicit.clone();
+            conflicting.push(extra);
+            assert!(Arguments::try_parse_from(conflicting).is_err());
+        }
     }
 }

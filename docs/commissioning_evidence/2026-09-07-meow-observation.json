@@ -1,0 +1,176 @@
+{
+  "date": "2026-09-07",
+  "interface": "can0",
+  "notes": "The initial reference and post-precheck readings are different observations. No motion was enabled during this trial.",
+  "initial_disabled_sdo": [
+    {
+      "node": 1,
+      "identity": [
+        6841720,
+        1818541226,
+        1702363137,
+        624309003
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": -0.01293104887008667,
+      "gain_factor": 0.1810384839773178,
+      "peak_nm": 31.590002059936523,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    },
+    {
+      "node": 2,
+      "identity": [
+        6841720,
+        1818541226,
+        1702363137,
+        611209740
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": 0.25001055002212524,
+      "gain_factor": 0.1810384839773178,
+      "peak_nm": 31.590002059936523,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    },
+    {
+      "node": 3,
+      "identity": [
+        6841720,
+        1818541226,
+        1702363137,
+        611657227
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": 0.25095880031585693,
+      "gain_factor": 0.1810384839773178,
+      "peak_nm": 31.590002059936523,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    },
+    {
+      "node": 4,
+      "identity": [
+        6841720,
+        1818541176,
+        1702363137,
+        571617290
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": -0.0020339488983154297,
+      "gain_factor": 0.011813798919320107,
+      "peak_nm": 8.658000946044922,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    },
+    {
+      "node": 5,
+      "identity": [
+        6841720,
+        1818541176,
+        1702363137,
+        622019853
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": -0.00376129150390625,
+      "gain_factor": 0.011813798919320107,
+      "peak_nm": 8.658000946044922,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    },
+    {
+      "node": 6,
+      "identity": [
+        6841720,
+        1818541176,
+        1702363137,
+        637944075
+      ],
+      "mode": 0,
+      "error": 0,
+      "position_rev": 0.02556002140045166,
+      "gain_factor": 0.011813798919320107,
+      "peak_nm": 8.658000946044922,
+      "max_torque_permille": 1000,
+      "heartbeat_consumer": 0
+    }
+  ],
+  "ros_observe_only": {
+    "samples": 466,
+    "rate_hz": 101.44215176150894,
+    "first_q": [
+      3.670156002044678e-05,
+      -1.5700000524520874,
+      3.140000104904175,
+      -3.8574449717998505e-05,
+      4.793703556060791e-05,
+      0.0
+    ],
+    "last_q": [
+      3.670156002044678e-05,
+      -1.5700000524520874,
+      3.140000104904175,
+      -3.8574449717998505e-05,
+      4.793703556060791e-05,
+      0.0
+    ],
+    "max_abs_velocity_rad_s": 0.0,
+    "last_effort_nm": [
+      -0.0,
+      -0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "post_startup_precheck_disabled_sdo": [
+    {
+      "node": 1,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": -0.0130462646484375
+    },
+    {
+      "node": 2,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": 0.24998730421066284
+    },
+    {
+      "node": 3,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": 0.2509947419166565
+    },
+    {
+      "node": 4,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": -0.0018355846405029297
+    },
+    {
+      "node": 5,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": 0.003245532512664795
+    },
+    {
+      "node": 6,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "position_rev": 0.02556765079498291
+    }
+  ]
+}

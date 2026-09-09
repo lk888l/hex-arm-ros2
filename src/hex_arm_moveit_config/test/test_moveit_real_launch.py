@@ -45,6 +45,7 @@ def _context(enable_execution: bool, publish_world_tf: bool = True) -> LaunchCon
             "hardware_profile": "/tmp/validated.local.yaml",
             "zenoh_connect": "",
             "enable_execution": str(enable_execution).lower(),
+            "startup_ready": "true",
             "publish_world_tf": str(publish_world_tf).lower(),
             "use_rviz": "false",
         }
@@ -63,6 +64,7 @@ def test_public_launch_defaults_to_plan_only() -> None:
         "hardware_profile",
         "zenoh_connect",
         "enable_execution",
+        "startup_ready",
         "publish_world_tf",
         "use_rviz",
     }
@@ -71,6 +73,7 @@ def test_public_launch_defaults_to_plan_only() -> None:
         context, declarations["enable_execution"].default_value
     ) == "false"
     assert declarations["enable_execution"].choices == ["true", "false"]
+    assert perform_substitutions(context, declarations["startup_ready"].default_value) == "true"
     assert declarations["hardware_profile"].description == (
         "Absolute path to a validated hardware profile. Calibration is required only "
         "when enable_execution is true."
@@ -88,6 +91,8 @@ def test_one_switch_gates_hardware_and_moveit_execution() -> None:
         runtime = module._move_group_runtime_parameters(enabled)
         expected = "true" if enabled else "false"
         assert arguments["activate_hardware"] == expected
+        assert arguments["startup_ready"] == expected
+        assert module._bringup_arguments("/tmp/profile.yaml", "", enabled, False)["startup_ready"] == "false"
         assert arguments["use_rviz"] == "false"
         assert runtime["allow_trajectory_execution"] is enabled
 
@@ -147,7 +152,7 @@ def test_execution_launch_builds_only_the_strict_semantic_model(monkeypatch) -> 
     module = _module()
     selected_execution_modes = []
 
-    def _fake_config(enable_execution: bool):
+    def _fake_config(enable_execution: bool, hardware_profile=None):
         selected_execution_modes.append(enable_execution)
         return _FakeMoveItConfig()
 
@@ -166,7 +171,7 @@ def test_launch_composes_bringup_without_duplicate_control_or_rsp(monkeypatch) -
     module = _module()
     selected_execution_modes = []
 
-    def _fake_config(enable_execution: bool):
+    def _fake_config(enable_execution: bool, hardware_profile=None):
         selected_execution_modes.append(enable_execution)
         return _FakeMoveItConfig()
 
@@ -209,7 +214,7 @@ def test_launch_composes_bringup_without_duplicate_control_or_rsp(monkeypatch) -
 def test_world_transform_can_be_delegated_to_an_external_owner(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(
-        module, "_build_moveit_config", lambda _enable_execution: _FakeMoveItConfig()
+        module, "_build_moveit_config", lambda _enable_execution, _profile=None: _FakeMoveItConfig()
     )
     monkeypatch.setattr(
         module,
@@ -260,3 +265,45 @@ def test_plan_only_collision_fixture_is_offline_by_construction() -> None:
         "SocketCAN",
     ):
         assert forbidden not in source
+
+
+def test_outer_rviz_request_survives_inner_bringup_arguments(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(module, "_build_moveit_config", lambda _, _profile=None: _FakeMoveItConfig())
+    context = _context(enable_execution=False)
+    context.launch_configurations["use_rviz"] = "true"
+    actions = module._launch_setup(context)
+    rviz = next(action for action in actions if isinstance(action, Node) and action.node_package == "rviz2")
+    # IncludeLaunchDescription writes its use_rviz=false launch argument later.
+    context.launch_configurations["use_rviz"] = "false"
+    assert rviz.condition.evaluate(context)
+
+
+def test_hardware_limits_only_narrow_the_commissioning_planner():
+    import copy
+    import yaml
+    module = _module()
+    profile = yaml.safe_load((PACKAGE_ROOT.parents[1] / "config/hardware/firefly_y6.meow_mit.example.yaml").read_text())
+    config = module._build_moveit_config(True)
+    original = copy.deepcopy(config.joint_limits["robot_description_planning"]["joint_limits"])
+    profile["joints"][0]["limits"].update(position_lower_rad=-0.01, position_upper_rad=0.01, velocity_rad_s=0.04)
+    module._restrict_planning_limits(config, profile)
+    result = config.joint_limits["robot_description_planning"]["joint_limits"]
+    assert result["joint_1"]["min_position"] == -0.01
+    assert result["joint_1"]["max_position"] == 0.01
+    assert result["joint_1"]["max_velocity"] == 0.04
+    for name, limits in result.items():
+        assert limits["min_position"] >= original[name]["min_position"]
+        assert limits["max_position"] <= original[name]["max_position"]
+        assert limits["max_velocity"] <= original[name]["max_velocity"]
+        assert limits["max_acceleration"] <= original[name]["max_acceleration"]
+
+
+def test_disjoint_hardware_planning_windows_are_rejected():
+    import yaml
+    import pytest
+    module = _module()
+    profile = yaml.safe_load((PACKAGE_ROOT.parents[1] / "config/hardware/firefly_y6.meow_mit.example.yaml").read_text())
+    profile["joints"][0]["limits"].update(position_lower_rad=1.0, position_upper_rad=2.0)
+    with pytest.raises(RuntimeError, match="intersection"):
+        module._restrict_planning_limits(module._build_moveit_config(True), profile)

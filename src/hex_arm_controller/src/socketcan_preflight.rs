@@ -337,7 +337,20 @@ struct AdapterSnapshot {
 }
 
 fn parse_ip_link(bytes: &[u8], interface: &str) -> Result<IpLink> {
-    let mut links: Vec<IpLink> = serde_json::from_slice(bytes)
+    // An unconfigured/reconnected interface omits ctrlmode and bittiming.
+    // Diagnose DOWN before deserializing the mandatory running-link fields.
+    let values: Vec<Value> = serde_json::from_slice(bytes)
+        .with_context(|| format!("parse iproute2 JSON for {interface}"))?;
+    if let [link] = values.as_slice() {
+        if link["ifname"].as_str() == Some(interface)
+            && link["flags"]
+                .as_array()
+                .is_some_and(|flags| !flags.iter().any(|flag| flag.as_str() == Some("UP")))
+        {
+            anyhow::bail!("{interface} link is not UP; configure the profile CAN-FD timing and bring the interface UP before launch");
+        }
+    }
+    let mut links: Vec<IpLink> = serde_json::from_value(Value::Array(values))
         .with_context(|| format!("parse iproute2 JSON for {interface}"))?;
     anyhow::ensure!(
         links.len() == 1,
@@ -641,6 +654,14 @@ mod tests {
                 .clone()
                 .context("injected runtime inspection failure")
         }
+    }
+
+    #[test]
+    fn reconnected_unconfigured_link_reports_down_before_missing_timing() {
+        let bytes = br#"[{"ifname":"can2","flags":["NOARP","ECHO"],"operstate":"DOWN"}]"#;
+        let error = parse_ip_link(bytes, "can2").unwrap_err().to_string();
+        assert!(error.contains("can2 link is not UP"));
+        assert!(error.contains("CAN-FD timing"));
     }
 
     #[test]

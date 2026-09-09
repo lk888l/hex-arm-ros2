@@ -95,7 +95,7 @@ def test_plan_only_srdf_is_an_explicit_two_pair_overlay() -> None:
 def test_srdf_exposes_only_an_in_bounds_commissioning_reference() -> None:
     root = ET.parse(CONFIG / "firefly_y6.srdf").getroot()
     states = root.findall("./group_state[@group='arm']")
-    assert [state.attrib["name"] for state in states] == ["commissioning_start"]
+    assert [state.attrib["name"] for state in states] == ["commissioning_start", "startup_ready"]
     assert root.find("./group_state[@name='ready']") is None
 
     positions = {
@@ -138,7 +138,7 @@ def test_real_commissioning_positions_match_the_surveyed_narrow_window() -> None
         "joint_1": (-0.25, 0.25),
         "joint_2": (-1.57, -1.30),
         "joint_3": (2.85, 3.14),
-        "joint_4": (-0.25, 0.25),
+        "joint_4": (-0.35, 0.25),
         "joint_5": (-0.25, 0.25),
         "joint_6": (-0.25, 0.35),
     }

@@ -4,6 +4,7 @@ pub mod conversion;
 pub mod discovery;
 pub mod interpolation;
 pub mod meow_backend;
+pub mod meow_startup;
 pub mod payload_dynamics;
 pub mod profile;
 pub mod protocol;

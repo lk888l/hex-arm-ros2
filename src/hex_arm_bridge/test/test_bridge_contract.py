@@ -683,6 +683,8 @@ def test_destroy_ros_entities_is_idempotent_without_real_ros_entities() -> None:
     destroyed = []
     bridge = SimpleNamespace(
         _lock=threading.RLock(),
+        _stream_node=None,
+        _stop_streaming=lambda: None,
         _diag_timer="timer",
         _command_sub="subscription",
         _bridge_services=["service_a", "service_b"],
@@ -795,3 +797,95 @@ def test_active_ownership_requires_new_owned_active_driver_state() -> None:
     assert _active_ownership_error(snapshot, 10.0, 0.1, 3) == (
         "driver does not confirm ACTIVE mode"
     )
+
+
+def test_zenoh_state_callbacks_complete_while_mode_transaction_waits() -> None:
+    bridge = SimpleNamespace(
+        _hardware_transition_lock=threading.RLock(),
+        _lock=threading.RLock(),
+        _accept_zenoh_state=True,
+        _snapshot=_Snapshot(),
+        _joint_state_error_log=_RepeatedErrorLog(),
+        _runtime_gate_latched=False,
+        _session_id=0,
+        _hardware_active=False,
+    )
+    bridge._latch_runtime_gate_if_needed = (
+        lambda: HexArmBridge._latch_runtime_gate_if_needed(bridge)
+    )
+    completed = threading.Event()
+    failures = []
+
+    def receive():
+        try:
+            HexArmBridge._on_zenoh_joint_state(
+                bridge, SimpleNamespace(payload=pb.JointState(q=[0.0] * 6).SerializeToString())
+            )
+            HexArmBridge._on_zenoh_driver_state(
+                bridge, SimpleNamespace(payload=pb.DriverState(
+                    mode=pb.OPERATING_MODE_ACTIVE, session_owned=True
+                ).SerializeToString())
+            )
+            completed.set()
+        except BaseException as error:
+            failures.append(error)
+
+    # The activation service holds this lock while awaiting a delayed mode RPC.
+    # Receive callbacks must return so Zenoh can continue delivering the reply.
+    with bridge._hardware_transition_lock:
+        worker = threading.Thread(target=receive, daemon=True)
+        worker.start()
+        returned_during_transition = completed.wait(0.3)
+    worker.join(timeout=1.0)
+    assert not failures
+    assert returned_during_transition
+    assert bridge._snapshot.driver_state.mode == pb.OPERATING_MODE_ACTIVE
+    assert bridge._snapshot.joint_received_at > 0.0
+
+
+def test_stream_executor_progresses_and_joins_independently_of_management() -> None:
+    from rclpy.node import Node
+
+    initialized_here = not rclpy.ok()
+    if initialized_here:
+        rclpy.init()
+    bridge = HexArmBridge()
+    ticks = []
+    try:
+        bridge._stream_node = Node("stream_executor_test", context=bridge.context)
+        bridge._diag_timer = bridge._stream_node.create_timer(
+            0.005, lambda: ticks.append(time.monotonic()))
+        with bridge._hardware_transition_lock:
+            bridge._start_streaming()
+            time.sleep(0.04)
+            assert len(ticks) >= 3
+        bridge._destroy_ros_entities()
+        count = len(ticks)
+        time.sleep(0.02)
+        assert len(ticks) == count
+        assert bridge._stream_thread is None
+        assert bridge._stream_executor is None
+        bridge._destroy_ros_entities()
+    finally:
+        bridge.destroy_node()
+        if initialized_here and rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_inactive_ros_commands_do_not_block_the_stream_during_mode_rpc() -> None:
+    bridge = SimpleNamespace(
+        _lock=threading.RLock(), _hardware_transition_lock=threading.RLock(),
+        _hardware_active=False,
+    )
+    finished = threading.Event()
+
+    def callback():
+        HexArmBridge._on_ros_command(bridge, None)
+        finished.set()
+
+    with bridge._hardware_transition_lock:
+        worker = threading.Thread(target=callback)
+        worker.start()
+        progressed = finished.wait(0.2)
+    worker.join(1.0)
+    assert progressed

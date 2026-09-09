@@ -1,4 +1,7 @@
 import os
+import math
+
+import yaml
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -71,7 +74,31 @@ def _semantic_file(enable_execution: bool) -> str:
     )
 
 
-def _build_moveit_config(enable_execution: bool):
+def _restrict_planning_limits(moveit_config, profile):
+    """Use the intersection of commissioning and verified hardware authority."""
+    planning = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
+    joints = profile.get("joints", [])
+    names = [joint["name"] for joint in joints]
+    if len(names) != len(planning) or set(names) != set(planning):
+        raise RuntimeError("hardware planning limits require exactly the configured six joints")
+    for joint in joints:
+        limits = joint["limits"]
+        target = planning[joint["name"]]
+        lower = max(float(target["min_position"]), float(limits["position_lower_rad"]))
+        upper = min(float(target["max_position"]), float(limits["position_upper_rad"]))
+        velocity = min(float(target["max_velocity"]), float(limits["velocity_rad_s"]))
+        acceleration = min(float(target["max_acceleration"]), float(limits["acceleration_rad_s2"]))
+        values = [*map(float, (limits["position_lower_rad"], limits["position_upper_rad"],
+                              limits["velocity_rad_s"], limits["acceleration_rad_s2"])),
+                  lower, upper, velocity, acceleration]
+        if not all(math.isfinite(v) for v in values) or lower >= upper or min(velocity, acceleration) <= 0:
+            raise RuntimeError(f"empty or invalid planning limit intersection for {joint['name']}")
+        target.update(has_position_limits=True, min_position=lower, max_position=upper,
+                      has_velocity_limits=True, max_velocity=velocity,
+                      has_acceleration_limits=True, max_acceleration=acceleration)
+
+
+def _build_moveit_config(enable_execution: bool, hardware_profile=None):
     description_share = Path(get_package_share_directory("hex_arm_description"))
     bringup_share = Path(get_package_share_directory("hex_arm_bringup"))
     xacro_file = description_share / "urdf" / "firefly_y6.urdf.xacro"
@@ -111,6 +138,9 @@ def _build_moveit_config(enable_execution: bool):
         # Clear the auto-discovered controller plugin before Node parameters
         # are materialized.
         moveit_config.trajectory_execution = {}
+    if hardware_profile is not None:
+        with open(hardware_profile, encoding="utf-8") as profile_file:
+            _restrict_planning_limits(moveit_config, yaml.safe_load(profile_file))
     return moveit_config
 
 
@@ -126,7 +156,7 @@ def _move_group_runtime_parameters(enable_execution: bool) -> dict[str, bool]:
 
 
 def _bringup_arguments(
-    hardware_profile: str, zenoh_connect: str, enable_execution: bool
+    hardware_profile: str, zenoh_connect: str, enable_execution: bool, startup_ready: bool = True
 ) -> dict[str, str]:
     return {
         "hardware_profile": hardware_profile,
@@ -134,6 +164,7 @@ def _bringup_arguments(
         # One switch controls both sides of the execution boundary: MoveIt can
         # execute only when the hardware and trajectory controller are active.
         "activate_hardware": "true" if enable_execution else "false",
+        "startup_ready": "true" if enable_execution and startup_ready else "false",
         # The outer launch owns the single MoveIt-configured RViz process.
         "use_rviz": "false",
     }
@@ -141,20 +172,22 @@ def _bringup_arguments(
 
 def _launch_setup(context: LaunchContext):
     enable_execution = _boolean_argument(context, "enable_execution")
+    use_rviz = _boolean_argument(context, "use_rviz")
     publish_world_tf = _boolean_argument(context, "publish_world_tf")
+    startup_ready = _boolean_argument(context, "startup_ready")
     hardware_profile = LaunchConfiguration("hardware_profile").perform(context)
     zenoh_connect = LaunchConfiguration("zenoh_connect").perform(context)
 
     bringup_share = Path(get_package_share_directory("hex_arm_bringup"))
     moveit_share = Path(get_package_share_directory("hex_arm_moveit_config"))
-    moveit_config = _build_moveit_config(enable_execution)
+    moveit_config = _build_moveit_config(enable_execution, hardware_profile)
 
     real_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             str(bringup_share / "launch" / "real.launch.py")
         ),
         launch_arguments=_bringup_arguments(
-            hardware_profile, zenoh_connect, enable_execution
+            hardware_profile, zenoh_connect, enable_execution, startup_ready
         ).items(),
     )
     move_group = Node(
@@ -181,7 +214,9 @@ def _launch_setup(context: LaunchContext):
             moveit_config.planning_pipelines,
             moveit_config.joint_limits,
         ],
-        condition=IfCondition(LaunchConfiguration("use_rviz")),
+        # The included bringup sets its own use_rviz=false in this context.
+        # Capture the outer request before that include executes.
+        condition=IfCondition("true" if use_rviz else "false"),
     )
 
     # A FollowJointTrajectory goal already accepted by ros2_control can outlive
@@ -245,6 +280,15 @@ def generate_launch_description() -> LaunchDescription:
                 description=(
                     "Explicitly activate hardware/controllers and allow MoveIt execution. "
                     "The default is observation and planning only."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "startup_ready",
+                default_value="true",
+                choices=["true", "false"],
+                description=(
+                    "With enable_execution=true, run the verified J2 -> J4 -> J3 fold exit "
+                    "and hold [0,-1.35,3,-0.3,0,0]. False keeps measured-pose activation."
                 ),
             ),
             DeclareLaunchArgument(

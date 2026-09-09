@@ -1,0 +1,20 @@
+{
+  "location": "ignored workspace log/; raw CAN recordings retained locally",
+  "files": [
+    {
+      "file": "hex-can2-kp110-measured-wire-20260908.jsonl.gz",
+      "bytes": 9530004,
+      "sha256": "ca7348ed1d3fffdc95487bad2db3688bcaf93253b5e2354db4f41b7272d7153e"
+    },
+    {
+      "file": "hex-can2-kp110-repeat-wire-20260908.jsonl.gz",
+      "bytes": 5531770,
+      "sha256": "2921144d97209524f564c49f2c7ed8ff6080acc58c150cb8e3b78aac6278e37a"
+    },
+    {
+      "file": "hex-can2-kp110-15mrad-wire-20260908.jsonl.gz",
+      "bytes": 7273909,
+      "sha256": "5b86c1437cc7194f08ccca30ffc03bf4d64bd2659ed16af0efc4091ce5112121"
+    }
+  ]
+}

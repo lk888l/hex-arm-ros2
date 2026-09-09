@@ -147,48 +147,13 @@ impl Interpolator {
             );
         }
 
-        let mut duration_ns = requested_duration_ns;
-        for (((current, target), velocity_limit), acceleration_limit) in start
-            .iter()
-            .zip(&goal)
-            .zip(velocity_limits_rad_s)
-            .zip(acceleration_limits_rad_s2)
-        {
-            duration_ns = duration_ns.max(minimum_duration_ns(
-                *current,
-                *target,
-                *velocity_limit,
-                *acceleration_limit,
-            )?);
-        }
-
-        // Verify the common six-axis duration instead of assuming that a
-        // larger duration remains safe after future trajectory changes.
-        loop {
-            let all_safe = start
-                .iter()
-                .zip(&goal)
-                .zip(velocity_limits_rad_s)
-                .zip(acceleration_limits_rad_s2)
-                .all(
-                    |(((current, target), velocity_limit), acceleration_limit)| {
-                        segment_respects_limits(
-                            *current,
-                            *target,
-                            duration_ns,
-                            *velocity_limit,
-                            *acceleration_limit,
-                        )
-                    },
-                );
-            if all_safe {
-                break;
-            }
-            duration_ns = duration_ns
-                .checked_mul(2)
-                .filter(|duration| *duration > 0)
-                .ok_or_else(|| anyhow::anyhow!("no finite safe interpolation duration"))?;
-        }
+        let duration_ns = safe_common_duration_ns(
+            &start,
+            &goal,
+            requested_duration_ns,
+            velocity_limits_rad_s,
+            acceleration_limits_rad_s2,
+        )?;
 
         self.start = start;
         self.goal = goal;
@@ -269,45 +234,108 @@ fn segment_respects_limits(
         && maximum_acceleration <= acceleration_limit_rad_s2 as f64 * (1.0 + BOUND_ROUNDOFF)
 }
 
-fn minimum_duration_ns(
-    start: RosTarget,
-    goal: RosTarget,
-    velocity_limit_rad_s: f32,
-    acceleration_limit_rad_s2: f32,
+/// Feasibility is not monotone in duration when endpoint velocities are
+/// nonzero: a 10 ms constant-velocity segment can be safe while 16 ms is
+/// unsafe, and only become safe again near 3 s. Doubling and binary searching
+/// therefore skips short feasible intervals and introduces seconds of lag.
+/// The exact cubic bounds change feasibility only at the polynomial roots
+/// below. Search their integer-nanosecond neighbours jointly for all axes.
+fn safe_common_duration_ns(
+    start: &[RosTarget],
+    goal: &[RosTarget],
+    requested_ns: u64,
+    velocity_limits: &[f32],
+    acceleration_limits: &[f32],
 ) -> anyhow::Result<u64> {
-    if start.position_rad == goal.position_rad && start.velocity_rad_s == goal.velocity_rad_s {
-        return Ok(0);
+    let all_safe = |duration_ns| {
+        start
+            .iter()
+            .zip(goal)
+            .zip(velocity_limits)
+            .zip(acceleration_limits)
+            .all(|(((current, target), velocity), acceleration)| {
+                segment_respects_limits(*current, *target, duration_ns, *velocity, *acceleration)
+            })
+    };
+    if all_safe(requested_ns) {
+        return Ok(requested_ns);
     }
-
-    let mut safe_ns = 1_u64;
-    while !segment_respects_limits(
-        start,
-        goal,
-        safe_ns,
-        velocity_limit_rad_s,
-        acceleration_limit_rad_s2,
-    ) {
-        safe_ns = safe_ns
-            .checked_mul(2)
-            .ok_or_else(|| anyhow::anyhow!("no finite safe interpolation duration"))?;
-    }
-
-    let mut unsafe_ns = safe_ns / 2;
-    while unsafe_ns + 1 < safe_ns {
-        let midpoint = unsafe_ns + (safe_ns - unsafe_ns) / 2;
-        if segment_respects_limits(
-            start,
-            goal,
-            midpoint,
-            velocity_limit_rad_s,
-            acceleration_limit_rad_s2,
-        ) {
-            safe_ns = midpoint;
-        } else {
-            unsafe_ns = midpoint;
+    let mut candidates = vec![1];
+    for (((current, target), velocity), acceleration) in start
+        .iter()
+        .zip(goal)
+        .zip(velocity_limits)
+        .zip(acceleration_limits)
+    {
+        let displacement = target.position_rad as f64 - current.position_rad as f64;
+        let u = current.velocity_rad_s as f64;
+        let v = target.velocity_rad_s as f64;
+        for bound in [-(*acceleration as f64), *acceleration as f64] {
+            // a(0) = 6d/T² - (4u+2v)/T; a(T) = -6d/T² + (2u+4v)/T.
+            duration_roots(
+                bound,
+                4.0 * u + 2.0 * v,
+                -6.0 * displacement,
+                &mut candidates,
+            );
+            duration_roots(
+                bound,
+                -2.0 * u - 4.0 * v,
+                6.0 * displacement,
+                &mut candidates,
+            );
+        }
+        for bound in [-(*velocity as f64), *velocity as f64] {
+            // Interior velocity extremum u - c2²/(3c3) = bound.
+            // Extra roots with the extremum outside [0,T] are harmless:
+            // every candidate is checked against the exact continuous bounds.
+            duration_roots(
+                3.0 * (u + v) * (u - bound) - (2.0 * u + v).powi(2),
+                6.0 * displacement * (u + v + bound),
+                -9.0 * displacement.powi(2),
+                &mut candidates,
+            );
         }
     }
-    Ok(safe_ns)
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+        .into_iter()
+        .find(|duration| *duration >= requested_ns && all_safe(*duration))
+        .ok_or_else(|| anyhow::anyhow!("no finite safe interpolation duration"))
+}
+
+fn duration_roots(a: f64, b: f64, c: f64, candidates: &mut Vec<u64>) {
+    let mut add = |seconds: f64| {
+        let nanoseconds = seconds * NS_PER_SECOND;
+        if nanoseconds.is_finite() && nanoseconds > 0.0 && nanoseconds < u64::MAX as f64 {
+            let below = nanoseconds.floor() as u64;
+            // Check both sides of a root and absorb floating-point rounding.
+            for delta in 0..=2 {
+                candidates.push(below.saturating_add(delta));
+            }
+        }
+    };
+    if a == 0.0 {
+        if b != 0.0 {
+            add(-c / b);
+        }
+        return;
+    }
+    let discriminant = b.mul_add(b, -4.0 * a * c);
+    if discriminant < 0.0 {
+        return;
+    }
+    if discriminant == 0.0 {
+        add(-b / (2.0 * a));
+        return;
+    }
+    // Stable quadratic formula avoids cancellation for very short segments.
+    let q = -0.5 * (b + discriminant.sqrt().copysign(b));
+    add(q / a);
+    if q != 0.0 {
+        add(c / q);
+    }
 }
 
 fn lerp(a: f32, b: f32, alpha: f32) -> f32 {
@@ -396,6 +424,138 @@ mod tests {
         let (maximum_velocity, maximum_acceleration) = interpolator.segment_bounds(0);
         assert!(maximum_velocity <= 0.2_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
         assert!(maximum_acceleration <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+    }
+
+    #[test]
+    fn safe_ten_millisecond_constant_velocity_segment_keeps_its_duration() {
+        let mut interpolator = Interpolator::hold(vec![target(0.0, 0.05)], 0);
+        interpolator
+            .retarget_with_limits(vec![target(0.0005, 0.05)], 0, 10_000_000, &[0.1], &[0.1])
+            .unwrap();
+        assert_eq!(interpolator.duration_ns, 10_000_000);
+    }
+
+    #[test]
+    fn short_feasible_window_is_found_before_the_long_reverse_motion_solution() {
+        let mut interpolator = Interpolator::hold(vec![target(0.0, 0.05)], 0);
+        interpolator
+            .retarget_with_limits(vec![target(0.0005, 0.05)], 0, 1, &[0.1], &[0.1])
+            .unwrap();
+        assert!((9_000_000..=10_000_000).contains(&interpolator.duration_ns));
+        let (velocity, acceleration) = interpolator.segment_bounds(0);
+        assert!(velocity <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+        assert!(acceleration <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+    }
+
+    #[test]
+    fn multi_axis_stream_with_jitter_tracks_without_relaxing_continuous_bounds() {
+        let initial = [-0.0001, -1.568, 3.136, 0.001, 0.006, -0.00006];
+        let final_q = [0.0, -1.35, 3.14, 0.0, 0.0, 0.0];
+        let mut interpolator =
+            Interpolator::hold(initial.iter().map(|q| target(*q, 0.0)).collect(), 0);
+        let mut now_ns = 0_u64;
+        let mut maximum_error = 0.0_f32;
+        let intervals = [
+            10_000_000, 12_000_000, 8_000_000, 10_000_000, 11_000_000, 9_000_000,
+        ];
+        for tick in 0..1000 {
+            now_ns += intervals[tick % intervals.len()];
+            let t = (now_ns as f64 / NS_PER_SECOND / 8.0).min(1.0);
+            let alpha = 10.0 * t.powi(3) - 15.0 * t.powi(4) + 6.0 * t.powi(5);
+            let rate = (30.0 * t.powi(2) - 60.0 * t.powi(3) + 30.0 * t.powi(4)) / 8.0;
+            let goal: Vec<_> = initial
+                .iter()
+                .zip(final_q)
+                .map(|(a, b)| {
+                    target(
+                        (*a as f64 + (b - a) as f64 * alpha) as f32,
+                        ((b - a) as f64 * rate) as f32,
+                    )
+                })
+                .collect();
+            let before = interpolator.sample(now_ns);
+            maximum_error =
+                maximum_error.max((before[1].position_rad - goal[1].position_rad).abs());
+            interpolator
+                .retarget_with_limits(goal, now_ns, 10_000_000, &[0.1; 6], &[0.1; 6])
+                .unwrap();
+            let after = interpolator.sample(now_ns);
+            for axis in 0..6 {
+                assert!((before[axis].position_rad - after[axis].position_rad).abs() < 1e-6);
+                assert!((before[axis].velocity_rad_s - after[axis].velocity_rad_s).abs() < 1e-6);
+                let (velocity, acceleration) = interpolator.segment_bounds(axis);
+                assert!(velocity <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+                assert!(acceleration <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+            }
+        }
+        assert!(maximum_error < 0.01, "maximum stream lag {maximum_error}");
+        assert!((interpolator.sample(now_ns)[1].position_rad + 1.35).abs() < 1e-4);
+    }
+
+    #[test]
+    fn common_duration_search_does_not_skip_feasible_intervals_in_dense_oracle() {
+        let mut seed = 17_u64;
+        let mut random = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((seed >> 32) as u32) as f32 / u32::MAX as f32
+        };
+        for _ in 0..200 {
+            let start: Vec<_> = (0..6)
+                .map(|_| target(0.0, (random() - 0.5) * 0.18))
+                .collect();
+            let goal: Vec<_> = (0..6)
+                .map(|_| target((random() - 0.5) * 0.04, (random() - 0.5) * 0.18))
+                .collect();
+            let requested = 1_000_000;
+            let selected =
+                safe_common_duration_ns(&start, &goal, requested, &[0.1; 6], &[0.1; 6]).unwrap();
+            assert!(start
+                .iter()
+                .zip(&goal)
+                .all(|(s, g)| segment_respects_limits(*s, *g, selected, 0.1, 0.1)));
+            let mut probe = requested;
+            while probe < selected {
+                assert!(
+                    !start
+                        .iter()
+                        .zip(&goal)
+                        .all(|(s, g)| segment_respects_limits(*s, *g, probe, 0.1, 0.1)),
+                    "missed feasible duration {probe} before {selected}"
+                );
+                probe = (probe as f64 * 1.01).ceil() as u64;
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_rate_ros_stream_with_independent_receive_jitter_tracks_j4() {
+        // ROS samples at 100 Hz; its timestamp does not follow delivery delay.
+        for seed in 0..32_u64 {
+            let mut random = seed;
+            let mut interpolator = Interpolator::hold(vec![target(0.0, 0.0)], 0);
+            let mut maximum_error = 0.0_f32;
+            let mut longest_segment = 0;
+            for tick in 1..=1200 {
+                let source_ns = tick * 10_000_000_u64;
+                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let now_ns = source_ns + (random >> 32) % 5 * 2_000_000;
+                let t = (source_ns as f64 / NS_PER_SECOND / 10.0).min(1.0);
+                let alpha = 10.0 * t.powi(3) - 15.0 * t.powi(4) + 6.0 * t.powi(5);
+                let rate = (30.0 * t.powi(2) - 60.0 * t.powi(3) + 30.0 * t.powi(4)) / 10.0;
+                let goal = target((-0.3 * alpha) as f32, (-0.3 * rate) as f32);
+                maximum_error = maximum_error
+                    .max((interpolator.sample(now_ns)[0].position_rad - goal.position_rad).abs());
+                interpolator
+                    .retarget_with_limits(vec![goal], now_ns, 10_000_000, &[0.1], &[0.1])
+                    .unwrap();
+                longest_segment = longest_segment.max(interpolator.duration_ns);
+                let (velocity, acceleration) = interpolator.segment_bounds(0);
+                assert!(velocity <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+                assert!(acceleration <= 0.1_f32 as f64 * (1.0 + BOUND_ROUNDOFF));
+            }
+            assert!(maximum_error < 0.005,
+            "seed {seed}: maximum stream lag {maximum_error}, longest segment {longest_segment} ns");
+        }
     }
 
     #[test]

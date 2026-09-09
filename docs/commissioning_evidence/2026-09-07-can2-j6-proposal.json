@@ -1,0 +1,200 @@
+{
+  "status": "PROPOSAL ONLY; no calibration, enable flags, or real profile boundaries changed",
+  "basis": "Operator confirmed J1-J5 folded posture after power cycle; permits J6 motion or retaining its position.",
+  "read_only_snapshot": {
+    "time": "2026-09-07T12:39:00.419711+00:00",
+    "interface": "can2",
+    "profile": "config/hardware/firefly_y6.meow.can2.local.yaml",
+    "nodes": [
+      {
+        "node": 1,
+        "identity": [
+          6841720,
+          1818541226,
+          1702363137,
+          624309003
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          -0.006002485752105713,
+          -0.006002485752105713,
+          -0.006002485752105713,
+          -0.006002485752105713,
+          -0.006002485752105713,
+          -0.006002485752105713,
+          -0.006002485752105713
+        ],
+        "position_rev": -0.006002485752105713,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": 0.006272992723897579
+      },
+      {
+        "node": 2,
+        "identity": [
+          6841720,
+          1818541226,
+          1702363137,
+          611209740
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          0.250588595867157,
+          0.250588595867157,
+          0.250588595867157,
+          0.250588595867157,
+          0.250588595867157,
+          0.250588595867157,
+          0.250588595867157
+        ],
+        "position_rev": 0.250588595867157,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": -1.573636463244719
+      },
+      {
+        "node": 3,
+        "identity": [
+          6841720,
+          1818541226,
+          1702363137,
+          611657227
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          0.2509678602218628,
+          0.2509678602218628,
+          0.2509678602218628,
+          0.2509678602218628,
+          0.2509678602218628,
+          0.2509678602218628,
+          0.2509678602218628
+        ],
+        "position_rev": 0.2509678602218628,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": 3.1398310973302404
+      },
+      {
+        "node": 4,
+        "identity": [
+          6841720,
+          1818541176,
+          1702363137,
+          571617290
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          -0.0018737316131591797,
+          -0.0018737316131591797,
+          -0.0018737316131591797,
+          -0.0018737316131591797,
+          -0.0018737316131591797,
+          -0.0018737316131591797,
+          -0.0018737316131591797
+        ],
+        "position_rev": -0.0018737316131591797,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": -0.0004025950554143228
+      },
+      {
+        "node": 5,
+        "identity": [
+          6841720,
+          1818541176,
+          1702363137,
+          622019853
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          0.006520092487335205,
+          0.006520092487335205,
+          0.006520092487335205,
+          0.006520092487335205,
+          0.006520092487335205,
+          0.006520092487335205,
+          0.006520092487335205
+        ],
+        "position_rev": 0.006520092487335205,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": 0.04719874626866198
+      },
+      {
+        "node": 6,
+        "identity": [
+          6841720,
+          1818541176,
+          1702363137,
+          637944075
+        ],
+        "mode": 0,
+        "error": 0,
+        "heartbeat_consumer": 0,
+        "samples_rev": [
+          -0.009280383586883545,
+          -0.009280383586883545,
+          -0.009280383586883545,
+          -0.009280383586883545,
+          -0.009280383586883545,
+          -0.009280383586883545,
+          -0.009280383586883545
+        ],
+        "position_rev": -0.009280383586883545,
+        "span_rad": 0.0,
+        "q_using_previous_zero_rad": -0.21895665761223237
+      }
+    ]
+  },
+  "proposed_reference_j1_to_j5_rad": [
+    0.0,
+    -1.57,
+    3.14,
+    0.0,
+    0.0
+  ],
+  "proposed_zero_changes": [
+    {
+      "joint": "joint_1",
+      "old_zero_offset_rad": -0.03144173756028784,
+      "proposed_zero_offset_rad": -0.03771473028418542,
+      "delta_rad": -0.006272992723897579
+    },
+    {
+      "joint": "joint_2",
+      "old_zero_offset_rad": 0.0008581204545647925,
+      "proposed_zero_offset_rad": 0.004494583699283794,
+      "delta_rad": 0.0036364632447190015
+    },
+    {
+      "joint": "joint_3",
+      "old_zero_offset_rad": 1.5629535254099318,
+      "proposed_zero_offset_rad": 1.5631224280796916,
+      "delta_rad": 0.00016890266975977397
+    },
+    {
+      "joint": "joint_4",
+      "old_zero_offset_rad": 0.01137040788598534,
+      "proposed_zero_offset_rad": 0.011773002941399663,
+      "delta_rad": 0.0004025950554143228
+    },
+    {
+      "joint": "joint_5",
+      "old_zero_offset_rad": 0.006231796950785417,
+      "proposed_zero_offset_rad": -0.04096694931787656,
+      "delta_rad": -0.04719874626866198
+    }
+  ],
+  "j6_zero_offset_rad_to_preserve": -0.1606462878141351,
+  "proposed_j6_command_bounds_rad": [
+    -0.25,
+    0.02
+  ],
+  "proposed_activation_scope": "Only J6 alignment and established reduced J2-J4-J3 startup envelope; full travel remains unverified."
+}

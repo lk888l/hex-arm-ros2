@@ -268,8 +268,47 @@ def test_controller_manager_chain_requires_explicit_opt_in(tmp_path: Path) -> No
         if node.node_package == "controller_manager"
     }
 
-    assert controller_manager_executables == {
-        "ros2_control_node",
-        "hardware_spawner",
-        "spawner",
+    assert controller_manager_executables == {"ros2_control_node"}
+
+
+def test_fixed_startup_requires_explicit_motion_acknowledgement(tmp_path: Path) -> None:
+    import pytest
+
+    path = PACKAGE_ROOT / "launch" / "startup.launch.py"
+    spec = importlib.util.spec_from_file_location("hex_arm_startup_launch", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    arguments = {
+        action.name: action
+        for action in module.generate_launch_description().entities
+        if isinstance(action, DeclareLaunchArgument)
     }
+    context = LaunchContext()
+    default = perform_substitutions(
+        context, arguments["allow_startup_motion"].default_value
+    )
+    assert default == "false"
+    context.launch_configurations.update({
+        "allow_startup_motion": default,
+        "hardware_profile": str(_profile(tmp_path, calibrated=False)),
+    })
+    with pytest.raises(RuntimeError, match="requires allow_startup_motion"):
+        module._setup(context)
+
+    context.launch_configurations["allow_startup_motion"] = "true"
+    actions = module._setup(context)
+    processes = [action for action in actions if isinstance(action, ExecuteProcess)]
+    assert len(processes) == 1
+    assert not list(_walk_nodes(actions))
+    command = [
+        perform_substitutions(context, token) for token in processes[0].cmd
+    ]
+    assert command[-2:] == ["--startup-sequence", "--allow-startup-motion"]
+
+
+def test_startup_failure_stops_owner_but_success_keeps_holding():
+    module = _load_launch_module()
+    context = LaunchContext()
+    handler = module._shutdown_after_failure("ordered startup_ready")
+    assert handler(SimpleNamespace(returncode=0), context) == []
+    assert any(isinstance(a, EmitEvent) for a in handler(SimpleNamespace(returncode=1), context))

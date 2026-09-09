@@ -763,7 +763,20 @@ impl ArmRuntime {
                             if self.is_closing() {
                                 break;
                             }
-                            if let Err(error) = self.backend.set_targets(targets).await {
+                            let update = {
+                                // Serialize streaming with enable/disable. A mode
+                                // transition may have completed since this tick's
+                                // snapshot; never send to an already disabled drive.
+                                let _gate = self.mode_gate.lock().await;
+                                if self.is_closing() {
+                                    break;
+                                }
+                                if self.data.read().safety.mode != OperatingMode::Active {
+                                    continue;
+                                }
+                                self.backend.set_targets(targets).await
+                            };
+                            if let Err(error) = update {
                                 self.fault_and_disable(FAULT_TRANSPORT, error.to_string())
                                     .await;
                             }
@@ -1326,6 +1339,9 @@ mod tests {
         shutdown_complete: AtomicBool,
         enable_after_shutdown: AtomicBool,
         reject_nonzero_feedforward: AtomicBool,
+        disable_delay_ms: AtomicUsize,
+        disable_in_progress: AtomicBool,
+        targets_during_disable: AtomicBool,
     }
 
     impl ShutdownOrderBackend {
@@ -1344,6 +1360,9 @@ mod tests {
                 shutdown_complete: AtomicBool::new(false),
                 enable_after_shutdown: AtomicBool::new(false),
                 reject_nonzero_feedforward: AtomicBool::new(false),
+                disable_delay_ms: AtomicUsize::new(0),
+                disable_in_progress: AtomicBool::new(false),
+                targets_during_disable: AtomicBool::new(false),
             }
         }
     }
@@ -1381,11 +1400,21 @@ mod tests {
         }
 
         async fn set_targets(&self, _targets: [crate::conversion::MotorTarget; DOF]) -> Result<()> {
+            if self.disable_in_progress.load(Ordering::Acquire) {
+                self.targets_during_disable.store(true, Ordering::Release);
+                anyhow::bail!("test drive is being disabled");
+            }
             Ok(())
         }
 
         async fn disable_all(&self) -> Result<()> {
+            self.disable_in_progress.store(true, Ordering::Release);
             self.enabled.store(false, Ordering::Release);
+            tokio::time::sleep(Duration::from_millis(
+                self.disable_delay_ms.load(Ordering::Acquire) as u64,
+            ))
+            .await;
+            self.disable_in_progress.store(false, Ordering::Release);
             Ok(())
         }
 
@@ -1535,6 +1564,33 @@ mod tests {
         }
         feedback.captured_at = Some(Instant::now());
         feedback
+    }
+
+    #[tokio::test]
+    async fn intentional_disable_excludes_streaming_without_latching_transport_fault() {
+        let backend = Arc::new(ShutdownOrderBackend::new());
+        backend.disable_delay_ms.store(30, Ordering::Release);
+        let runtime = Arc::new(runtime_with_backend(
+            backend.clone() as Arc<dyn MotorBackend>
+        ));
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("disable-stream-race".into()).unwrap();
+        runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap();
+        let task = tokio::spawn(runtime.clone().run_control_loop());
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        runtime
+            .set_mode(session, OperatingMode::Disabled)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(!backend.targets_during_disable.load(Ordering::Acquire));
+        assert_eq!(runtime.data.read().safety.mode, OperatingMode::Disabled);
+        runtime.begin_shutdown();
+        task.await.unwrap();
+        runtime.shutdown().await.unwrap();
     }
 
     #[tokio::test]

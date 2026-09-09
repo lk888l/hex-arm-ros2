@@ -1,0 +1,8 @@
+# MoveIt mock starts at the requested ready pose; this never commands real hardware.
+initial_positions:
+  joint_1: 0.0
+  joint_2: -1.350
+  joint_3: 3.000
+  joint_4: -0.300
+  joint_5: 0.0
+  joint_6: 0.0
