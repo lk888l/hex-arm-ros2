@@ -2,13 +2,14 @@
 
 **English** | [中文](commissioning_cn.md)
 
-Applies to this Firefly Y6 arm with Meow firmware, no gripper or extra payload, as of 2026-09-08.
+Applies to this Firefly Y6 arm with Meow firmware and no gripper or extra payload.
+Consolidated on 2026-09-09; hardware results are from testing through 2026-09-08.
 The active profile is `config/hardware/firefly_y6.meow.can2.local.yaml`. Keep its motor identities,
 directions and encoder offsets; this local profile is excluded from Git.
 
 ## Current state
 
-- Six-axis can2 communication, measured feedback, MIT control and gravity compensation are running.
+- Six-axis can2 communication, measured feedback, MIT control and gravity compensation have been verified in operation.
 - Repeated J2 → J4 → J3 startup succeeded. The latest 10-second hold had a maximum error of about 0.00196 rad.
 - MoveIt small-motion execution and a 60-second hold passed. The operator reports normal behavior with no obvious buzzing or vibration in the current small window.
 - A previous 0.015 rad J2 return exceeded the 0.005 rad goal tolerance. Its cause remains open and it belongs in repeatability testing.
@@ -71,7 +72,9 @@ The CAN interface is configurable; rebinding also checks the physical adapter se
 
 ## Build artifacts
 
-Cleanup retains `install/` and the files it links to in `build/` for the running arm.
+Cleanup retains `install/` and the files it links to in `build/` for the existing deployment.
 Build caches, test outputs and historical logs have been removed. Stop control before rebuilding;
 run `./scripts/build.sh` inside `/workspaces/hex_arm_ros2`, then source `install/setup.bash`.
-The next rebuild recreates caches and takes longer. Active-session logs and supervisor state remain available.
+The next rebuild recreates caches and takes longer. Future runs generate new logs as usual.
+The current local hardware profile, earlier trial records and backup profiles are retained for reference.
+Use this document for current operation and optimization steps.

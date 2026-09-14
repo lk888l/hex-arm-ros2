@@ -348,290 +348,78 @@ Jazzy），因此无需再复制维护一份内容相同的 Ubuntu Dockerfile。
 
 <a id="real-hardware"></a>
 
-## 真机入口与调试参考
+## 当前真机部署
 
-### CAN 接口可以选择
+当前使用 **Firefly Y6、Meow 固件、can2，无夹爪及附加载荷**。六轴通信、重力补偿、
+J2→J4→J3 顺序启动和 MoveIt 小范围执行已验证；完整行程、较高速度和负载工况仍待验收。
+完整参数、已知待回归问题与下一阶段任务统一维护在
+[当前实机状态与后续优化](docs/commissioning_cn.md)。
 
-驱动没有写死 `can0`。接口名由 profile 的 `bus.interface` 指定；物理通道及
-USB 序列号由 sysfs 识别，不从 `canN` 的数字猜测。切换端口时，在停止控制器后
-为所选接口生成一份新的配置，电机身份、零点和运动参数会保留：
+### 启动与停止
 
-```bash
-# 宿主机仓库目录；先确保所选接口已按 1M/4M 配置并启用。
-export HEX_ARM_CAN_IFACE=can0
-python3 scripts/bind-can-profile.py \
-  --interface "$HEX_ARM_CAN_IFACE" \
-  --profile config/hardware/firefly_y6.meow.local.yaml \
-  --output config/hardware/firefly_y6.selected.local.yaml
+本机配置为 `config/hardware/firefly_y6.meow.can2.local.yaml`，包含已采用的电机身份、
+方向、零偏和运动窗口。该文件不提交 Git；换机时从 `firefly_y6.meow_mit.example.yaml`
+建立新配置并重新核对标定，不能直接套用本机配置。
 
-./scripts/docker-dev.sh doctor
-./scripts/docker-dev.sh real-launch bringup \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.selected.local.yaml \
-  activate_hardware:=false use_rviz:=false
-```
-
-把 `can0` 换成实际接口即可。输入 profile 必须属于这台机械臂；上例
-`firefly_y6.meow.local.yaml` 是本机采集的本地文件，不随 Git 分发。
-工具不覆盖已有输出，重新选择时请使用新文件名。运行过程中不热切换总线。
-`HEX_ARM_CAN_SERIAL`、`HEX_ARM_CAN_CHANNEL` 仍可显式指定；省略时脚本读取所选
-接口的实际值。控制器仍会核对完整六轴身份、CAN 时序及适配器。
-
-### 折叠参考与顺序启动试验
-
-断电折叠参考为 `[0, -1.570, 3.140, 0, 0, 0]` rad；理想启动姿态为
-`[0, -1.350, 3.000, -0.300, 0, 0]` rad。
-`moveit_mock.launch.py` 默认直接显示理想姿态，RViz 的命名状态为
-`startup_ready`。真实启动顺序是 **J2 → −1.350、J4 → −0.300、J3 → 3.000**，
-各阶段分别用 8、10、6 秒的平滑轨迹，并等待反馈到位后再进入下一阶段。
-
-已确认参考姿态、无负载及实物路径无碰撞后，可使用专门的有界 Meow 试验入口：
+从断电折叠参考 `[0,-1.570,3.140,0,0,0]` 开始，在宿主机仓库目录的图形终端执行：
 
 ```bash
-# 会使能真实电机并移动；在已确认的折叠参考姿态运行。
-HEX_ARM_CAN_IFACE=can0 ./scripts/docker-dev.sh real-launch startup \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.local.yaml \
-  allow_startup_motion:=true
-```
-
-它先做完整身份/反馈/力矩预算检查，原位渐入重力补偿，然后执行固定顺序；
-结束后保持 3 秒并确认失能。任一步超时、反馈失效、速度或跟踪超限都会停止。
-此入口不会设置 `calibrated: true`，也不会自动启动 MoveIt 执行。到位容差沿用
-GUI 的 0.003 Rev（约 0.01885 rad），不等于 ROS 轨迹控制器的 0.005 rad 验收。
-
-MIT-pp-test 的 Kp/Kd 基线为 **80 Nm/rad、15 Nm·s/rad**。GUI 基线重力比例为
-`[0,0.3,0.7,0.7,0,0]`；本机无夹爪实测后调整为 `[0,1.0,1.05,0.7,0,0]`，
-J3 的 PD 预算为 450‰，其余轴为 500‰，总输出预算仍为 650‰。
-固定顺序已在真机完成，最终 J2/J3/J4 误差约 0.0020/0.0043/0.0025 rad。
-这些是本机参数，具体范围和证据见 [现场记录](docs/commissioning_evidence/2026-09-07-meow-startup.md)。
-出厂校准由驱动读取。中间折叠路径的网格接触已由本次
-操作者确认不构成实物碰撞；该固定试验不使用 MoveIt 规划，严格碰撞矩阵仍保留。
-J4 commissioning 下限为 −0.35 rad，以包含 −0.300 rad 目标。
-
-**J4 Kp=110 下，can2 已通过顺序启动、MoveIt 小步执行和 60 秒保持，该轮未复现此前的 J4 跟踪超限。**
-后续 15 mrad 的 J2 回程触发原有到位保护，双向运动仍待调优。当前 Kp 为
-`[80,80,120,110,80,80]`、全部 Kd=15。以已核对的折叠姿态执行：
-
-```bash
+HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
   enable_execution:=true
 ```
 
-`startup_ready` 默认 true：控制器就绪后处理 J6 偏差，再严格按 J2→J4→J3
-到 `[0,-1.350,3.000,-0.300,0,0]` 并持续保持。J2/J3/J4 在各自动作前保持实测折叠位置，
-小摆放偏差在使能前检查，不重新设置零偏。等待日志
-`startup_ready reached and verified; controller continues holding` 后再操作 RViz 执行。需要原位保持时加
-`startup_ready:=false`；仅观察时省略 `enable_execution:=true`。
-J6 保留零偏，自动回零仍在 profile 范围内限速进行。已有成功试验仅覆盖受限启动与目标邻域，
-完整行程和带负载运动尚未验收。运行、停止及参数范围见
-[当前 can2 真机部署记录](docs/commissioning_evidence/2026-09-08-can2-kp110-deployment.md)。
+入口核对反馈和位置后使能，默认依次移动 **J2→−1.350（8 s）、J4→−0.300（10 s）、
+J3→3.000（6 s）**，其余关节最终为 0。该顺序退出路径由操作者确认实物无碰撞。
+等待 `startup_ready reached and verified; controller continues holding` 后，
+在 RViz 选择 `arm`，以当前状态为起点进行 `Plan` / `Plan & Execute`。
+后续 MoveIt 执行使用严格碰撞检查，并受当前本机运动窗口约束。
 
+当前 Kp 为 `[80,80,120,110,80,80]`，Kd 均为 15；J2/J3/J4 重力比例为 `1.0/1.05/0.7`。
+速度和加速度上限分别为 0.1 rad/s、0.1 rad/s²；具体限位见部署进度文档。
+`startup_ready:=false` 选择使能后原位保持；省略 `enable_execution:=true` 为观察和规划。
 
-真机已有独立的观察/规划入口；执行需要完成 profile 标定和实机验收。
-最新 Meow 固件与上位机 MIT-pp-test 对齐的部署流程见
-[Meow MIT 实机部署](docs/meow_mit_deployment_cn.md)，使用 `bus.protocol: meow`。
-模拟规划或执行成功，不代表真机已完成验证。
+停止时在拥有启动进程的终端按 Ctrl-C，等待 `VERIFIED clean controller exit`。
+切换上位机、修改配置或重新编译前，先停止当前控制端。
 
-真机调试需具备物理急停，未知总线先做只读发现。在 Docker 中运行真机时使用
-`./scripts/docker-dev.sh real-launch` 受监督入口，停止后等待控制器确认失能并退出。
-完整步骤见部署文档与 [commissioning 清单](docs/commissioning_cn.md)。
+### CAN 接口与继续开发
 
-<details>
-<summary>历史 CiA402 参考：总线发现、受监督启动与安全边界</summary>
+CAN 名称可配置；当前使用 can2，接口速率为 1 Mbps 仲裁 / 4 Mbps 数据。
+选择接口时同时校验 USB 适配器序列号和物理通道。更换接口后，使用
+`scripts/bind-can-profile.py` 生成保留身份与标定的新 profile，再通过
+`HEX_ARM_CAN_IFACE` 选择对应接口；完整命令见 [Meow MIT 部署说明](docs/meow_mit_deployment_cn.md#更换-can-接口)。
 
-以下保留旧 CiA402 调试背景，其中 `can2`、轴参数和单圈窗口均为历史记录。
-新 Meow 固件的配置、单位与标定要求以部署文档为准，不直接沿用旧参数。
-
-## 真机：先做只读发现
-
-现场 CAN-FD 链路的完整契约是仲裁段 `1 Mbit/s, SP=0.8, SJW=5`、数据段
-`4 Mbit/s, SP=0.8, SJW=3`，并关闭自动 bus-off restart（`restart-ms 0`）。启动
-任何 ROS 或 GUI 进程前，先在本地 Ubuntu 宿主机配置：
-
-```bash
-sudo ip link set dev can0 down
-sudo ip link set dev can0 type can \
-  bitrate 1000000 sample-point 0.8 sjw 5 \
-  dbitrate 4000000 dsample-point 0.8 dsjw 3 \
-  fd on restart-ms 0
-sudo ip link set dev can0 up
-ip -details -statistics link show dev can0
-```
-
-宿主机也可用 `can-config set can0 4M` 设置 1M/4M 时序，但它不会修改电机固件，
-当前版本也不写 `restart-ms`。ROS 驱动、MoveIt 或电机 GUI 正在使用 `can0` 时禁止
-运行该命令，执行后仍须核对完整链路。详见
-[有监督的硬件调试清单](docs/commissioning_cn.md)，然后启动普通容器：
-
-```bash
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh shell
-```
-
-Ubuntu Compose 使用 host network，因此容器直接看到宿主机 `can0`；SocketCAN
-路径不需要 `HEX_ARM_REAL=1`。在已经构建的容器内，先用以下命令识别六个机械臂
-节点和已知辅助节点；该过程不加载硬件 profile，也不初始化驱动器：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source /workspaces/hex_arm_ros2/install/setup.bash
-ros2 run hex_arm_controller hex_arm_controller -- \
-  --discover-only --transport socket-can --interface can0 \
-  --expected-node 1 --expected-node 2 --expected-node 3 \
-  --expected-node 4 --expected-node 5 --expected-node 6 \
-  --auxiliary-node 15 --timeout 2 --sdo-timeout-sec 0.25
-```
-
-该模式监听心跳，并且只允许 CANopen 身份 SDO upload；不能发送 NMT、PDO、SDO
-download、控制字或电机指令。接通电源前请先阅读
-[docs/commissioning_cn.md](docs/commissioning_cn.md)。旧的直连 `gs_usb` 路径仍需
-`HEX_ARM_REAL=1`；它固定为 1M/5M，不得用于现场 1M/4M 链路。
-
-发现成功只能证明节点存在且身份可读。本机已确认直接映射 node 1→joint_1 到
-node 6→joint_6；node 15（`0x0f`）是夹爪，仍完全排除在机械臂的初始化、使能、
-失能和指令路径之外。但它作为物理载荷不能被忽略：配置 `tip_payload` 后，启动必须
-精确匹配 node 15 的 `0x1018` 指纹，并把固定质量/质心合并到 `link_6` 的重力模型。
-方向、零点、限位、力矩缩放和真实 TCP 仍需 commissioning。GUI 的 direct userspace `gs_usb`
-路径与 ROS SocketCAN 路径不得同时独占同一 USB-CANFD 适配器。
-
-将 `config/hardware/firefly_y6.example.yaml` 复制为被 git 忽略的 `*.local.yaml`，
-填写节点 identity、严格的 `expected_link` 时序/USB 指纹和轴参数候选，并保持
-`bus.direct_joint_mapping: true`。结构与指纹
-复核后，`validated: true`、`calibrated: false` 的 profile 可以用于禁用状态观察；
-激活门会明确拒绝尚未标定的 profile。
-
-任何真机 launch 之前，先离线验证 profile、URDF 动力学模型和单圈命令窗口；该命令
-不会打开 CAN：
-
-```bash
-ros2 run hex_arm_controller hex_arm_controller -- \
-  --profile /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml \
-  --validate-profile-only
-```
-
-真机 launch 建议从**宿主机**使用受监督 Docker 入口。接口、通道必须与 YAML
-profile 完全一致（下面使用当前现场的 `can2`、channel 2）：
-
-```bash
-HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 \
-  ./scripts/docker-dev.sh real-launch bringup \
-  /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml
-```
-
-bringup 仍默认 `activate_hardware:=false`，该辅助命令不会自动使能。它为本次启动
-建立独立进程组；收到 `Ctrl-C`、SIGTERM 或终端挂断后，只向该组转发信号并继续
-等待。只有 `hex_arm_controller` 通过“六轴确认失能→心跳 consumer 解除”路径干净
-退出，才会输出 `VERIFIED clean controller exit`。另一个使用 `can1` 的 launch 不会
-被发信号或结束。如果没有看到该确认行，应把退出视为未确认，先检查保留的
-`/tmp/hex-arm-real-launch.../launch.log`，不要立即启动同接口的新 owner。
-
-新的 MoveIt 真机入口同样默认只观察和规划，并固定使用低速 commissioning limits：
-
-```bash
-HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 \
-  ./scripts/docker-dev.sh real-launch moveit \
-  /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml
-```
-
-不要用裸
-`docker exec ... bash -lc 'ros2 launch ...'` 包裹真机 launch：中断外层 exec 时可能
-留下 launch/controller 子进程。正常停止也不要使用 `pkill`、`killall`、重启容器或
-`docker compose down`，因为这些方式无法给出控制器的失能/解除心跳确认。应保持
-受监督命令连接，直到它输出最终验证结果。
-
-在 profile 完成标定且修正后的 joint_2 零偏/范围通过真机验收之前，不得设置
-`enable_execution:=true`。
-
-注意：`0x603F=0x8130` 是可保留的 last-error；若当前 `0x6041=0x0231`，驱动器
-已是 non-Fault/non-OE，不要为擦除历史码执行 fault reset。正常退出会在主站心跳仍
-发送时，先确认六轴失能，再逐轴回读确认 `0x1016:01=0`，避免退出本身重新制造
-heartbeat-lost。只有 `0x6041` 当前 Fault bit 为 1 且 last-error 恰为 `0x8130`
-时，才可使用受门控的显式恢复 CLI；完整命令和判据见
-[真机调试文档](docs/commissioning_cn.md)。
-
-## 安全边界
-
-`activate_hardware` 默认是 `false`，所以上述命令只启动 Rust 控制器、桥接、
-robot_state_publisher 和可选 RViz，不启动 ros2_control 或轨迹控制器。观察启动仍会在
-disabled 状态初始化驱动器，因此面对未知总线时必须先执行 `--discover-only`。
-
-真实启动始终从 disabled（禁用）状态开始。激活需要六个全新识别（fresh identified）的电机、一份完整校准的配置文件、一个独占的 robot_api 会话，以及一次显式的 ros2_control 生命周期转换。电机故障、反馈过期、非有限（non-finite）指令、CAN 传输失败或指令看门狗超时，都会锁存整臂故障并触发停止/禁用。
-
-WSL2、Docker、Zenoh、SocketCAN 和用户态 USB 均不属于硬实时或经过安全认证的组件。调试（commissioning）时必须配备可用的物理急停开关。当前姿态证据约为
-`q=[0,-1.570,3.140,0,0,0]`；旧方向候选 `[-1,-1,+1,+1,+1,+1]` 和由单次快照
-拟合的零偏只能作为 commissioning 证据，不是动作验证。修正此前遗漏的 joint_2
-负号后，其完整 URDF 范围约映射到 `[-0.3310,+0.2515]` 电机圈数，因此旧的 seam
-阻断是错误零偏造成的。本地硬件、URDF 和 MoveIt 下限仍统一为 `-1.570`；
-断电重启后若反馈低于该值，必须 fail-closed 并重新确认参考，不会为了隐藏摆放误差而放宽命令范围。
-joint_2 仍从该下限起步，必须先向范围内重新调试。
-
-旧 `hex-ros2-arm` 桥和生成的 MoveIt 包已经过审计而不是直接复制：方向候选、J1--J3
-的 0.85 力矩换算、规划链和 FJT 接口已经进入当前项目；自动进入 ACTIVE、无误差校验
-即报告 action 成功、6/10 rad 运动限位、未经复核的固定重力和关闭全部自碰撞的 SRDF 都被明确
-拒绝。详见[旧仓库复用审计](docs/commissioning_cn.md#旧-hex-ros2-arm-复用审计)。
-
-桥发送空 `kp`、`kd` 和 `tau_ff`，由 Rust 选择经过复核的逐轴低增益，并依据机械臂
-URDF 与已配置的固定 `tip_payload` 自动计算重力前馈。非空的外部 `tau_ff` 会绕过
-这条载荷模型和 `gravity_compensation_scale` 自动路径。API 的 `kp`/`kd` 是关节侧
-SI 增益，单位分别为 `Nm/rad` 和 `Nm*s/rad`，`tau_ff` 是关节侧 `Nm`。因此逐轴
-`torque_scale` 在下发到电机时作用于所有产矩 MIT 项--前馈以及 P、D 增益系数，
-电机实测力矩返回 ROS 时则使用其倒数。ROS/MoveIt 桥刻意发送空数组，因此走的是
-载荷感知路径。本地现场 profile
-才是逐轴增益、重力比例、限制和力矩权限的权威记录。当前断点 J1..J6 的 Kp/Kd 为
-`60/2.5`、`80/2.5`、`2/0.3`、`30/1`、`30/1`、`20/1`，J2/J3/J4 分阶段
-重力比例为 `0.25/0/0`；这些仍只是 commissioning 候选，不是安全认证值。
-本仓库不声称零位、运动方向、力矩标定或执行精度已经通过真机动作验证。
-
-真机硬件 profile 使用 schema v2，并强制显式填写 URDF `base_link` 坐标系下（m/s²）的
-`gravity_vector_base_m_s2`；由于安装方向属于安全关键参数，v1 或缺少该字段都会被
-拒绝。当前本地 commissioning 候选为 `[0.0, 0.0, -9.81]`，并继续保持未标定。
-commissioning 与 runtime 都先用它计算重力，再应用逐轴
-`gravity_compensation_scale`；逐轴标量不能用来改变重力方向。`SetGravity` 只覆盖
-当前会话，release、shutdown 或新会话都会恢复 profile 值。迁移和验证要求见
-[真机调试文档](docs/commissioning_cn.md)。
-
-默认严格 SRDF `firefly_y6.srdf` 只排除六对直接相邻连杆。mock MoveIt 与
-`enable_execution:=true` 的真机 MoveIt 始终使用这份严格矩阵，因此 15 对非相邻
-连杆在所有可执行路径上都会继续做碰撞检查。单独的
-`firefly_y6.plan_only.srdf` 只会在 `enable_execution:=false` 的真机 MoveIt 中加载，
-它仅为修正后的实测折叠姿态中来源 collision mesh 报告的两对接触增加
-`PlanOnlySurveyedFold` 例外：`link_1`--`link_5` 和 `link_2`--`link_4`。其余十三对
-非相邻连杆仍由 FCL 检查；离线 guard 在此前错误的
-`q=[0,+1.570,3.140,0,0,0]` 姿态仍会暴露五对未放宽接触。MoveIt 全范围 100,000
-姿态采样没有发现任何永久碰撞的非相邻对，因此没有
-照搬额外 `Never` 对或旧 TEMP 全禁用矩阵。这个 plan-only 覆盖只是等待碰撞网格
-修正前的已知模型补丁，不是物理安全结论。基于该放宽矩阵得到的规划结果只可用于
-可视化/调试预览，不能直接复用为执行轨迹；真机执行前必须在严格 SRDF 下重新规划并
-重新通过碰撞验证，同时修正碰撞几何和实体起始姿态。本地 GR80 条目中的 0.41 kg
-质量/质心来自 trial URDF，只按 identity mount 合入 `link_6` 作为重力模型占位。
-`inertial_calibrated: false` 会让 `calibrated: true` profile 直接无效，从而禁止真机
-MoveIt 执行。`link_6` 暂时作为规划末端，仍需审查已标定的工具惯量、TCP/工具
-坐标系和最终碰撞几何；真机 MoveIt launch 因此只把 `link_6` 作为临时法兰末端。
-其 launch 契约和 mock 回归已做离线测试，但本文不声称已经执行过真机电机动作或
-MoveIt 真机轨迹。
-
-</details>
+清理后保留 `install/` 及其在 `build/` 中的必要链接目标。修改源码后，先停止控制，
+在容器工作区执行 `./scripts/build.sh`，再 `source install/setup.bash`；编译缓存会重新生成。
+后续按重复性回归、模型与限位核对、逐步扩大运动范围、连续运行与故障恢复、部署固化的顺序推进，
+详见 [后续优化步骤](docs/commissioning_cn.md#后续优化顺序)。
 
 ## 控制接口与架构
 
-对外公开的运动接口是由 `joint_trajectory_controller` 暴露的标准 `control_msgs/action/FollowJointTrajectory` action：
-
-```text
-/firefly_arm_controller/follow_joint_trajectory
-```
-
-真机执行链路将 ROS 控制回路与 USB/CAN-FD 回路分离：
+MoveIt 规划轨迹后，通过标准 `control_msgs/action/FollowJointTrajectory` action
+交给 `joint_trajectory_controller`，接口为 `/firefly_arm_controller/follow_joint_trajectory`。
+当前真机链路为：
 
 ```text
 MoveIt / FollowJointTrajectory
-  -> ros2_control + firefly_arm_controller
-  -> hex_arm_hardware/SystemInterface
-  -> hex_arm_bridge（ROS lifecycle <-> Zenoh robot_api）
-  -> hex_arm_controller（Rust 安全状态机，1 kHz 软实时回路）
-  -> SocketCAN can0（现场）或用户态 gs_usb（旧路径）-> CAN-FD 电机
+  -> ros2_control + firefly_arm_controller（100 Hz）
+  -> hex_arm_hardware/SystemInterface（C++ 硬件插件）
+  -> hex_arm_bridge（Python，ROS <-> Zenoh / Protobuf）
+  -> hex_arm_controller（Rust，500 Hz 电机指令循环）
+  -> SocketCAN（当前 can2，可配置）-> CAN-FD / Meow MIT 电机
 ```
 
-Rust 进程拥有电机总线及全部安全决策权。ROS 桥接层不实现轨迹 action，也无法绕过独占会话或激活状态机。
+- **ros2_control** 管理控制器与硬件生命周期，并循环执行读取状态、更新轨迹控制器、写入目标。
+  `joint_trajectory_controller` 根据轨迹时间生成关节目标，检查跟踪和到位误差。
+- **硬件插件** 把六轴位置/速度命令以及位置/速度/力矩反馈接入 ros2_control，
+  通过 ROS 接口与桥接层交换数据。
+- **桥接层** 在 ROS 与 Rust 的 Zenoh / Protobuf 接口之间转换指令和反馈，
+  协调生命周期及独占控制会话；它不另行实现轨迹 action。
+- **Rust 驱动** 独占电机总线，完成指令插值、方向与零偏换算、重力补偿、MIT 数据发送和反馈接收，
+  并执行限位、输出限制及指令/反馈超时保护。
+
+碰撞检查由 MoveIt 承担，轨迹误差检查由轨迹控制器承担，电机通信与底层保护由 Rust 承担。
 
 ## 可复现性
 
@@ -657,7 +445,7 @@ vcs import . < hex_arm.repos
 `unit` 不依赖硬件。`protocol` 使用 mock 电机后端启动 Rust 控制器，并验证 Zenoh
 发现/事件以及 ROS 生命周期桥接。`mock` 测试 FollowJointTrajectory 的发送/取消和
 控制器生命周期。`gz` 以无头模式启动 Gazebo 并验证两条轨迹。真机调试使用独立的
-[有人监督的检查清单](docs/commissioning_cn.md)。
+[当前实机状态与后续优化](docs/commissioning_cn.md)。
 
 MoveIt 的规划、严格碰撞检查与模拟执行有独立的无界面冒烟测试，在构建并 source 后运行：
 
@@ -674,4 +462,4 @@ python3 src/hex_arm_moveit_config/test/test_moveit_mock.py
 | [MoveIt 仿真指南](docs/moveit_simulation_cn.md) | 模拟窗口、限速配置、碰撞模型与 MoveIt 真机规划入口 |
 | [图形界面与命令行模拟指南](docs/gui_and_cli_simulation_cn.md) | X11/WSLg/NVIDIA 诊断、action 与 Python 驱动示例 |
 | [Meow MIT 实机部署](docs/meow_mit_deployment_cn.md) | 新固件协议、参数单位、profile 与当前部署流程 |
-| [Commissioning 清单](docs/commissioning_cn.md) | 硬件发现、标定、受监督操作与历史验收记录 |
+| [当前实机状态与后续优化](docs/commissioning_cn.md) | 当前参数、启动停止、已知待回归问题与后续步骤 |

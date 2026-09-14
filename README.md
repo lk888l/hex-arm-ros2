@@ -388,373 +388,87 @@ unnecessary.
 
 <a id="real-hardware"></a>
 
-## Real hardware and commissioning references
+## Current hardware deployment
 
-### Selecting a CAN interface
+The current setup is a **Firefly Y6 with Meow firmware on can2, without a gripper or extra payload**.
+Six-axis communication, gravity compensation, ordered J2 → J4 → J3 startup and small MoveIt motions
+have been verified. Full travel, higher speeds and payload operation remain to be validated.
+The configuration, open regression item and remaining work are maintained in
+[Current hardware state and next steps](docs/commissioning.md).
 
-The driver is not tied to `can0`. The profile selects `bus.interface`; sysfs
-identifies the physical USB channel and serial independently of the netdev name.
-With control stopped, bind the existing arm profile to the chosen interface:
+### Start and stop
 
-```bash
-# Host repository directory; first configure and bring up the chosen 1M/4M link.
-export HEX_ARM_CAN_IFACE=can0
-python3 scripts/bind-can-profile.py \
-  --interface "$HEX_ARM_CAN_IFACE" \
-  --profile config/hardware/firefly_y6.meow.local.yaml \
-  --output config/hardware/firefly_y6.selected.local.yaml
-./scripts/docker-dev.sh doctor
-./scripts/docker-dev.sh real-launch bringup \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.selected.local.yaml \
-  activate_hardware:=false use_rviz:=false
-```
+Use `config/hardware/firefly_y6.meow.can2.local.yaml` for this arm. It contains the current motor
+identities, directions, encoder offsets and motion envelope and is excluded from Git. For another
+arm, create a profile from `firefly_y6.meow_mit.example.yaml` and verify its calibration separately.
 
-Replace `can0` with the actual interface. The input profile must belong to this
-arm; the example Meow local file is a site-specific capture and is not distributed
-in Git. Outputs are created exclusively, so choose a new filename if it exists.
-Motor identities, zero offsets, and motion parameters are retained. Restart
-control after rebinding; there is no live bus switching. Optional
-`HEX_ARM_CAN_SERIAL` and `HEX_ARM_CAN_CHANNEL` overrides remain supported; when
-omitted, the helper reads them from the selected interface. Full motor identity,
-adapter, and CAN timing checks remain active.
-
-### Folded reference and bounded startup trial
-
-The power-off folded reference is `[0,-1.570,3.140,0,0,0]` rad. MoveIt mock now
-starts at `[0,-1.350,3.000,-0.300,0,0]`, also available as `startup_ready`.
-The physical startup order is **J2 → −1.350, J4 → −0.300, J3 → 3.000**. The
-fixed trial uses smooth 8/10/6-second segments and verifies arrival at each step.
+Start from the folded reference `[0,-1.570,3.140,0,0,0]`. From a graphical host terminal in the repository:
 
 ```bash
-# Moves real motors: requires the confirmed folded reference and verified clear path.
-HEX_ARM_CAN_IFACE=can0 ./scripts/docker-dev.sh real-launch startup \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.local.yaml \
-  allow_startup_motion:=true
-```
-
-This Meow-only commissioning entry checks identities, fresh feedback and torque
-budgets, ramps gravity at the fold, runs the fixed sequence, holds for 3 seconds,
-then confirms disable. Timeout, stale feedback, excessive speed or tracking error
-aborts the trial. It does not promote `calibrated` or start general MoveIt execution.
-Arrival uses the GUI's 0.003 Rev tolerance (about 0.01885 rad), which is distinct
-from the ROS trajectory controller's 0.005 rad acceptance.
-
-The MIT-pp-test baseline is Kp=80 Nm/rad, Kd=15 Nm·s/rad and gravity scales
-`[0,0.3,0.7,0.7,0,0]`. Live trials on this arm without a gripper tuned the scales
-to `[0,1.0,1.05,0.7,0,0]`, with J3 PD limited to 450‰, other axes at 500‰,
-and the total budget unchanged at 650‰. The fixed startup succeeded with final
-J2/J3/J4 errors of approximately 0.0020/0.0043/0.0025 rad. These parameters are
-specific to this arm; see the [live record](docs/commissioning_evidence/2026-09-07-meow-startup.md).
-The backend reads factory calibration. The operator verified
-the intermediate folded path as physically clear despite mesh contacts. This fixed
-trial does not invoke MoveIt planning; the strict collision matrix is retained.
-The commissioning J4 lower bound is now −0.35 rad to include the requested target.
-
-**With J4 Kp=110, can2 completed ordered startup, MoveIt small-motion execution, and a 60-second hold. The earlier J4 tracking fault did not recur in that trial.**
-The subsequent 15 mrad J2 return exceeded the existing goal tolerance and stopped;
-bidirectional motion tuning remains open.
-Kp is `[80,80,120,110,80,80]`, with Kd=15 on every axis. From the verified folded pose:
-
-```bash
+HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
   enable_execution:=true
 ```
 
-`startup_ready` defaults to true: after controller activation, align J6 if needed,
-then move J2 → J4 → J3 to `[0,-1.350,3.000,-0.300,0,0]` and continue holding.
-J2/J3/J4 hold their measured folded positions until their own turn. Small placement
-offsets are checked before enable without changing encoder calibration. Wait for
-`startup_ready reached and verified; controller continues holding` before executing in RViz.
-Use `startup_ready:=false` for measured-pose activation. Omit `enable_execution:=true`
-for observation only. J6 keeps its zero offset and moves within the selected profile.
-Successful trials cover this bounded startup and its target neighborhood; full travel and
-payload changes remain unverified. See the [current can2 deployment record](docs/commissioning_evidence/2026-09-08-can2-kp110-deployment.md).
+The entry checks feedback and position before enabling. Startup then moves **J2 to −1.350 (8 s),
+J4 to −0.300 (10 s), and J3 to 3.000 (6 s)**, with the other joints ending at zero.
+The operator has verified physical clearance for this ordered folded exit.
+Wait for `startup_ready reached and verified; controller continues holding`, then select `arm`
+and the current start state in RViz for `Plan` / `Plan & Execute`. Subsequent MoveIt execution
+uses strict collision checks and the current local motion envelope.
 
+Current Kp is `[80,80,120,110,80,80]`, Kd is 15 on every axis, and J2/J3/J4 gravity scales are
+`1.0/1.05/0.7`. Velocity and acceleration caps are 0.1 rad/s and 0.1 rad/s²; see the deployment
+status document for detailed bounds. Use `startup_ready:=false` for measured-pose holding;
+omitting `enable_execution:=true` selects observation and planning.
 
-Real hardware has a separate observation/planning entry point; execution requires
-a calibrated profile and hardware validation. For the latest Meow firmware and
-GUI MIT-pp-test baseline, follow [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md)
-and select `bus.protocol: meow`. Successful simulation does not establish
-hardware readiness.
+Stop with Ctrl-C in the owning launch terminal and wait for `VERIFIED clean controller exit`.
+Stop the current controller before switching applications, editing profiles or rebuilding.
 
-Commissioning requires a physical emergency stop and read-only discovery on an
-unknown bus. For real launches in Docker, use the supervised
-`./scripts/docker-dev.sh real-launch` entry and wait for confirmed controller
-disable and exit when stopping. See the deployment guide and
-[commissioning checklist](docs/commissioning.md) for the full procedure.
+### CAN selection and further development
 
-<details>
-<summary>Historical CiA402 reference: discovery, supervised startup, and safety boundary</summary>
+The CAN interface is configurable. The current setup uses can2 at 1 Mbps arbitration / 4 Mbps data.
+Interface selection also checks the USB adapter serial and physical channel. To change interfaces,
+use `scripts/bind-can-profile.py` to create a profile that retains motor identities and calibration,
+then select the matching interface through `HEX_ARM_CAN_IFACE`. See the
+[Meow MIT interface binding instructions (Chinese)](docs/meow_mit_deployment_cn.md#更换-can-接口).
 
-The following preserves the older CiA402 commissioning context. Its `can2`
-connection, axis parameters, and single-turn windows are historical records.
-Use the deployment guide for Meow configuration, units, and calibration instead
-of carrying over those parameters.
-
-## Real hardware: read-only discovery first
-
-The field bus contract is CAN-FD at `1 Mbit/s, SP=0.8, SJW=5` arbitration and
-`4 Mbit/s, SP=0.8, SJW=3` data timing, with `restart-ms 0`. Configure it on the
-native-Ubuntu host before starting any ROS or GUI process:
-
-```bash
-sudo ip link set dev can0 down
-sudo ip link set dev can0 type can \
-  bitrate 1000000 sample-point 0.8 sjw 5 \
-  dbitrate 4000000 dsample-point 0.8 dsjw 3 \
-  fd on restart-ms 0
-sudo ip link set dev can0 up
-ip -details -statistics link show dev can0
-```
-
-As a host-only convenience, `can-config set can0 4M` applies the 1M/4M timing
-but does not change motor firmware and currently does not write `restart-ms`.
-Never run it while the ROS driver, MoveIt, or the motor GUI is using `can0`, and
-always verify the complete link afterwards. See
-[the supervised commissioning checklist](docs/commissioning.md), then start the
-normal container:
-
-```bash
-./scripts/docker-dev.sh up
-./scripts/docker-dev.sh shell
-```
-
-The Ubuntu Compose service uses host networking, so the container sees the
-host `can0`; `HEX_ARM_REAL=1` is not needed for SocketCAN. Inside the built
-container, identify the six arm nodes and the known auxiliary node without
-loading a hardware profile or initializing a drive:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source /workspaces/hex_arm_ros2/install/setup.bash
-ros2 run hex_arm_controller hex_arm_controller -- \
-  --discover-only --transport socket-can --interface can0 \
-  --expected-node 1 --expected-node 2 --expected-node 3 \
-  --expected-node 4 --expected-node 5 --expected-node 6 \
-  --auxiliary-node 15 --timeout 2 --sdo-timeout-sec 0.25
-```
-
-This mode listens for heartbeats and permits only CANopen identity SDO uploads;
-it cannot send NMT, PDO, SDO downloads, controlwords, or motor commands. See
-[docs/commissioning.md](docs/commissioning.md) before connecting power. The
-legacy direct `gs_usb` path still requires `HEX_ARM_REAL=1`; it is fixed at
-1M/5M and must not be used on the field 1M/4M chain.
-
-A successful discovery proves node presence and identity only. The installed
-arm uses the confirmed direct mapping node 1 -> joint_1 through node 6 ->
-joint_6. Node 15 (`0x0f`) is the gripper and remains excluded from every arm
-initialize/enable/disable/command path. It is not ignored as a physical load:
-when `tip_payload` is present, startup requires node 15's exact `0x1018`
-fingerprint and the controller merges its fixed mass/COM into `link_6` for
-gravity. Direction, zero, limits, torque scaling, and the real TCP still require
-commissioning. The direct-GUI userspace `gs_usb` path and ROS SocketCAN path must
-never own the same USB-CANFD adapter simultaneously.
-
-Copy `config/hardware/firefly_y6.example.yaml` to an ignored `*.local.yaml`,
-fill the node identities plus the strict `expected_link` timing/USB fingerprint,
-keep `bus.direct_joint_mapping: true`, and review the candidate axis values.
-A `validated: true` but
-`calibrated: false` profile may be used for disabled observation; activation is
-explicitly rejected until calibration is complete.
-
-Validate the profile, URDF dynamics model, and single-turn command windows
-without opening CAN before any real launch:
-
-```bash
-ros2 run hex_arm_controller hex_arm_controller -- \
-  --profile /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml \
-  --validate-profile-only
-```
-
-After that offline check, the only uncalibrated motion entry is the isolated
-single-axis commissioning CLI (no ROS graph or Zenoh session). It requires all
-four motion arguments and performs one smooth out-and-back move; this example
-physically enables node 1, so use it only after confirming the sign at the arm:
-
-```bash
-ros2 run hex_arm_controller hex_arm_controller -- \
-  --profile /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml \
-  --commission-axis joint_1 --delta-rad 0.01 --duration-sec 2.0 \
-  --allow-motion
-```
-
-The CLI caps `abs(delta)` at 0.03 rad, checks the profile's independent
-`velocity_rad_s` and `acceleration_rad_s2` limits before enabling only the selected
-node, continuously checks all feedback and limits, returns to the starting
-position, rejects no-motion/wrong-direction/overshoot results using measured
-signed excursion, and requires a feedback-confirmed disable even on error or Ctrl-C.
-See [the commissioning checklist](docs/commissioning.md) before using it.
-
-Run a real launch from the **host** through the supervised Docker entry point.
-The interface and channel must exactly match the YAML profile (the current
-field connection is shown as `can2`, channel 2):
-
-```bash
-HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 \
-  ./scripts/docker-dev.sh real-launch bringup \
-  /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml
-```
-
-The bringup launch still defaults to `activate_hardware:=false`; this helper
-does not enable it. The host helper generates a random token, keeps the primary
-Compose exec isolated and attached in the background, and the container binds
-that token to this launch's exact process-group ID. On `Ctrl-C`, SIGTERM, or
-terminal hangup, a second non-TTY `docker exec` validates that token and sends
-INT/TERM only to the bound negative PGID; the host then resumes waiting for the
-original Compose exec. An early request recorded before a PGID exists prevents
-ROS from starting, and stale or malformed state is rejected. The command
-reports `VERIFIED clean controller exit` only after `hex_arm_controller` has
-returned through its confirmed all-axis disable and heartbeat-consumer disarm
-path. A separate `can1` launch is neither signalled nor killed. If the
-verification line is absent, treat shutdown as unconfirmed and inspect the
-retained `/tmp/hex-arm-real-launch.../launch.log` before starting another owner
-of the same interface.
-
-The real MoveIt entry is also plan-only by default and always uses the slow
-commissioning limits:
-
-```bash
-HEX_ARM_CAN_IFACE=can2 HEX_ARM_CAN_CHANNEL=2 \
-  ./scripts/docker-dev.sh real-launch moveit \
-  /workspaces/hex_arm_ros2/config/hardware/my_arm.local.yaml
-```
-
-Do not wrap a real launch in a bare
-`docker exec ... bash -lc 'ros2 launch ...'`: interrupting that outer exec can
-leave the launch/controller descendants running. Do not use `pkill`, `killall`,
-container restart, or `docker compose down` as a normal stop path because none
-of them can provide the controller's disable/disarm confirmation. Keep the
-supervised command attached until it prints its final verification result.
-
-Do not set `enable_execution:=true` until the profile is calibrated and the
-corrected joint-2 zero/range has passed full real-hardware validation.
-
-`0x603F=0x8130` may be retained last-error history. If current
-`0x6041=0x0231`, the drive is already non-Fault/non-OE and must not be reset just
-to erase history. Orderly exit now confirms all-axis disable and, while the host
-heartbeat is still live, reads back `0x1016:01=0` on every arm drive so exit does
-not manufacture another heartbeat-loss event. The explicitly gated recovery
-CLI is only for a current `0x6041` Fault with exact last-error `0x8130`; see the
-[hardware commissioning guide](docs/commissioning.md) for its command and gates.
-
-## Safety boundary
-
-`activate_hardware` defaults to `false`, so the command above starts the Rust
-controller, bridge, robot-state publisher, and optional RViz only; it does not
-start ros2_control or trajectory controllers. This observation launch does
-initialize drives in the disabled state, so use `--discover-only` first on an
-unknown bus.
-
-Real startup always begins disabled. Activation requires six fresh identified
-motors, a complete calibrated profile, an exclusive robot_api session, and an
-explicit ros2_control lifecycle transition. A motor fault, stale feedback,
-non-finite command, CAN transport failure, or command watchdog timeout latches a
-whole-arm fault and initiates stop/disable.
-
-WSL2, Docker, Zenoh, SocketCAN, and userspace USB are not hard-real-time or
-safety-certified components. A working physical emergency stop is mandatory
-for commissioning. Current pose evidence is approximately
-`q=[0,-1.570,3.140,0,0,0]`. Historical signs
-`[-1,-1,+1,+1,+1,+1]` and snapshot-derived offsets are commissioning evidence,
-not motion validation. Correcting the previously omitted joint-2 minus sign
-maps its full URDF range to approximately `[-0.3310,+0.2515]` motor rev, so the
-old wrap-seam blocker was an artifact of the wrong offset. The local hardware,
-URDF, and MoveIt lower bounds remain aligned at -1.570: a power-cycle reading
-below it fails closed instead of silently widening the command envelope.
-Joint 2 still starts at that boundary and must be re-commissioned
-inward before real execution.
-
-The historical `hex-ros2-arm` bridge and generated MoveIt package have been
-audited rather than copied. Their joint signs, 0.85 torque factors for joints
-1--3, planning chain, and FJT endpoint are already represented here; their
-auto-ACTIVE bridge, unchecked action success, 6/10 rad limits, unreviewed
-hard-coded gravity, and all-collisions-disabled SRDF are intentionally rejected. See the
-[commissioning audit](docs/commissioning.md#legacy-hex-ros2-arm-reuse-audit).
-
-The bridge sends empty `kp`, `kd`, and `tau_ff`: Rust selects the reviewed
-per-axis low gains and computes automatic gravity feedforward from the arm URDF
-plus any configured fixed `tip_payload`. A non-empty external `tau_ff` bypasses
-that automatic payload model and `gravity_compensation_scale`. API `kp`/`kd`
-are calibrated joint-side SI gains in `Nm/rad` and `Nm*s/rad`, and `tau_ff` is
-joint-side `Nm`. The per-axis `torque_scale` therefore applies to every
-torque-producing MIT term on the way to the motor--feed-forward plus the P and
-D gain coefficients--and its inverse applies to measured torque on the way
-back to ROS. The ROS/MoveIt bridge deliberately sends an empty vector, so it
-follows the payload-aware automatic path. The local
-field profile, rather than this prose, is authoritative for per-axis gains,
-gravity scales, limits, and torque authority. At this checkpoint J1..J6 Kp/Kd
-are `60/2.5`, `80/2.5`, `2/0.3`, `30/1`, `30/1`, and `20/1`, while staged
-J2/J3/J4 gravity scales are `0.25/0/0`; all remain commissioning candidates,
-not certified safety values. This repository does
-not claim that zero offsets, motion direction, torque calibration, or execution
-accuracy has been validated by real motion.
-
-Real hardware profiles use schema v2 and must explicitly provide
-`gravity_vector_base_m_s2` in URDF `base_link` coordinates (m/s^2); v1 and a
-missing vector are rejected because mounting direction is safety-critical. The
-current local commissioning candidate is `[0.0, 0.0, -9.81]` and remains
-uncalibrated. Both commissioning and runtime use it before applying each
-joint's `gravity_compensation_scale`; that scalar is not a gravity-direction
-switch. `SetGravity` is only a current-session override, and release, shutdown,
-or a new session restores the profile value. See
-[real-hardware commissioning](docs/commissioning.md) for migration and
-validation details.
-
-The default strict SRDF `firefly_y6.srdf` excludes only the six directly
-adjacent pairs. Mock MoveIt and real MoveIt with `enable_execution:=true`
-always use that strict matrix, so all 15 non-adjacent pairs remain collision
-checked on any executable path. A separate `firefly_y6.plan_only.srdf` is
-loaded only by the real MoveIt launch when `enable_execution:=false`; it adds
-exactly two `PlanOnlySurveyedFold` provenance-mesh exceptions for the corrected
-surveyed fold: `link_1`--`link_5` and `link_2`--`link_4`. The other thirteen
-non-adjacent pairs stay active there as well, and an offline FCL guard at the
-previously incorrect `q=[0,+1.570,3.140,0,0,0]` pose still exposes five
-unrelated contacts. A 100,000-state
-full-range MoveIt sample found no permanently colliding non-adjacent pair, so
-no unrelated `Never` pair or old TEMP blanket is copied. The plan-only overlay
-is a documented collision-model workaround until corrected meshes are
-available, not a physical safety claim. Plans produced under that relaxed
-matrix are visualization/debug previews only; they must not be reused for
-execution, and real hardware execution must be re-planned and re-validated
-under the strict SRDF after collision geometry and the physical start posture
-have been corrected. The local GR80 entry uses the trial-URDF mass/COM
-(0.41 kg with an identity mount in `link_6`) only as a gravity-model
-placeholder. Its `inertial_calibrated: false` value makes `calibrated: true`
-invalid and therefore prevents real MoveIt execution. `link_6` remains the
-provisional planning tip until calibrated tool inertials, a TCP/tool frame,
-and final collision geometry are reviewed; the real MoveIt launch therefore
-treats `link_6` as a provisional flange tip. Its launch contract and mock
-regression are tested offline, but no real motor motion or real MoveIt
-trajectory execution is claimed.
-
-</details>
+Cleanup retains `install/` and its required link targets in `build/`. After source changes, stop
+control and run `./scripts/build.sh` in the container workspace, then source `install/setup.bash`.
+Build caches will be recreated. Continue with repeatability tests, model and limit checks,
+gradual envelope expansion, continuous operation and recovery tests, then freeze the deployment;
+see [Next optimization steps](docs/commissioning.md#next-optimization-steps).
 
 ## Control interface and architecture
 
-The public motion interface is the standard
-`control_msgs/action/FollowJointTrajectory` action exposed by
-`joint_trajectory_controller`:
-
-```text
-/firefly_arm_controller/follow_joint_trajectory
-```
-
-The real-hardware execution path separates the ROS control loop from the
-USB/CAN-FD loop:
+MoveIt sends planned trajectories to `joint_trajectory_controller` through the standard
+`control_msgs/action/FollowJointTrajectory` action at `/firefly_arm_controller/follow_joint_trajectory`.
+The current hardware path is:
 
 ```text
 MoveIt / FollowJointTrajectory
-  -> ros2_control + firefly_arm_controller
-  -> hex_arm_hardware/SystemInterface
-  -> hex_arm_bridge (ROS lifecycle <-> Zenoh robot_api)
-  -> hex_arm_controller (Rust safety state machine, 1 kHz soft-real-time loop)
-  -> SocketCAN can0 (field) or userspace gs_usb (legacy) -> CAN-FD motors
+  -> ros2_control + firefly_arm_controller (100 Hz)
+  -> hex_arm_hardware/SystemInterface (C++ hardware plugin)
+  -> hex_arm_bridge (Python, ROS <-> Zenoh / Protobuf)
+  -> hex_arm_controller (Rust, 500 Hz motor command loop)
+  -> SocketCAN (currently can2, configurable) -> CAN-FD / Meow MIT motors
 ```
 
-The Rust process owns the motor bus and all safety decisions. The ROS bridge
-does not implement a trajectory action and cannot bypass the exclusive
-session or activation state machine.
+- **ros2_control** manages controller and hardware lifecycles and cycles through reading state,
+  updating controllers and writing targets. The trajectory controller generates timed joint
+  targets and checks tracking and goal errors.
+- **The hardware plugin** exposes six-axis position/velocity commands and position/velocity/effort
+  feedback to ros2_control and exchanges data with the bridge through ROS interfaces.
+- **The bridge** translates commands and feedback between ROS and the Rust Zenoh / Protobuf API
+  and coordinates lifecycle transitions and exclusive control sessions. It does not implement
+  a separate trajectory action.
+- **The Rust driver** owns the motor bus and handles interpolation, direction and offset conversion,
+  gravity compensation, MIT commands and feedback, plus joint limits, output caps and
+  command/feedback timeouts.
+
+MoveIt checks collisions, the trajectory controller checks tracking errors, and Rust handles
+motor communication and low-level protections.
 
 ## Reproducibility
 
@@ -784,7 +498,7 @@ Run these commands in a built and sourced container terminal:
 motor backend and validates Zenoh discovery/events plus the ROS lifecycle bridge.
 `mock` exercises FollowJointTrajectory send/cancel and controller lifecycle. `gz`
 launches Gazebo headlessly and verifies two trajectories. Real commissioning uses
-a separate [supervised checklist](docs/commissioning.md).
+a separate [hardware validation plan](docs/commissioning.md).
 
 For a separate headless smoke test of MoveIt planning, strict collision checking,
 and mock execution, run this after building and sourcing the workspace:
@@ -802,4 +516,4 @@ python3 src/hex_arm_moveit_config/test/test_moveit_mock.py
 | [MoveIt simulation guide](docs/moveit_simulation.md) | Simulation window, limit profiles, collision models, and real MoveIt planning entry |
 | [GUI and CLI simulation guide](docs/gui_and_cli_simulation.md) | X11/WSLg/NVIDIA diagnosis, action usage, and Python examples |
 | [Meow MIT deployment (Chinese)](docs/meow_mit_deployment_cn.md) | New firmware protocol, parameter units, profiles, and current deployment flow |
-| [Commissioning checklist](docs/commissioning.md) | Hardware discovery, calibration, supervised operation, and historical validation records |
+| [Current hardware state and next steps](docs/commissioning.md) | Current settings, start/stop commands, open regression item and optimization plan |
