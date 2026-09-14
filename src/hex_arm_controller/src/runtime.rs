@@ -134,6 +134,8 @@ struct RuntimeData {
     /// in-flight mode transition so queued API work cannot reach hardware
     /// while the final disable/heartbeat-disarm sequence is pending.
     closing: bool,
+    /// Terminal pre-disable owner; never reopened, even if settling fails.
+    damped_stopping: bool,
     safety: SafetyState,
     session: Option<SessionLease>,
     next_session_id: u32,
@@ -175,6 +177,7 @@ impl ArmRuntime {
             backend,
             dynamics,
             data: RwLock::new(RuntimeData {
+                damped_stopping: false,
                 closing: false,
                 safety: SafetyState::default(),
                 session: None,
@@ -231,7 +234,10 @@ impl ArmRuntime {
 
     pub fn acquire(&self, client_name: String) -> Result<(u32, u32, Option<String>)> {
         let mut data = self.data.write();
-        anyhow::ensure!(!data.closing, "controller is shutting down");
+        anyhow::ensure!(
+            !data.closing && !data.damped_stopping,
+            "controller is shutting down"
+        );
         let event_client_name = client_name.clone();
         if let Some(holder) = &data.session {
             return Ok((0, holder.id, Some(holder.client_name.clone())));
@@ -518,6 +524,7 @@ impl ArmRuntime {
             data.safety.mode == OperatingMode::Active,
             "joint commands require ACTIVE mode"
         );
+        anyhow::ensure!(!data.damped_stopping, "controller is shutting down");
         if automatic_gravity_feedforward {
             if let Some(ramp) = &data.gravity_startup_ramp {
                 ramp.validate_hold_command(&targets)?;
@@ -578,7 +585,10 @@ impl ArmRuntime {
         );
         validate_gravity_vector(gravity)?;
         let mut data = self.data.write();
-        anyhow::ensure!(!data.closing, "controller is shutting down");
+        anyhow::ensure!(
+            !data.closing && !data.damped_stopping,
+            "controller is shutting down"
+        );
         anyhow::ensure!(
             session_id != 0
                 && data
@@ -660,6 +670,15 @@ impl ArmRuntime {
                 self.data.write().feedback = feedback.clone();
             }
             let mode = self.data.read().safety.mode;
+            if self.data.read().damped_stopping {
+                // The bounded stop task owns both command generation and safety checks.
+                // A failed final disable must still retry without a ROS caller.
+                if self.fault_disable_retry_due() {
+                    let _gate = self.mode_gate.lock().await;
+                    self.try_confirmed_fault_disable().await;
+                }
+                continue;
+            }
             if matches!(
                 mode,
                 OperatingMode::Active | OperatingMode::GravityComp | OperatingMode::Passive
@@ -690,7 +709,13 @@ impl ArmRuntime {
 
             match mode {
                 OperatingMode::Active => {
-                    let command = self.data.read().command.clone();
+                    let command = {
+                        let data = self.data.read();
+                        if data.damped_stopping {
+                            continue;
+                        }
+                        data.command.clone()
+                    };
                     let Some(command) = command else {
                         self.fault_and_disable(FAULT_COMMAND_WATCHDOG, "ACTIVE without a command")
                             .await;
@@ -771,7 +796,9 @@ impl ArmRuntime {
                                 if self.is_closing() {
                                     break;
                                 }
-                                if self.data.read().safety.mode != OperatingMode::Active {
+                                if self.data.read().safety.mode != OperatingMode::Active
+                                    || self.data.read().damped_stopping
+                                {
                                     continue;
                                 }
                                 self.backend.set_targets(targets).await
@@ -930,8 +957,163 @@ impl ArmRuntime {
     }
 
     fn ensure_accepting_requests(&self) -> Result<()> {
-        anyhow::ensure!(!self.data.read().closing, "controller is shutting down");
+        let data = self.data.read();
+        anyhow::ensure!(
+            !data.closing && !data.damped_stopping,
+            "controller is shutting down"
+        );
         Ok(())
+    }
+
+    /// Own the stream until unloaded and settled at the fold, then confirm disable.
+    /// API admission closes without terminating the monitoring/publication tasks.
+    pub async fn damped_stop(&self, session_id: u32) -> Result<()> {
+        let _gate = self.mode_gate.lock().await;
+        self.ensure_accepting_requests()?;
+        self.require_session(session_id)?;
+        let cfg = self
+            .profile
+            .controller
+            .shutdown_damping
+            .as_ref()
+            .context("shutdown damping is not configured")?;
+        cfg.validate()?;
+        let feedback = self.backend.feedback();
+        self.check_damping_feedback(&feedback)?;
+        let initial = self.hold_targets(&feedback);
+        let ready = crate::startup_recipe::RECIPE.ready();
+        self.motor_targets(&initial)?;
+        let mut final_targets = initial.clone();
+        for (target, kd) in final_targets.iter_mut().zip(cfg.kd_nm_s_rad) {
+            target.kp_nm_rad = 0.0;
+            target.kd_nm_s_rad = kd;
+            target.torque_nm = 0.0;
+        }
+        self.motor_targets(&final_targets)?;
+        anyhow::ensure!(
+            initial
+                .iter()
+                .zip(ready)
+                .all(|(t, q)| (t.position_rad - q).abs() <= 0.005),
+            "damped stop requires verified startup_ready; return with MoveIt first"
+        );
+        anyhow::ensure!(
+            feedback
+                .joints
+                .iter()
+                .zip(&self.profile.joints)
+                .all(|(f, j)| motor_velocity_to_ros(f.velocity_rev_s, j).abs() <= 0.02),
+            "damped stop requires stationary feedback"
+        );
+        {
+            let mut data = self.data.write();
+            anyhow::ensure!(
+                !data.closing
+                    && !data.damped_stopping
+                    && data.safety.mode == OperatingMode::Active
+                    && data.gravity_startup_ramp.is_none(),
+                "damped stop requires healthy ACTIVE control"
+            );
+            data.damped_stopping = true;
+            data.command = None;
+        }
+        tracing::info!("damped_shutdown: ready verified; Rust owns the stream until final disable");
+        let operation = self.run_damping(cfg, initial).await;
+        // This call is not cancelled by the RPC client disappearing. Any error still
+        // reaches confirmed disable; a process signal is observed in run_damping.
+        let disabled = self.backend.disable_all().await;
+        let mut data = self.data.write();
+        if let Err(error) = &operation {
+            data.safety
+                .latch_fault(FAULT_COMMAND, format!("damped stop incomplete: {error:#}"));
+        } else {
+            data.safety.disable_preserving_fault();
+        }
+        data.disable_pending = disabled.is_err();
+        if let Err(error) = disabled {
+            data.safety.latch_fault(
+                FAULT_MODE_TRANSITION,
+                format!("damped stop disable unconfirmed: {error:#}"),
+            );
+            anyhow::bail!("damped stop disable unconfirmed: {error:#}; settling={operation:?}");
+        }
+        operation?;
+        tracing::info!("damped_shutdown: folded, unloaded, settled; disable confirmed");
+        Ok(())
+    }
+
+    fn check_damping_feedback(&self, feedback: &FeedbackSnapshot) -> Result<()> {
+        anyhow::ensure!(
+            !self.is_closing(),
+            "damping interrupted by immediate shutdown"
+        );
+        anyhow::ensure!(
+            !self.backend.transport_failed() && feedback.all_online_and_fresh(),
+            "damping feedback/transport fault"
+        );
+        anyhow::ensure!(
+            self.data.read().safety.mode == OperatingMode::Active,
+            "damping requires ACTIVE without fault"
+        );
+        if let Some((_, reason)) = self.measured_feedback_fault(feedback) {
+            anyhow::bail!(reason);
+        }
+        Ok(())
+    }
+
+    async fn run_damping(
+        &self,
+        cfg: &crate::profile::ShutdownDamping,
+        initial: Vec<RosTarget>,
+    ) -> Result<()> {
+        let start = Instant::now();
+        let mut settled_since = None;
+        let mut interval = tokio::time::interval(Duration::from_secs_f64(
+            1.0 / self.profile.controller.loop_hz as f64,
+        ));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let folded = crate::startup_recipe::RECIPE.folded_position_rad;
+        loop {
+            interval.tick().await;
+            let elapsed = start.elapsed().as_secs_f32();
+            anyhow::ensure!(
+                elapsed < cfg.timeout_sec,
+                "damping timed out before unloaded folded settling; disabling"
+            );
+            let feedback = self.backend.feedback();
+            self.check_damping_feedback(&feedback)?;
+            self.data.write().feedback = feedback.clone();
+            let x = (elapsed / cfg.unload_sec).clamp(0.0, 1.0);
+            let blend = x * x * (3.0 - 2.0 * x);
+            let mut targets = self.hold_targets(&feedback);
+            for (i, t) in targets.iter_mut().enumerate() {
+                t.position_rad = initial[i].position_rad;
+                t.kp_nm_rad = initial[i].kp_nm_rad * (1.0 - blend);
+                t.kd_nm_s_rad = initial[i].kd_nm_s_rad * (1.0 - blend) + cfg.kd_nm_s_rad[i] * blend;
+                t.torque_nm *= 1.0 - blend;
+            }
+            self.backend
+                .set_targets(self.motor_targets(&targets)?)
+                .await?;
+            let settled = x >= 1.0
+                && feedback
+                    .joints
+                    .iter()
+                    .zip(&self.profile.joints)
+                    .zip(folded)
+                    .all(|((f, j), q)| {
+                        (motor_position_to_ros(f.position_rev, j) - q).abs() <= 0.02
+                            && motor_velocity_to_ros(f.velocity_rev_s, j).abs() <= 0.02
+                    });
+            if settled {
+                let since = settled_since.get_or_insert_with(Instant::now);
+                if since.elapsed().as_secs_f32() >= cfg.settle_sec {
+                    return Ok(());
+                }
+            } else {
+                settled_since = None;
+            }
+        }
     }
 
     fn hold_targets(&self, feedback: &FeedbackSnapshot) -> Vec<RosTarget> {
@@ -1331,6 +1513,212 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    struct DampingBackend {
+        inner: ShutdownOrderBackend,
+        state: RwLock<FeedbackSnapshot>,
+        last: RwLock<Option<[crate::conversion::MotorTarget; DOF]>>,
+        fall_to_fold: bool,
+        fail_disable: AtomicBool,
+    }
+
+    impl DampingBackend {
+        fn new(fall_to_fold: bool) -> Self {
+            let inner = ShutdownOrderBackend::new();
+            let mut state = inner.feedback.clone();
+            for (f, q) in state
+                .joints
+                .iter_mut()
+                .zip(crate::startup_recipe::RECIPE.ready())
+            {
+                f.position_rev = q / std::f32::consts::TAU;
+            }
+            Self {
+                inner,
+                state: RwLock::new(state),
+                last: RwLock::new(None),
+                fall_to_fold,
+                fail_disable: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MotorBackend for DampingBackend {
+        async fn discover(&self, refresh: bool) -> Result<Vec<MotorIdentitySnapshot>> {
+            self.inner.discover(refresh).await
+        }
+        async fn initialize_disabled(&self) -> Result<()> {
+            self.inner.initialize_disabled().await
+        }
+        async fn enable_compressed_mit(
+            &self,
+            t: [crate::conversion::MotorTarget; DOF],
+        ) -> Result<()> {
+            self.inner.enable_compressed_mit(t).await
+        }
+        async fn set_targets(&self, t: [crate::conversion::MotorTarget; DOF]) -> Result<()> {
+            self.inner.set_targets(t).await?;
+            *self.last.write() = Some(t);
+            // Model a supported folded resting position only once fully unloaded.
+            if self.fall_to_fold && t.iter().all(|t| t.kp_nm_rev == 0.0) {
+                for (f, q) in self
+                    .state
+                    .write()
+                    .joints
+                    .iter_mut()
+                    .zip(crate::startup_recipe::RECIPE.folded_position_rad)
+                {
+                    f.position_rev = q / std::f32::consts::TAU;
+                }
+            }
+            Ok(())
+        }
+        async fn disable_all(&self) -> Result<()> {
+            anyhow::ensure!(
+                !self.fail_disable.load(Ordering::Acquire),
+                "mock disable unconfirmed"
+            );
+            self.inner.disable_all().await
+        }
+        async fn shutdown(&self) -> Result<()> {
+            self.inner.shutdown().await
+        }
+        async fn clear_faults(&self) -> Result<()> {
+            self.inner.clear_faults().await
+        }
+        fn feedback(&self) -> FeedbackSnapshot {
+            self.state.read().clone()
+        }
+        fn transport_failed(&self) -> bool {
+            false
+        }
+    }
+
+    async fn damping_runtime(fall: bool) -> (Arc<ArmRuntime>, Arc<DampingBackend>, u32) {
+        let backend = Arc::new(DampingBackend::new(fall));
+        let mut runtime = runtime_with_backend(backend.clone());
+        let p = Arc::get_mut(&mut runtime.profile).unwrap();
+        p.bus.protocol = crate::profile::MotorProtocol::Meow;
+        p.controller.shutdown_damping = Some(crate::profile::ShutdownDamping {
+            kd_nm_s_rad: [1.0; DOF],
+            unload_sec: 1.0,
+            timeout_sec: 2.5,
+            settle_sec: 0.5,
+        });
+        runtime.initialize().await.unwrap();
+        let id = runtime.acquire("damping-test".into()).unwrap().0;
+        runtime.set_mode(id, OperatingMode::Active).await.unwrap();
+        *backend.last.write() = None;
+        (Arc::new(runtime), backend, id)
+    }
+
+    #[tokio::test]
+    async fn damping_requires_ready_and_stationary_before_taking_ownership() {
+        let (rt, b, id) = damping_runtime(true).await;
+        b.state.write().joints[2].position_rev += 0.02;
+        assert!(rt
+            .damped_stop(id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("startup_ready"));
+        assert!(b.last.read().is_none());
+        b.state.write().joints[2].position_rev -= 0.02;
+        b.state.write().joints[0].velocity_rev_s = 0.01;
+        assert!(rt
+            .damped_stop(id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stationary"));
+        assert!(b.last.read().is_none());
+        rt.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn damping_unloads_settles_then_disables_and_never_reopens_commands() {
+        let (rt, b, id) = damping_runtime(true).await;
+        let worker = tokio::spawn(rt.clone().run_control_loop());
+        rt.damped_stop(id).await.unwrap();
+        let final_targets = b.last.read().unwrap();
+        assert!(final_targets.iter().all(|t| t.kp_nm_rev == 0.0
+            && t.torque_nm == 0.0
+            && t.kd_nm_s_rev > 0.0
+            && t.velocity_rev_s == 0.0));
+        assert!(!b.inner.enabled.load(Ordering::Acquire));
+        assert!(rt.set_mode(id, OperatingMode::Active).await.is_err());
+        rt.shutdown().await.unwrap();
+        worker.await.unwrap();
+        assert!(!b.inner.targets_during_disable.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn damping_timeout_is_not_success_even_if_motionless() {
+        let (rt, b, id) = damping_runtime(false).await;
+        let error = rt.damped_stop(id).await.unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(!b.inner.enabled.load(Ordering::Acquire));
+        assert_eq!(rt.data.read().safety.mode, OperatingMode::Fault);
+    }
+
+    #[tokio::test]
+    async fn damping_unconfirmed_disable_latches_fault_and_retries_without_rpc_owner() {
+        let (rt, b, id) = damping_runtime(true).await;
+        b.fail_disable.store(true, Ordering::Release);
+        assert!(rt
+            .damped_stop(id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("disable unconfirmed"));
+        assert_eq!(rt.data.read().safety.mode, OperatingMode::Fault);
+        assert!(rt.data.read().disable_pending);
+        assert!(b.inner.enabled.load(Ordering::Acquire));
+        b.fail_disable.store(false, Ordering::Release);
+        let worker = tokio::spawn(rt.clone().run_control_loop());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while rt.data.read().disable_pending {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!b.inner.enabled.load(Ordering::Acquire));
+        assert!(rt.acquire("late".into()).is_err());
+        rt.shutdown().await.unwrap();
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn damping_feedback_failure_and_process_shutdown_interrupt_unloading() {
+        for failure in ["signal", "stale", "motor_fault", "overspeed"] {
+            let (rt, b, id) = damping_runtime(true).await;
+            let task = tokio::spawn({
+                let rt = rt.clone();
+                async move { rt.damped_stop(id).await }
+            });
+            while b.last.read().is_none() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            match failure {
+                "signal" => {
+                    rt.begin_shutdown();
+                }
+                "stale" => b.state.write().joints[0].fresh = false,
+                "motor_fault" => b.state.write().joints[0].fault_code = Some(1),
+                "overspeed" => b.state.write().joints[0].velocity_rev_s = 10.0,
+                _ => unreachable!(),
+            }
+            assert!(tokio::time::timeout(Duration::from_millis(100), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err());
+            assert!(!b.inner.enabled.load(Ordering::Acquire));
+            rt.shutdown().await.unwrap();
+        }
+    }
+
     struct ShutdownOrderBackend {
         feedback: FeedbackSnapshot,
         enabled: AtomicBool,
@@ -1448,7 +1836,8 @@ mod tests {
 
     fn runtime_with_backend(backend: Arc<dyn MotorBackend>) -> ArmRuntime {
         let profile = Arc::new(HardwareProfile {
-            schema_version: 2,
+            schema_version: crate::profile::HARDWARE_PROFILE_SCHEMA_VERSION,
+            joint_coordinate_version: crate::profile::JOINT_COORDINATE_VERSION,
             validated: true,
             calibrated: true,
             robot_prefix: "hexmeow/test/arm0".into(),
@@ -1475,6 +1864,7 @@ mod tests {
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
                 gravity_startup_slew_rate_nm_s: None,
+                shutdown_damping: None,
             },
             joints: JOINT_NAMES
                 .iter()

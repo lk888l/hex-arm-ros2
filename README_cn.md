@@ -2,6 +2,9 @@
 
 [English](README.md) | **中文**
 
+框架重构与独立 Docker 部署见 [运行架构与迁移说明](docs/architecture_refactor_cn.md)。
+默认构建已排除历史 CiA402/USB 调试工具；真机执行每次自动完成 J2 → J4 → J3。
+
 面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、MoveIt 2 运动规划与 Gazebo 仿真工作区。
 **只想打开 MoveIt 2 窗口，直接按下面的快速启动操作即可，无需连接机械臂。**
 
@@ -49,7 +52,12 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 `move_group` 与带 MoveIt 配置的 RViz。**这一条 launch 已包含所需控制器，不必再运行
 `hex_arm_bringup mock.launch.py`。** 保持这个终端运行，桌面会出现 RViz 窗口。
 
-默认关节姿态为 `[0, -1.350, 3.000, -0.300, 0, 0]` rad，命名状态为 `startup_ready`。这只设置模拟关节的初始显示；真机按实测反馈启动。
+此模拟入口的默认关节姿态为 `[0,-1.350,1.430,-0.300,0,0]` rad，命名状态为
+`startup_ready`。它只设置 mock 关节的初始显示，不是断电重启前的实机摆放姿态；
+真机按绝对编码器反馈启动。
+Firefly Y6 描述 v2 已把 J3 的机械/CAD 零位设为 `0`。旧坐标按
+`q_v2 = q_v1 - 1.57 rad` 换算；硬件 profile 必须使用 schema v3，并包含
+`joint_coordinate_version: 2`。
 
 ### 3. 在窗口里规划并模拟执行
 
@@ -116,6 +124,10 @@ ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 这三条命令都不会加载 MoveIt MotionPlanning 面板。需要规划窗口时，使用上文的
 `ros2 launch hex_arm_moveit_config moveit_mock.launch.py`。
 
+每次 `view` 启动都会使用独立的 `/hex_arm_view_<id>` 命名空间，隔离关节状态、
+模型描述和 TF，避免多个预览窗口或控制器互相干扰。滑块单位为弧度；Centre
+会将 J3 设为 0（对应修改前的 1.57 rad 姿态）。使用完毕后在启动终端按 Ctrl+C 退出。
+
 <a id="simulation-cli"></a>
 
 ## 用命令行驱动模拟机械臂（`ros2 action send_goal` 详解）
@@ -128,7 +140,7 @@ cd /workspaces/hex_arm_ros2
 source install/setup.bash
 ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
   control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, -0.32, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
 ```
 
 执行成功时应看到 `Goal finished with status: SUCCEEDED`（`error_code: 0`）。
@@ -155,7 +167,7 @@ ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
 
 - `trajectory.joint_names`：关节名列表。本例按 `joint_1` ~ `joint_6` 排列，必须 6 个全部给出（控制器配置了 `allow_partial_joints_goal: false`，缺关节会被拒绝）。
 - `trajectory.points`：轨迹点数组，本例只给 1 个点。每个点包含：
-  - `positions`：目标角度，单位**弧度（rad）**，数量必须等于 6 且按 `joint_names` 顺序。建议保持在 URDF 限位内：joint_1 ±2.86、joint_2 −1.57~2.09、joint_3 0~3.14、joint_4 ±1.57、joint_5 ±1.54、joint_6 ±2.79。注意 mock/gz 配置**未启用命令限位拦截**，超限位置不会被自动钳制，请自行确保数值安全。
+  - `positions`：目标角度，单位**弧度（rad）**，数量必须等于 6 且按 `joint_names` 顺序。建议保持在 URDF 限位内：joint_1 ±2.86、joint_2 −1.57~2.09、joint_3 ±1.57、joint_4 ±1.57、joint_5 ±1.54、joint_6 ±2.79。注意 mock/gz 配置**未启用命令限位拦截**，超限位置不会被自动钳制，请自行确保数值安全。
   - `time_from_start`：相对目标被接受时刻的时间偏移，`{sec: 2, nanosec: 0}` 表示 2 秒内到达；控制器使用 `interpolation_method: splines`（样条插值）平滑运动。
   - 可选字段：`velocities`、`accelerations`、`effort`；不填时由控制器自行插值。
   - 可以放多个点组成多段轨迹，每段的 `time_from_start` 递增即可。
@@ -361,7 +373,15 @@ J2→J4→J3 顺序启动和 MoveIt 小范围执行已验证；完整行程、�
 方向、零偏和运动窗口。该文件不提交 Git；换机时从 `firefly_y6.meow_mit.example.yaml`
 建立新配置并重新核对标定，不能直接套用本机配置。
 
-从断电折叠参考 `[0,-1.570,3.140,0,0,0]` 开始，在宿主机仓库目录的图形终端执行：
+每次断电后重新上电，并在执行自动启动前，先将机械臂放在折叠入口姿态：
+
+| 姿态 | J1 | J2 | J3 | J4 | J5 | J6 |
+|---|---:|---:|---:|---:|---:|---:|
+| 断电重启摆放位置 `folded_position_rad` | 0 | **−1.570** | **1.570** | 0 | 0 | 0 |
+| 自动启动完成位置 `startup_ready` | 0 | −1.350 | **1.430** | −0.300 | 0 | 0 |
+
+以上单位均为 rad。绝对编码器会在使能前核对折叠入口位置；自动启动仍严格按照
+**J2 → J4 → J3** 的顺序执行。随后在宿主机仓库目录的图形终端执行：
 
 ```bash
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
@@ -371,16 +391,23 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
 ```
 
 入口核对反馈和位置后使能，默认依次移动 **J2→−1.350（8 s）、J4→−0.300（10 s）、
-J3→3.000（6 s）**，其余关节最终为 0。该顺序退出路径由操作者确认实物无碰撞。
+J3→1.430（6 s）**，其余关节最终为 0。权威数值位于
+[`src/hex_arm_controller/config/startup.yaml`](src/hex_arm_controller/config/startup.yaml)，
+日常操作说明位于[当前实机状态与后续优化](docs/commissioning_cn.md#日常启动与停止)。
+该顺序退出路径由操作者确认实物无碰撞。
 等待 `startup_ready reached and verified; controller continues holding` 后，
 在 RViz 选择 `arm`，以当前状态为起点进行 `Plan` / `Plan & Execute`。
 后续 MoveIt 执行使用严格碰撞检查，并受当前本机运动窗口约束。
 
 当前 Kp 为 `[80,80,120,110,80,80]`，Kd 均为 15；J2/J3/J4 重力比例为 `1.0/1.05/0.7`。
 速度和加速度上限分别为 0.1 rad/s、0.1 rad/s²；具体限位见部署进度文档。
-`startup_ready:=false` 选择使能后原位保持；省略 `enable_execution:=true` 为观察和规划。
+真机执行每次必须完成自动启动顺序，不能用 `startup_ready:=false` 绕过；
+省略 `enable_execution:=true` 为保持失能的观察和规划。
 
-停止时在拥有启动进程的终端按 Ctrl-C，等待 `VERIFIED clean controller exit`。
+当前本机 profile 已配置退出阻尼：在拥有 real-launch 的终端第一次按 Ctrl-C，
+会先经 MoveIt **回安全启动位**，再阻尼下落、确认失能；不要提前断电。
+再次 Ctrl-C 或故障走立即停机路径。等待柔和阶段结果及 `VERIFIED structured disabled_confirmed`。
+该阻尼参数尚待实机验收，入口限制、失败行为和参数见[退出阻尼说明](docs/shutdown_damping_cn.md)。
 切换上位机、修改配置或重新编译前，先停止当前控制端。
 
 ### CAN 接口与继续开发

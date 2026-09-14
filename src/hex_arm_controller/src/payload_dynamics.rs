@@ -155,7 +155,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::approx_constant)] // surveyed joint_3 value, deliberately not mathematical PI
     fn field_arm_trial_payload_changes_the_surveyed_pose_gravity_model() {
         let arm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf");
@@ -168,7 +167,7 @@ mod tests {
         let augmented = hex_arm_dynamics::ArmDynamics::from_urdf_string(&merged).unwrap();
 
         assert_eq!(augmented.dof(), 6);
-        let surveyed_q = [0.0, -1.570, 3.140, 0.0, 0.0, 0.0];
+        let surveyed_q = [0.0, -1.570, 1.570, 0.0, 0.0, 0.0];
         let nominal_gravity = nominal.gravity_torque(&surveyed_q);
         let augmented_gravity = augmented.gravity_torque(&surveyed_q);
         assert!(augmented_gravity.iter().all(|value| value.is_finite()));

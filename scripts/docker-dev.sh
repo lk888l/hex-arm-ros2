@@ -180,6 +180,14 @@ run_supervised_real_launch() {
     local signal_name="$1"
     trap_count=$((trap_count + 1))
     if [[ -n "${requested_signal}" ]]; then
+      if [[ "${requested_signal}" == "INT" ]]; then
+        # A second Ctrl-C must reach the container even while soft stop is pending.
+        # TERM bypasses return/damping; it remains scoped to this launch token.
+        requested_signal="TERM"
+        relay_attempted=0
+        relay_real_launch_signal
+        return 0
+      fi
       echo "host supervisor: ${requested_signal} is already pending; still waiting for verified cleanup" >&2
       if [[ "${relay_attempted}" == "0" ]]; then
         relay_real_launch_signal

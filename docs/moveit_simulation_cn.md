@@ -93,7 +93,7 @@ MoveIt profile。Rust 控制器已用逐轴三次 Hermite 段替代位置线性�
 
 新的 SRDF 没有复用历史上禁用全部 21 对连杆的矩阵。默认严格
 `firefly_y6.srdf` 只排除六对运动学相邻连杆，因为它们共享关节/接口几何。实体
-机械臂已经安全处于修正后的实测折叠姿态 `q~=[0,-1.570,3.140,0,0,0]` 时，FCL 还会从来源
+机械臂已经安全处于修正后的实测折叠姿态 `q~=[0,-1.570,1.570,0,0,0]` 时，FCL 还会从来源
 collision mesh 报告两对接触：
 
 - `link_1` 与 `link_5`；
@@ -108,11 +108,11 @@ plan-only 覆盖会为上述两对增加 `PlanOnlySurveyedFold` 例外。mock Mo
 碰撞的非相邻对。因此，这个 overlay 只是等待重新测量/导出准确碰撞网格前的
 可视化/调试补丁，不是物理安全结论。其余十三对非相邻连杆即使在 plan-only 模式下也
 仍然启用检查；离线 FCL 回归在此前错误的
-`q=[0,+1.570,3.140,0,0,0]` 姿态仍会暴露五对未放宽接触。任何基于 `firefly_y6.plan_only.srdf` 得到的规划都只可
+`q=[0,+1.570,1.570,0,0,0]` 姿态仍会暴露五对未放宽接触。任何基于 `firefly_y6.plan_only.srdf` 得到的规划都只可
 用于预览，不能直接复用为执行轨迹；真机执行前必须在严格 SRDF 下重新规划，并先修正
 碰撞几何与实体起始姿态。第一版暂时使用 `link_6` 作为规划末端，直到获得经过标定的
 固定 TCP/工具坐标系。旧的越界 `ready` 已删除；`commissioning_start` 贴近观测姿态，
-但把 joint_2/joint_3 设为 -1.56/3.13 rad，即分别向临时限位内缩 0.01 rad。它只用于规划参考，绝不能
+但把 joint_2/joint_3 设为 -1.56/1.56 rad，即分别向临时限位内缩 0.01 rad。它只用于规划参考，绝不能
 在未标定机械臂上执行。
 
 ## 真机 MoveIt：默认只规划
@@ -151,7 +151,7 @@ exit 结果。应保持连接直到打印验证结果。独立的 `can1` launch 
 node 15 仍完全排除在驱动控制之外，但配置 `tip_payload` 后必须精确匹配其身份，并把
 固定质量/质心纳入 `link_6` 重力模型。
 
-当前近似姿态 `q=[0,-1.570,3.140,0,0,0]`、旧方向候选和一次快照拟合的零偏只用于
+当前近似姿态 `q=[0,-1.570,1.570,0,0,0]`、旧方向候选和一次快照拟合的零偏只用于
 commissioning 对照，不是 home 或动作验证。修正遗漏的 joint_2 负号后，其完整 URDF
 范围处在单圈 seam guard 内；但它仍从下限起步，必须先有界向内重新定位并完成双向
 跟踪验证，才可对真机使用 `enable_execution:=true`。即使 profile 已标为 calibrated，
@@ -177,7 +177,7 @@ JointTrajectoryController 对六轴统一使用 0.02 rad 路径误差、0.005 ra
 Rust 使用逐轴低增益默认值，并以空 `tau_ff` 委托 Rust 自动计算重力前馈；显式六个
 零的 `tau_ff` 含义不同，会关闭自动前馈。委托计算的重力会逐轴乘以硬件 profile 中的
 `gravity_compensation_scale`，与单轴 commissioning 完全一致；它是真机辨识参数，
-不是电机力矩换算使用的 `torque_scale`。在逐轴缩放之前，schema v2 必填的
+不是电机力矩换算使用的 `torque_scale`。在逐轴缩放之前，schema v3 必填的
 `gravity_vector_base_m_s2` 会提供 URDF `base_link` 坐标系下的重力向量。真机
 launch 会拒绝 v1 或缺少该字段的 profile；修正 joint_2 漏写的负号后，当前本地
 `-Z` 值仍只是未标定的 commissioning 候选。运行期 `SetGravity` 只在当前独占会话内覆盖，release、shutdown

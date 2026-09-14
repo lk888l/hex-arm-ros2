@@ -30,19 +30,22 @@ from moveit_msgs.srv import GetStateValidity
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectoryPoint
 import yaml
+from hex_arm_bringup.startup_recipe import load_recipe, ready_position
 
 JOINTS = [f"joint_{i}" for i in range(1, 7)]
-FOLDED = [0.0, -1.570, 3.140, 0.0, 0.0, 0.0]
-READY = [0.0, -1.350, 3.000, -0.300, 0.0, 0.0]
+STARTUP_RECIPE = load_recipe()
+FOLDED = STARTUP_RECIPE["folded_position_rad"]
+READY = ready_position(STARTUP_RECIPE)
 # Small free-joint placement differences do not redefine encoder calibration.
-FOLDED_TOLERANCE = [0.03, 0.01, 0.01, 0.01, 0.03]
+FOLDED_TOLERANCE = STARTUP_RECIPE["ros_folded_tolerance_rad"]
 
 
 def startup_steps(profile, positions, velocities):
     """Return bounded FJT goals; only J1–J5 define the folded entry posture."""
     if (len(positions) != 6 or len(velocities) != 6
             or not all(math.isfinite(q) for q in positions)
-            or any(not math.isfinite(v) or abs(v) > 0.02 for v in velocities)):
+            or any(not math.isfinite(v) or abs(v) > STARTUP_RECIPE["stopped_velocity_rad_s"]
+                   for v in velocities)):
         raise RuntimeError("startup requires finite, stationary six-axis feedback")
     if any(abs(a - b) > tolerance for a, b, tolerance
            in zip(positions[:5], FOLDED[:5], FOLDED_TOLERANCE)):
@@ -67,7 +70,8 @@ def startup_steps(profile, positions, velocities):
             duration = max(duration, 1.875 * distance / velocity,
                            math.sqrt(5.774 * distance / acceleration))
         steps.append(("align_j6", target.copy(), math.ceil(duration) + 1))
-    for axis, value, duration in [(1, -1.350, 8), (3, -0.300, 10), (2, 3.000, 6)]:
+    for step in STARTUP_RECIPE["steps"]:
+        axis, value, duration = step["joint_index"], step["target_rad"], step["duration_sec"]
         target[axis] = value
         steps.append((f"startup_j{axis + 1}", target.copy(), duration))
     return steps

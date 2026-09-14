@@ -16,15 +16,18 @@ import yaml
 # The encoder snapshot is installation-specific, not a universal motor zero.
 DIRECTIONS = (-1, -1, 1, 1, 1, 1)
 PARK_POSITIONS_REV = (0.000269, 0.249714, 0.251193, -0.00159, -0.004028, 0.000018)
-PARK_ANGLES_RAD = (0.0, -1.57, 3.14, 0.0, 0.0, 0.0)
+PARK_ANGLES_RAD = (0.0, -1.57, 1.57, 0.0, 0.0, 0.0)
 GRAVITY_SCALES = (0.0, 0.3, 0.7, 0.7, 0.0, 0.0)
 GRAVITY_LIMITS_NM = (0.2, 5.0, 5.0, 1.0, 0.2, 0.1)
 
 
 def import_profile(source, park_positions_rev=PARK_POSITIONS_REV):
     """Return a new commissioning profile; never change input measured limits."""
-    if not isinstance(source, dict) or source.get("schema_version") != 2:
-        raise ValueError("--profile must contain a schema_version: 2 hardware profile")
+    if (not isinstance(source, dict) or source.get("schema_version") != 3
+            or source.get("joint_coordinate_version") != 2):
+        raise ValueError(
+            "--profile must use schema_version: 3 and joint_coordinate_version: 2"
+        )
     for key in ("bus", "controller"):
         if not isinstance(source.get(key), dict):
             raise ValueError(f"input requires a {key} mapping")
@@ -99,7 +102,7 @@ def main(argv=None):
     parser.add_argument(
         "--park-positions-rev", nargs=6, type=float, default=PARK_POSITIONS_REV,
         metavar=("M1", "M2", "M3", "M4", "M5", "M6"),
-        help="fresh encoders taken only at physical q=[0,-1.57,3.14,0,0,0] rad; otherwise uses the GUI snapshot",
+        help="fresh encoders taken only at physical q=[0,-1.57,1.57,0,0,0] rad; otherwise uses the GUI snapshot",
     )
     args = parser.parse_args(argv)
     try:
@@ -109,7 +112,7 @@ def main(argv=None):
     except (OSError, ValueError, yaml.YAMLError) as error:
         parser.exit(2, f"error: {error}\n")
     print(f"Created {args.output}; validated=false, calibrated=false. No motor I/O performed.")
-    print("References require the physical folded pose q=[0,-1.57,3.14,0,0,0] rad.")
+    print("References require the physical folded pose q=[0,-1.57,1.57,0,0,0] rad.")
     print("Joint      encoder Rev    zero offset rad    gravity scale    clamp Nm")
     for index, joint in enumerate(profile["joints"]):
         print(f"{joint['name']:8} {args.park_positions_rev[index]:12.6f} {joint['zero_offset_rad']:18.9f} {joint['gravity_compensation_scale']:16.3f} {joint['gravity_compensation_limit_nm']:11.3f}")

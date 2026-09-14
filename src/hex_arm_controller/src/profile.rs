@@ -4,7 +4,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use hex_motor::cia402::CompressedMitMapping;
+#[cfg(not(feature = "legacy"))]
+use hex_meow_motor as mapping_motor;
+#[cfg(feature = "legacy")]
+use hex_motor as mapping_motor;
+use mapping_motor::cia402::CompressedMitMapping;
 use serde::Deserialize;
 
 use crate::single_turn::validate_single_turn_command_window;
@@ -12,6 +16,8 @@ use crate::single_turn::validate_single_turn_command_window;
 pub const JOINT_NAMES: [&str; 6] = [
     "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6",
 ];
+pub const HARDWARE_PROFILE_SCHEMA_VERSION: u32 = 3;
+pub const JOINT_COORDINATE_VERSION: u32 = 2;
 pub const SINGLE_TURN_COMMAND_SEAM_GUARD_REV: f32 = 0.01;
 
 fn default_gravity_compensation_scale() -> f32 {
@@ -22,12 +28,13 @@ fn default_gravity_compensation_scale() -> f32 {
 #[serde(deny_unknown_fields)]
 pub struct HardwareProfile {
     pub schema_version: u32,
+    pub joint_coordinate_version: u32,
     pub validated: bool,
     pub calibrated: bool,
     pub robot_prefix: String,
     pub urdf_path: String,
     /// Gravity expressed in the URDF base-link frame. This safety-critical
-    /// installation parameter is mandatory in schema v2.
+    /// installation parameter is mandatory in schema v3.
     pub gravity_vector_base_m_s2: [f32; 3],
     /// Optional fixed payload whose mass properties are expressed directly in
     /// the serial arm tip frame.  This does not make the auxiliary device a
@@ -129,6 +136,44 @@ pub struct ControllerProfile {
     /// follows feedback directly, without a continuous slew limiter.
     #[serde(default)]
     pub gravity_startup_slew_rate_nm_s: Option<f32>,
+    /// Explicitly enabled, bounded pre-disable damping after a verified ready pose.
+    #[serde(default)]
+    pub shutdown_damping: Option<ShutdownDamping>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownDamping {
+    pub kd_nm_s_rad: [f32; 6],
+    pub unload_sec: f32,
+    pub timeout_sec: f32,
+    pub settle_sec: f32,
+}
+
+impl ShutdownDamping {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.kd_nm_s_rad
+                .iter()
+                .all(|v| v.is_finite() && *v > 0.0 && *v <= 100.0),
+            "invalid shutdown damping gains"
+        );
+        anyhow::ensure!(
+            self.unload_sec.is_finite() && (1.0..=10.0).contains(&self.unload_sec),
+            "invalid shutdown unload time"
+        );
+        anyhow::ensure!(
+            self.settle_sec.is_finite() && (0.5..=2.0).contains(&self.settle_sec),
+            "invalid shutdown settle time"
+        );
+        anyhow::ensure!(
+            self.timeout_sec.is_finite()
+                && self.timeout_sec >= self.unload_sec + self.settle_sec + 1.0
+                && self.timeout_sec <= 30.0,
+            "invalid shutdown timeout"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -206,20 +251,41 @@ pub(crate) fn validate_gravity_vector(gravity: [f32; 3]) -> Result<()> {
 
 impl HardwareProfile {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::from_path_with_urdf(path, None)
+    }
+
+    /// Only the model location may be overridden by a relocatable deployment.
+    /// All numeric calibration and motion authority still come from the profile.
+    pub fn from_path_with_urdf(path: impl AsRef<Path>, urdf: Option<&Path>) -> Result<Self> {
         let path = path.as_ref();
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("read hardware profile {}", path.display()))?;
-        let profile: Self = serde_yaml::from_str(&contents)
+        let mut profile: Self = serde_yaml::from_str(&contents)
             .with_context(|| format!("parse hardware profile {}", path.display()))?;
+        if let Some(urdf) = urdf {
+            profile.urdf_path = urdf.to_string_lossy().into_owned();
+        }
         profile.validate()?;
         Ok(profile)
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(damping) = &self.controller.shutdown_damping {
+            damping.validate()?;
+            anyhow::ensure!(
+                self.bus.protocol == MotorProtocol::Meow,
+                "shutdown damping requires Meow"
+            );
+        }
         anyhow::ensure!(
-            self.schema_version == 2,
-            "unsupported hardware profile schema_version {}; expected 2 with explicit gravity_vector_base_m_s2 and per-joint acceleration_rad_s2",
+            self.schema_version == HARDWARE_PROFILE_SCHEMA_VERSION,
+            "unsupported hardware profile schema_version {}; expected {HARDWARE_PROFILE_SCHEMA_VERSION}",
             self.schema_version
+        );
+        anyhow::ensure!(
+            self.joint_coordinate_version == JOINT_COORDINATE_VERSION,
+            "unsupported joint_coordinate_version {}; expected {JOINT_COORDINATE_VERSION} with centered J3 coordinates",
+            self.joint_coordinate_version
         );
         anyhow::ensure!(self.validated, "profile is not marked validated");
         anyhow::ensure!(
@@ -655,12 +721,43 @@ impl IdentityFingerprint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "legacy")]
     use crate::conversion::{ros_target_to_motor, RosTarget};
-    use hex_motor::cia402::{compressed_mit::packed_target_words, CompressedMitTarget};
+    #[cfg(feature = "legacy")]
+    use mapping_motor::cia402::{compressed_mit::packed_target_words, CompressedMitTarget};
+
+    #[test]
+    fn shutdown_damping_configuration_is_bounded() {
+        let valid = ShutdownDamping {
+            kd_nm_s_rad: [15.0; 6],
+            unload_sec: 3.0,
+            timeout_sec: 20.0,
+            settle_sec: 0.5,
+        };
+        valid.validate().unwrap();
+        for value in [0.0, -1.0, 100.1, f32::NAN, f32::INFINITY] {
+            let mut bad = valid.clone();
+            bad.kd_nm_s_rad[2] = value;
+            assert!(bad.validate().is_err());
+        }
+        for (unload, timeout, settle) in [
+            (0.0, 20.0, 0.5),
+            (3.0, 31.0, 0.5),
+            (3.0, 4.0, 0.5),
+            (3.0, 20.0, 0.0),
+        ] {
+            let mut bad = valid.clone();
+            bad.unload_sec = unload;
+            bad.timeout_sec = timeout;
+            bad.settle_sec = settle;
+            assert!(bad.validate().is_err());
+        }
+    }
 
     fn valid_profile(urdf_path: String) -> HardwareProfile {
         HardwareProfile {
-            schema_version: 2,
+            schema_version: HARDWARE_PROFILE_SCHEMA_VERSION,
+            joint_coordinate_version: JOINT_COORDINATE_VERSION,
             validated: true,
             calibrated: false,
             robot_prefix: "hexmeow/test/arm0".into(),
@@ -687,6 +784,7 @@ mod tests {
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
                 gravity_startup_slew_rate_nm_s: None,
+                shutdown_damping: None,
             },
             joints: JOINT_NAMES
                 .iter()
@@ -745,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v2_requires_an_explicit_base_frame_gravity_vector() {
+    fn schema_v3_requires_coordinate_version_and_base_frame_gravity_vector() {
         let yaml = include_str!("../test/firefly_y6.mock.yaml")
             .lines()
             .filter(|line| !line.trim_start().starts_with("gravity_vector_base_m_s2:"))
@@ -758,13 +856,17 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut profile = valid_profile(file.path().display().to_string());
-        profile.schema_version = 1;
+        profile.schema_version = 2;
         let error = profile.validate().unwrap_err().to_string();
-        assert!(error.contains("expected 2 with explicit gravity_vector_base_m_s2"));
+        assert!(error.contains("expected 3"));
+        profile.schema_version = HARDWARE_PROFILE_SCHEMA_VERSION;
+        profile.joint_coordinate_version = 1;
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(error.contains("expected 2 with centered J3 coordinates"));
     }
 
     #[test]
-    fn schema_v2_requires_finite_positive_joint_acceleration_limits() {
+    fn schema_v3_requires_finite_positive_joint_acceleration_limits() {
         let yaml = include_str!("../test/firefly_y6.mock.yaml").replacen(
             " acceleration_rad_s2: 10.0,",
             "",
@@ -1079,6 +1181,7 @@ default_kd: 0.3
     }
 
     #[test]
+    #[cfg(feature = "legacy")]
     fn compressed_gain_mapping_uses_motor_torque_scale_and_two_times_default_boundary() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut profile = valid_profile(file.path().display().to_string());

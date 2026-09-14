@@ -4,14 +4,29 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
+default-run = "hex_arm_controller"
+
+[features]
+default = []
+# Historical CiA402 / userspace USB and motion diagnostics are opt-in only.
+legacy = ["dep:hex-motor", "can-transport/gs_usb", "zenoh/default"]
+
+[[bin]]
+name = "hex_arm_controller"
+path = "src/main.rs"
+
+[[bin]]
+name = "hex_arm_commission"
+path = "src/tools/main.rs"
+required-features = ["legacy"]
 
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-can-transport = { version = "=0.1.3", features = ["gs_usb", "socketcan"] }
+can-transport = { version = "=0.1.3", default-features = false, features = ["socketcan"] }
 clap = { version = "4.5", features = ["derive"] }
 hex-arm-dynamics = "=0.1.0"
-hex-motor = { path = "vendor/hex-motor" }
+hex-motor = { path = "vendor/hex-motor", optional = true }
 hex-meow-motor = { package = "hex-motor", version = "=0.3.1" }
 parking_lot = "0.12"
 prost = "0.13"
@@ -23,7 +38,8 @@ tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "signal", "
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urdf-rs = "=0.9.0"
-zenoh = "=1.9.0"
+# Single-host deployment uses TCP; UDP retains the existing mock discovery path.
+zenoh = { version = "=1.9.0", default-features = false, features = ["transport_tcp", "transport_udp"] }
 
 [build-dependencies]
 prost-build = "0.13"

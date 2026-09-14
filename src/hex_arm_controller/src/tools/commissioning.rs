@@ -303,16 +303,15 @@ const J4_CENSORED_TORQUE_MAX_TOTAL_TORQUE_NM: f32 = 0.50;
 const J4_CENSORED_TORQUE_MAX_ACTIVE_SEC: f32 = 4.5;
 const J4_CENSORED_TORQUE_FREEZE_DURATION: Duration = Duration::from_secs(1);
 const J3_GRAVITY_UNLOAD_INDEX: usize = 2;
-const J3_GRAVITY_UNLOAD_EXPECTED_ZERO_OFFSET_RAD: f32 = 1.545_484;
+const J3_GRAVITY_UNLOAD_EXPECTED_ZERO_OFFSET_RAD: f32 = -0.024_516;
 const J3_GRAVITY_UNLOAD_EXPECTED_TORQUE_SCALE: f32 = 0.85;
 const J3_GRAVITY_UNLOAD_EXPECTED_GRAVITY_SCALE: f32 = 0.0;
 const J3_GRAVITY_UNLOAD_EXPECTED_KP: f32 = 2.0;
 const J3_GRAVITY_UNLOAD_EXPECTED_KD: f32 = 0.3;
 const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_TORQUE_PERMILLE: u16 = 250;
 const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_KP_KD_TORQUE_PERMILLE: u16 = 100;
-const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_LOWER_RAD: f32 = 2.85;
-#[allow(clippy::approx_constant)] // surveyed/profile limit is deliberately 3.14, not mathematical PI
-const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_UPPER_RAD: f32 = 3.14;
+const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_LOWER_RAD: f32 = 1.28;
+const J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_UPPER_RAD: f32 = 1.57;
 const J3_GRAVITY_UNLOAD_STEP_NM: f32 = 0.05;
 const J3_GRAVITY_UNLOAD_CAP_NM: f32 = 0.75;
 const J3_GRAVITY_UNLOAD_LEVELS: usize = 15;
@@ -325,8 +324,8 @@ const J3_GRAVITY_UNLOAD_HARD_VELOCITY_RAD_S: f32 = 0.010;
 const J3_GRAVITY_UNLOAD_MAX_TOTAL_TORQUE_NM: f32 = 0.90;
 const J3_GRAVITY_UNLOAD_MAX_ACTIVE_SEC: f32 = 4.0;
 const J3_GRAVITY_UNLOAD_FREEZE_DURATION: Duration = Duration::from_secs(1);
-const J3_GRAVITY_UNLOAD_INITIAL_Q_LOWER_RAD: f32 = 3.138;
-const J3_GRAVITY_UNLOAD_INITIAL_Q_UPPER_RAD: f32 = 3.1397;
+const J3_GRAVITY_UNLOAD_INITIAL_Q_LOWER_RAD: f32 = 1.568;
+const J3_GRAVITY_UNLOAD_INITIAL_Q_UPPER_RAD: f32 = 1.5697;
 const J3_ASSISTED_POSITION_DELTA_RAD: f32 = -0.005;
 const J3_ASSISTED_POSITION_DURATION_SEC: f32 = 4.0;
 const J3_ASSISTED_POSITION_PEAK_TORQUE_NM: f32 = -0.25;
@@ -334,9 +333,8 @@ const J3_ASSISTED_POSITION_EXPECTED_KP: f32 = 80.0;
 const J3_ASSISTED_POSITION_EXPECTED_KD: f32 = 4.0;
 const J3_ASSISTED_POSITION_EXPECTED_TORQUE_PERMILLE: u16 = 30;
 const J3_ASSISTED_POSITION_EXPECTED_KP_KD_TORQUE_PERMILLE: u16 = 20;
-const J3_ASSISTED_POSITION_EXPECTED_LOWER_RAD: f32 = 3.13;
-#[allow(clippy::approx_constant)]
-const J3_ASSISTED_POSITION_EXPECTED_UPPER_RAD: f32 = 3.14;
+const J3_ASSISTED_POSITION_EXPECTED_LOWER_RAD: f32 = 1.56;
+const J3_ASSISTED_POSITION_EXPECTED_UPPER_RAD: f32 = 1.57;
 const J3_ASSISTED_POSITION_EXPECTED_VELOCITY_RAD_S: f32 = 0.02;
 const J3_ASSISTED_POSITION_EXPECTED_ACCELERATION_RAD_S2: f32 = 0.02;
 const J3_ASSISTED_POSITION_EXPECTED_TORQUE_NM: f32 = 0.9;
@@ -703,7 +701,7 @@ impl Joint3GravityUnloadDiagnosticRequest {
                 && joint.limits.velocity_rad_s.to_bits() == 0.1_f32.to_bits()
                 && joint.limits.acceleration_rad_s2.to_bits() == 0.1_f32.to_bits()
                 && joint.limits.torque_nm.to_bits() == 7.5_f32.to_bits(),
-            "joint_3 gravity-unload diagnostic requires limits [2.85,3.14], zero measured margin, velocity/acceleration=0.1/0.1, torque=7.5"
+            "joint_3 gravity-unload diagnostic requires limits [1.28,1.57], zero measured margin, velocity/acceleration=0.1/0.1, torque=7.5"
         );
         Ok(())
     }
@@ -764,7 +762,7 @@ impl Joint3AssistedPositionDiagnosticRequest {
                     == J3_ASSISTED_POSITION_EXPECTED_ACCELERATION_RAD_S2.to_bits()
                 && joint.limits.torque_nm.to_bits()
                     == J3_ASSISTED_POSITION_EXPECTED_TORQUE_NM.to_bits(),
-            "joint_3 assisted-position diagnostic requires limits [3.13,3.14], zero measured margin, velocity/acceleration=0.02/0.02, torque=0.9"
+            "joint_3 assisted-position diagnostic requires limits [1.56,1.57], zero measured margin, velocity/acceleration=0.02/0.02, torque=0.9"
         );
         let peak_velocity =
             PI * J3_ASSISTED_POSITION_DELTA_RAD.abs() / J3_ASSISTED_POSITION_DURATION_SEC;
@@ -10407,7 +10405,8 @@ mod tests {
 
     fn profile_with_velocity_limit(velocity_rad_s: f32) -> HardwareProfile {
         HardwareProfile {
-            schema_version: 2,
+            schema_version: crate::profile::HARDWARE_PROFILE_SCHEMA_VERSION,
+            joint_coordinate_version: crate::profile::JOINT_COORDINATE_VERSION,
             validated: true,
             calibrated: false,
             robot_prefix: "test/arm".into(),
@@ -10434,6 +10433,7 @@ mod tests {
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
                 gravity_startup_slew_rate_nm_s: None,
+                shutdown_damping: None,
             },
             joints: (0..DOF)
                 .map(|index| JointProfile {
@@ -11107,7 +11107,7 @@ mod tests {
             ros_target_to_motor(
                 RosTarget {
                     position_rad: if index == J3_GRAVITY_UNLOAD_INDEX {
-                        3.139
+                        1.569
                     } else {
                         0.0
                     },
@@ -11123,7 +11123,7 @@ mod tests {
         for (normalized_time, expected_phase) in [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)] {
             let phase = round_trip_phase(normalized_time);
             assert!((phase - expected_phase).abs() <= 1.0e-6);
-            let commanded_q = 3.139 + phase * J3_ASSISTED_POSITION_DELTA_RAD;
+            let commanded_q = 1.569 + phase * J3_ASSISTED_POSITION_DELTA_RAD;
             let targets = apply_joint3_phase_assistance(
                 &profile,
                 baseline,
@@ -11154,8 +11154,8 @@ mod tests {
                 assert_eq!(targets[index], baseline[index]);
             }
         }
-        assert!(apply_joint3_phase_assistance(&profile, baseline, 3.139, -0.251).is_err());
-        assert!(apply_joint3_phase_assistance(&profile, baseline, 3.139, 0.001).is_err());
+        assert!(apply_joint3_phase_assistance(&profile, baseline, 1.569, -0.251).is_err());
+        assert!(apply_joint3_phase_assistance(&profile, baseline, 1.569, 0.001).is_err());
     }
 
     #[test]
@@ -11273,7 +11273,7 @@ mod tests {
             ros_target_to_motor(
                 RosTarget {
                     position_rad: if index == J3_GRAVITY_UNLOAD_INDEX {
-                        3.139
+                        1.569
                     } else {
                         0.0
                     },
@@ -11286,7 +11286,7 @@ mod tests {
             )
         });
         let targets =
-            build_joint3_gravity_unload_targets(&profile, baseline, 3.139, -0.10).unwrap();
+            build_joint3_gravity_unload_targets(&profile, baseline, 1.569, -0.10).unwrap();
         let joint = &profile.joints[J3_GRAVITY_UNLOAD_INDEX];
         assert_eq!(
             compressed_target_position_code(&targets[J3_GRAVITY_UNLOAD_INDEX], joint),

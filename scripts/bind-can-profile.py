@@ -39,8 +39,9 @@ def adapter_binding(interface, sys_class_net=Path("/sys/class/net")):
 
 def bind_profile(source, interface, binding):
     result = copy.deepcopy(source)
-    if not isinstance(result, dict) or result.get("schema_version") != 2:
-        raise ValueError("requires a schema v2 profile")
+    if (not isinstance(result, dict) or result.get("schema_version") != 3
+            or result.get("joint_coordinate_version") != 2):
+        raise ValueError("requires a schema v3 profile with joint_coordinate_version 2")
     bus = result.get("bus")
     if not isinstance(bus, dict) or bus.get("transport") != "socket_can":
         raise ValueError("requires a socket_can profile")

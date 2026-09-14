@@ -425,6 +425,7 @@ fi
 run_dir="$(mktemp -d "/tmp/hex-arm-real-launch.${can_interface}.XXXXXX")"
 output_fifo="${run_dir}/output.fifo"
 log_path="${run_dir}/launch.log"
+export HEX_ARM_SHUTDOWN_REPORT="${run_dir}/driver-shutdown.json"
 mkfifo "${output_fifo}"
 
 launch_pid=""
@@ -458,7 +459,9 @@ trap 'forward_signal TERM' HUP
 # pipeline. launch_pid is therefore also the exact session/process-group ID.
 tee --output-error=warn-nopipe "${log_path}" <"${output_fifo}" &
 tee_pid="$!"
-setsid ros2 launch "${launch_package}" "${launch_file}" \
+setsid python3 "$(ros2 pkg prefix hex_arm_bringup)/lib/hex_arm_bringup/graceful-real-launch.py" \
+  --profile "${profile_path}" --scope "${target}" -- \
+  ros2 launch "${launch_package}" "${launch_file}" \
   "hardware_profile:=${profile_path}" "$@" >"${output_fifo}" 2>&1 &
 launch_pid="$!"
 supervisor_start_ticks="$(process_start_ticks "$$")"
@@ -518,24 +521,25 @@ if (( tee_status != 0 )); then
 fi
 
 verification_status=0
-python3 - "${log_path}" <<'PY' || verification_status="$?"
+python3 - "${log_path}" "${HEX_ARM_SHUTDOWN_REPORT}" "${target}" <<'PY' || verification_status="$?"
 from pathlib import Path
+import json
 import re
 import sys
 
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 text = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
-controller_started = bool(
-    re.search(r"\[hex_arm_controller-[0-9]+\].*process started with pid", text)
-)
+controller_start = re.search(
+    r"\[(?:hex_arm_controller|hex_arm_commission)-[0-9]+\].*process started with pid \[([0-9]+)\]", text)
+controller_started = controller_start is not None
 controller_ready = "Firefly Y6 controller ready and DISABLED" in text
 shutdown_started = (
     "controller stopping; disabling drives and disarming heartbeat consumers" in text
 )
 controller_clean = bool(
     re.search(
-        r"\[hex_arm_controller-[0-9]+\].*process has finished cleanly", text
+        r"\[(?:hex_arm_controller|hex_arm_commission)-[0-9]+\].*process has finished cleanly", text
     )
 )
 shutdown_failed = "controller shutdown failed:" in text
@@ -556,7 +560,18 @@ if "Segmentation fault" in text or unexpected_process_deaths:
         + (f": {details}" if details else " (segmentation fault in launch log)")
     )
 
-if controller_ready:
+if sys.argv[3] != "startup":
+    try:
+        report = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"error: structured driver shutdown acknowledgement unavailable: {error}")
+    if (not controller_started or report.get("schema_version") != 1
+            or report.get("pid") != int(controller_start.group(1))
+            or report.get("state") != "disabled_confirmed" or report.get("error") is not None
+            or not controller_clean):
+        raise SystemExit(f"error: driver disable was not confirmed for this process: {report}")
+    print("supervisor: VERIFIED structured disabled_confirmed acknowledgement for this process")
+elif controller_ready:
     if not shutdown_started:
         raise SystemExit(
             "error: controller reached ready state but orderly shutdown was not observed"
@@ -592,8 +607,12 @@ if [[ -z "${requested_signal}" ]] &&
   requested_signal="${external_signal}"
 fi
 if [[ -n "${requested_signal}" ]]; then
-  # ros2 launch may encode a handled Ctrl-C as 0, 130, or -SIGINT depending on
-  # the launch version. The verified controller exit above is authoritative.
+  # Return/damping failure must remain visible even after confirmed disable.
+  if (( launch_status == 1 )); then
+    echo "error: graceful return/damping or ROS teardown failed; final disable was verified" >&2
+    exit 1
+  fi
+  # Otherwise the verified controller exit above is authoritative.
   exit 0
 fi
 exit "${launch_status}"

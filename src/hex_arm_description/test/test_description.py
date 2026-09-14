@@ -91,6 +91,16 @@ def test_limits_are_finite_and_ordered() -> None:
         assert values[2] > 0.0 and values[3] > 0.0
 
 
+def test_joint_3_zero_is_centered_at_the_previous_1_57_rad_pose() -> None:
+    joint = _expanded("view").find("joint[@name='joint_3']")
+    assert joint is not None
+    origin = joint.find("origin")
+    limit = joint.find("limit")
+    assert origin is not None and limit is not None
+    assert [float(value) for value in origin.attrib["rpy"].split()] == [0.0, 1.57, 0.0]
+    assert (float(limit.attrib["lower"]), float(limit.attrib["upper"])) == (-1.57, 1.57)
+
+
 def test_all_package_meshes_exist() -> None:
     share = Path(get_package_share_directory("xpkg_urdf_firefly_y6"))
     for mesh in _original().findall(".//mesh"):
@@ -98,4 +108,3 @@ def test_all_package_meshes_exist() -> None:
         prefix = "package://xpkg_urdf_firefly_y6/"
         assert uri.startswith(prefix)
         assert (share / uri.removeprefix(prefix)).is_file(), uri
-

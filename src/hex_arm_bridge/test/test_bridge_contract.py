@@ -56,6 +56,30 @@ def test_bridge_preserves_rclpy_lifecycle_service_registry() -> None:
             rclpy.shutdown()
 
 
+@pytest.mark.parametrize("outcome", ["ok", "rejected", "timeout"])
+def test_damped_stop_hands_off_once_and_never_resumes_ros_commands(outcome):
+    response = SimpleNamespace(success=False, message="")
+    bridge = SimpleNamespace(_hardware_transition_lock=threading.RLock(),
+        _lock=threading.RLock(), _hardware_active=True, _session_id=42, prefix="arm")
+    calls = []
+    def query(key, payload, response_type, timeout):
+        assert not bridge._hardware_active
+        request = pb.DampedStopRequest.FromString(payload)
+        assert request.session_id == 42
+        calls.append(key)
+        if outcome == "timeout":
+            raise TimeoutError("no acknowledgement")
+        return pb.GenericResponse(ok=outcome == "ok", error="rejected" if outcome != "ok" else "")
+    bridge._query_with_timeout = query
+    HexArmBridge._damped_stop(bridge, None, response)
+    assert response.success == (outcome == "ok")
+    assert not bridge._hardware_active
+    assert bridge._session_id == (0 if outcome == "ok" else 42)
+    HexArmBridge._damped_stop(bridge, None, response)
+    assert not response.success
+    assert len(calls) == 1
+
+
 def _ready_snapshot(now: float = 10.0) -> _Snapshot:
     driver = SimpleNamespace(
         profile_valid=True,

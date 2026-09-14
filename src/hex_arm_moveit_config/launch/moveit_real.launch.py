@@ -158,6 +158,8 @@ def _move_group_runtime_parameters(enable_execution: bool) -> dict[str, bool]:
 def _bringup_arguments(
     hardware_profile: str, zenoh_connect: str, enable_execution: bool, startup_ready: bool = True
 ) -> dict[str, str]:
+    if enable_execution and not startup_ready:
+        raise RuntimeError("real execution requires automatic J2 -> J4 -> J3 startup")
     return {
         "hardware_profile": hardware_profile,
         "zenoh_connect": zenoh_connect,

@@ -105,7 +105,7 @@ def test_srdf_exposes_only_an_in_bounds_commissioning_reference() -> None:
     assert positions == {
         "joint_1": 0.0,
         "joint_2": -1.56,
-        "joint_3": 3.13,
+        "joint_3": 1.56,
         "joint_4": 0.0,
         "joint_5": 0.0,
         "joint_6": 0.0,
@@ -137,7 +137,7 @@ def test_real_commissioning_positions_match_the_surveyed_narrow_window() -> None
     expected = {
         "joint_1": (-0.25, 0.25),
         "joint_2": (-1.57, -1.30),
-        "joint_3": (2.85, 3.14),
+        "joint_3": (1.28, 1.57),
         "joint_4": (-0.35, 0.25),
         "joint_5": (-0.25, 0.25),
         "joint_6": (-0.25, 0.35),

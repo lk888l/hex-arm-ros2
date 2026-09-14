@@ -31,13 +31,17 @@ directions and encoder offsets; this local profile is excluded from Git.
 | Command / feedback timeout | 100 ms each |
 | Gravity vector / payload | `[0,0,-9.81]` m/s² / no added payload |
 
-Joint command windows in radians: J1 `[-0.03,0.01]`, J2 `[-1.572,-1.33]`, J3 `[2.98,3.14]`,
+Joint command windows in radians: J1 `[-0.03,0.01]`, J2 `[-1.572,-1.33]`, J3 `[1.41,1.57]`,
 J4 `[-0.32,0.01]`, J5 `[-0.03,0.01]`, J6 `[-0.25,0.02]`.
 MoveIt intersects the model, commissioning and hardware limits; its J2 lower bound is −1.570.
 
 ## Start and stop
 
-Use the verified folded entry pose `[0,-1.570,3.140,0,0,0]`. Entry checks happen before enable:
+After each power cycle and before automatic startup, place the arm at
+`[0,-1.570,1.570,0,0,0]` rad: **J2=−1.570 and J3=1.570**, with the other joints
+nominally zero. Automatic startup ends at `[0,-1.350,1.430,-0.300,0,0]` rad,
+where **J3=1.430**. Both postures and the motion durations are defined by
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml). Entry checks happen before enable:
 stationary feedback, profile bounds, placement differences up to 0.03 rad on J1/J5 and 0.01 rad on J2/J3/J4.
 J6 is aligned within its selected bounds when needed; existing encoder offsets are retained.
 
@@ -50,15 +54,25 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-Startup moves J2 to −1.350 in 8 s, J4 to −0.300 in 10 s, then J3 to 3.000 in 6 s.
+Startup moves J2 to −1.350 in 8 s, J4 to −0.300 in 10 s, then J3 to 1.430 in 6 s.
 Other joints finish at zero; J2/J3/J4 keep measured positions until their turn.
 This fixed folded exit follows the operator-verified physical path. MoveIt execution uses strict collision checking.
 
 Wait for `startup_ready reached and verified; controller continues holding`, then select `arm` and the current
-start state in RViz. Use `startup_ready:=false` for measured-pose holding. Omitting `enable_execution:=true`
-selects observation/planning.
+start state in RViz. Real execution requires ordered startup; `startup_ready:=false` cannot
+bypass it. Omitting `enable_execution:=true` selects disabled observation/planning.
 
-Stop with Ctrl-C in the owning launch terminal and wait for `VERIFIED clean controller exit`.
+With the newly configured local damping profile, the first Ctrl-C can move the arm back to
+`[0,-1.350,1.430,-0.300,0,0]` rad through strict MoveIt planning. Rust then ramps Kp/gravity
+to zero over 3 s, transitions Kd to `[15,60,90,15,15,15]` Nm·s/rad, and damps descent.
+Only fully unloaded settling near the folded pose permits a successful soft-stop result; the
+20 s damping timeout or any failure requests disable and reports failure. A second Ctrl-C,
+SIGTERM or an incomplete startup bypasses soft stop. Keep power on until completion.
+Wait for both the soft-stop result and `VERIFIED structured disabled_confirmed`; the latter
+alone does not prove a soft landing. These new gains still require physical validation.
+Use the real-launch MoveIt wrapper or production Compose; bare ros2 launch retains immediate shutdown.
+See [implementation and parameter details](shutdown_damping_cn.md).
+See [architecture and migration](architecture_refactor_cn.md) for the production image and opt-in tools.
 Stop the current owner before switching applications, changing hardware profiles or rebuilding.
 The CAN interface is configurable; rebinding also checks the physical adapter serial/channel.
 

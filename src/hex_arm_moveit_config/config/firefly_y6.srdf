@@ -12,7 +12,7 @@
   <group_state name="commissioning_start" group="arm">
     <joint name="joint_1" value="0.0"/>
     <joint name="joint_2" value="-1.56"/>
-    <joint name="joint_3" value="3.13"/>
+    <joint name="joint_3" value="1.56"/>
     <joint name="joint_4" value="0.0"/>
     <joint name="joint_5" value="0.0"/>
     <joint name="joint_6" value="0.0"/>
@@ -22,7 +22,7 @@
   <group_state name="startup_ready" group="arm">
     <joint name="joint_1" value="0.0"/>
     <joint name="joint_2" value="-1.350"/>
-    <joint name="joint_3" value="3.000"/>
+    <joint name="joint_3" value="1.430"/>
     <joint name="joint_4" value="-0.300"/>
     <joint name="joint_5" value="0.0"/>
     <joint name="joint_6" value="0.0"/>

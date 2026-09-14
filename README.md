@@ -2,6 +2,9 @@
 
 **English** | [中文](README_cn.md)
 
+See [architecture and production Docker migration](docs/architecture_refactor_cn.md)
+for the modular Meow driver, opt-in legacy tools, and mandatory ordered startup.
+
 ROS 2 Jazzy driver, MoveIt 2 motion planning, and Gazebo simulation workspace for
 the six-axis Firefly Y6 arm. **To open the MoveIt 2 window without connecting an
 arm, follow the quick start below.**
@@ -57,7 +60,12 @@ configuration. **This launch includes the required controllers; there is no need
 to start `hex_arm_bringup mock.launch.py` separately.** Leave the terminal running
 while using the RViz window.
 
-The default joint pose is `[0,-1.350,3.000,-0.300,0,0]` rad, named `startup_ready`. This initializes mock joints; real hardware starts from measured feedback.
+This mock entry defaults to `[0,-1.350,1.430,-0.300,0,0]` rad, named
+`startup_ready`. It initializes mock joints and is not the physical placement
+posture used after a power cycle; real hardware starts from absolute-encoder feedback.
+Firefly Y6 description v2 centers J3 at its mechanical/CAD zero. Convert legacy
+J3 coordinates with `q_v2 = q_v1 - 1.57 rad`; hardware profiles must use schema
+v3 with `joint_coordinate_version: 2`.
 
 ### 3. Plan and execute in the window
 
@@ -128,6 +136,11 @@ ros2 launch hex_arm_bringup gz.launch.py headless:=false use_rviz:=true
 These three commands do not load the MoveIt MotionPlanning panel. To open the
 planning window, use `ros2 launch hex_arm_moveit_config moveit_mock.launch.py`.
 
+Each `view` launch uses a unique `/hex_arm_view_<id>` namespace for its joint
+states, robot description, and TF topics, so preview windows do not interfere
+with each other or a running controller. Slider angles are radians; Center sets
+J3 to 0 (the former 1.57 rad pose). Stop the launch with Ctrl+C when finished.
+
 <a id="simulation-cli"></a>
 
 ## Driving the simulated arm from the CLI (`ros2 action send_goal` reference)
@@ -140,7 +153,7 @@ cd /workspaces/hex_arm_ros2
 source install/setup.bash
 ros2 action send_goal /firefly_arm_controller/follow_joint_trajectory \
   control_msgs/action/FollowJointTrajectory \
-  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
+  "trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, -0.32, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}"
 ```
 
 A successful goal ends with `Goal finished with status: SUCCEEDED`
@@ -174,7 +187,7 @@ ros2 action send_goal <action_server> <action_type> "<goal_yaml>"
   point has:
   - `positions`: target angles in **radians**, exactly six values in
     `joint_names` order. Keep them inside the URDF limits: joint_1 ±2.86,
-    joint_2 −1.57~2.09, joint_3 0~3.14, joint_4 ±1.57, joint_5 ±1.54,
+    joint_2 −1.57~2.09, joint_3 ±1.57, joint_4 ±1.57, joint_5 ±1.54,
     joint_6 ±2.79. Note that the mock/gz configs do **not** enable command
     limit clamping, so out-of-limit values are not automatically rejected —
     make sure the numbers are safe yourself.
@@ -402,7 +415,15 @@ Use `config/hardware/firefly_y6.meow.can2.local.yaml` for this arm. It contains 
 identities, directions, encoder offsets and motion envelope and is excluded from Git. For another
 arm, create a profile from `firefly_y6.meow_mit.example.yaml` and verify its calibration separately.
 
-Start from the folded reference `[0,-1.570,3.140,0,0,0]`. From a graphical host terminal in the repository:
+After each power cycle and before automatic startup, place the arm at the folded entry posture:
+
+| Posture | J1 | J2 | J3 | J4 | J5 | J6 |
+|---|---:|---:|---:|---:|---:|---:|
+| Power-cycle placement `folded_position_rad` | 0 | **−1.570** | **1.570** | 0 | 0 | 0 |
+| Automatic startup result `startup_ready` | 0 | −1.350 | **1.430** | −0.300 | 0 | 0 |
+
+All values are radians. Absolute encoders verify the folded entry before enable;
+the required motion order remains **J2 → J4 → J3**. From a graphical host terminal in the repository:
 
 ```bash
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
@@ -412,7 +433,10 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
 ```
 
 The entry checks feedback and position before enabling. Startup then moves **J2 to −1.350 (8 s),
-J4 to −0.300 (10 s), and J3 to 3.000 (6 s)**, with the other joints ending at zero.
+J4 to −0.300 (10 s), and J3 to 1.430 (6 s)**, with the other joints ending at zero.
+The authoritative values are in
+[`src/hex_arm_controller/config/startup.yaml`](src/hex_arm_controller/config/startup.yaml),
+with operating instructions in [Current hardware state](docs/commissioning.md#start-and-stop).
 The operator has verified physical clearance for this ordered folded exit.
 Wait for `startup_ready reached and verified; controller continues holding`, then select `arm`
 and the current start state in RViz for `Plan` / `Plan & Execute`. Subsequent MoveIt execution
@@ -420,10 +444,15 @@ uses strict collision checks and the current local motion envelope.
 
 Current Kp is `[80,80,120,110,80,80]`, Kd is 15 on every axis, and J2/J3/J4 gravity scales are
 `1.0/1.05/0.7`. Velocity and acceleration caps are 0.1 rad/s and 0.1 rad/s²; see the deployment
-status document for detailed bounds. Use `startup_ready:=false` for measured-pose holding;
-omitting `enable_execution:=true` selects observation and planning.
+status document for detailed bounds. Real execution always requires ordered startup;
+`startup_ready:=false` cannot bypass it. Omitting `enable_execution:=true` selects
+disabled observation and planning.
 
-Stop with Ctrl-C in the owning launch terminal and wait for `VERIFIED clean controller exit`.
+The local profile now opts into shutdown damping. The first Ctrl-C in the owning real-launch terminal
+can move the arm: MoveIt returns to startup_ready, then Rust damps descent and confirms disable.
+A second interrupt or a fault requests immediate teardown. Wait for both the soft-stop result and
+`VERIFIED structured disabled_confirmed`; keep power on until completion. Gains await physical validation.
+See [shutdown behavior and configuration](docs/shutdown_damping_cn.md); bare ros2 launch bypasses this wrapper.
 Stop the current controller before switching applications, editing profiles or rebuilding.
 
 ### CAN selection and further development

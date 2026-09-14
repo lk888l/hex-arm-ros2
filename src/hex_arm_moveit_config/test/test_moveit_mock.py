@@ -21,7 +21,7 @@ from sensor_msgs.msg import JointState
 
 JOINTS = [f"joint_{index}" for index in range(1, 7)]
 TARGET = [0.20, 0.20, 1.30, -0.20, 0.15, 0.10]
-SURVEYED_START = [0.0, -1.570, 3.140, 0.0, 0.0, 0.0]
+SURVEYED_START = [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
 SURVEYED_CONTACT_PAIRS = {
     ("link_1", "link_5"),
     ("link_2", "link_4"),
@@ -158,7 +158,7 @@ def main() -> None:
         time.sleep(1.0)
 
         # Validate the actual GenericSystem state, not just the YAML/SRDF.
-        expected_start = [0.0, -1.350, 3.000, -0.300, 0.0, 0.0]
+        expected_start = [0.0, -1.350, 1.430, -0.300, 0.0, 0.0]
         deadline = time.monotonic() + 5.0
         while not all(name in node.positions for name in JOINTS) and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.05)

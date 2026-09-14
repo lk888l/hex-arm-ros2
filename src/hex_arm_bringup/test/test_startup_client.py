@@ -132,7 +132,7 @@ def test_lost_hardware_status_response_has_bounded_retry_and_cleanup(recover):
 
 
 def test_small_free_joint_placement_offsets_keep_original_reference_and_order():
-    q = [-0.0202, -1.5708, 3.1354, 0.00035, -0.02056, -0.15945]
+    q = [-0.0202, -1.5708, 1.5654, 0.00035, -0.02056, -0.15945]
     steps = client.startup_steps(profile(), q, [0.0] * 6)
     assert [s[0] for s in steps] == ["align_j6", "startup_j2", "startup_j4", "startup_j3"]
     assert [steps[0][1][i] for i in (1, 2, 3)] == [q[i] for i in (1, 2, 3)]
@@ -153,7 +153,7 @@ def test_placement_tolerance_stays_bounded_per_joint(axis, delta):
 
 
 def test_ordered_startup_without_j6_preparation_holds_untouched_axes():
-    q = [-.002, -1.569, 3.133, -.001, -.002, -.0006]
+    q = [-.002, -1.569, 1.563, -.001, -.002, -.0006]
     steps = client.startup_steps(profile(), q, [0.0] * 6)
     assert [s[0] for s in steps] == ["startup_j2", "startup_j4", "startup_j3"]
     assert steps[0][1][2:4] == q[2:4]

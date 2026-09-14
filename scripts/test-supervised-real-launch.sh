@@ -156,7 +156,8 @@ kill -0 -- "-${unrelated_pgid}"
 bash "${supervisor}" --forward-signal "${early_token}" INT >/dev/null
 grep -Fxq INT "${state_root}/${early_token}/requested.signal"
 
-grep -Fq 'setsid ros2 launch' "${supervisor}"
+grep -Fq 'setsid python3' "${supervisor}"
+grep -Fq 'graceful-real-launch.py' "${supervisor}"
 grep -Fq 'set +u' "${supervisor}"
 grep -Fq 'source /opt/ros/jazzy/setup.bash' "${supervisor}"
 grep -Fq 'set -u' "${supervisor}"
@@ -213,7 +214,15 @@ if [[ "${1:-}" == "exec" ]]; then
     sleep 0.01
   done
   [[ "$5" == "$(<"${MOCK_TOKEN_FILE}")" ]]
-  [[ "$6" == "INT" ]]
+  if [[ "${MOCK_WAIT_FOR_SECOND:-0}" == "1" && "$6" == "INT" ]]; then
+    : >"${MOCK_STOP_FILE}.first"
+    exit 0
+  fi
+  if [[ "${MOCK_WAIT_FOR_SECOND:-0}" == "1" ]]; then
+    [[ "$6" == "TERM" ]]
+  else
+    [[ "$6" == "INT" ]]
+  fi
   : >"${MOCK_STOP_FILE}"
   exit 0
 fi
@@ -277,5 +286,37 @@ if grep -Fq can1 "${mock_log}"; then
   echo "error: can2 host relay test unexpectedly referenced can1" >&2
   exit 1
 fi
+
+# While a normal soft stop is pending, a repeated host Ctrl-C must not be swallowed.
+PATH="${mock_bin}:${PATH}" \
+MOCK_DOCKER_LOG="${mock_log}.second" \
+MOCK_TOKEN_FILE="${mock_token}.second" \
+MOCK_STOP_FILE="${mock_stop}.second" \
+MOCK_WAIT_FOR_SECOND=1 \
+HEX_ARM_CAN_IFACE=can2 \
+HEX_ARM_CAN_CHANNEL=2 \
+HEX_ARM_CAN_SERIAL=C9E29601798421B29AC2D419C12D9502 \
+python3 -c '
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp("bash", ["bash", *sys.argv[1:]])
+' "${docker_helper}" real-launch moveit /workspaces/profile.yaml \
+  >"${helper_log}.second" 2>&1 &
+helper_pid="$!"
+for _ in $(seq 1 200); do
+  [[ -r "${mock_token}.second" ]] && break
+  sleep 0.01
+done
+test -r "${mock_token}.second"
+kill -INT "${helper_pid}"
+for _ in $(seq 1 200); do
+  [[ -e "${mock_stop}.second.first" ]] && break
+  sleep 0.01
+done
+test -e "${mock_stop}.second.first"
+kill -INT "${helper_pid}"
+wait "${helper_pid}"
+grep -Fq 'host supervisor: relaying TERM' "${helper_log}.second"
+grep -Fq 'VERIFIED clean controller exit' "${helper_log}.second"
 
 echo "supervised real-launch shell checks: PASS"

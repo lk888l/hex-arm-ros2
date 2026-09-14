@@ -18,9 +18,9 @@ from rclpy.node import Node
 
 
 JOINTS = [f"joint_{index}" for index in range(1, 7)]
-SURVEYED_START = [0.0, -1.570, 3.140, 0.0, 0.0, 0.0]
+SURVEYED_START = [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
 SURVEYED_TARGET = [0.0, -1.560, 3.120, 0.0, 0.0, 0.05]
-ACTIVE_COLLISION_GUARD = [0.0, 1.570, 3.140, 0.0, 0.0, 0.0]
+ACTIVE_COLLISION_GUARD = [0.0, 1.570, 1.570, 0.0, 0.0, 0.0]
 LAUNCH_FIXTURE = Path(__file__).with_name("plan_only_move_group.launch.py")
 
 

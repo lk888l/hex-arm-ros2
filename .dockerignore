@@ -3,5 +3,8 @@ install
 log
 .git
 **/target
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.pytest_cache
 config/hardware/*.local.yaml
-

@@ -4,7 +4,7 @@
   <xacro:arg name="controllers_file" default=""/>
   <xacro:arg name="state_timeout_sec" default="0.100"/>
   <xacro:arg name="initial_positions_file" default=""/>
-  <xacro:property name="initial_positions" value="${xacro.load_yaml('$(arg initial_positions_file)')['initial_positions'] if '$(arg initial_positions_file)' else dict(joint_1=0.0, joint_2=0.0, joint_3=1.57, joint_4=0.0, joint_5=0.0, joint_6=0.0)}"/>
+  <xacro:property name="initial_positions" value="${xacro.load_yaml('$(arg initial_positions_file)')['initial_positions'] if '$(arg initial_positions_file)' else dict(joint_1=0.0, joint_2=0.0, joint_3=0.0, joint_4=0.0, joint_5=0.0, joint_6=0.0)}"/>
 
   <!-- Geometry, inertials, joint origins, axes, and limits remain owned by the
        pinned upstream package. The contract test compares every field. -->
@@ -28,4 +28,3 @@
     </gazebo>
   </xacro:if>
 </robot>
-

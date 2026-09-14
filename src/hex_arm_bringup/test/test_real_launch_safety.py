@@ -28,10 +28,12 @@ def _profile(tmp_path: Path, *, calibrated: bool = True) -> Path:
     profile.write_text(
         "\n".join(
             [
-                "schema_version: 2",
+                "schema_version: 3",
+                "joint_coordinate_version: 2",
                 "validated: true",
                 f"calibrated: {'true' if calibrated else 'false'}",
                 "robot_prefix: test/firefly_y6",
+                "bus: {protocol: meow}",
                 "gravity_vector_base_m_s2: [0.0, 0.0, -9.81]",
                 "joints:",
                 *[f"  - {{name: joint_{index}}}" for index in range(1, 7)],
@@ -94,6 +96,7 @@ def test_real_launch_defaults_to_observation_only() -> None:
     }
     activation = arguments["activate_hardware"]
     assert perform_substitutions(LaunchContext(), activation.default_value) == "false"
+    assert perform_substitutions(LaunchContext(), arguments["startup_ready"].default_value) == "true"
     assert set(activation.choices) == {"true", "false"}
 
 
@@ -227,6 +230,26 @@ def test_uncalibrated_profile_is_observable_but_cannot_activate(tmp_path: Path) 
         raise AssertionError("uncalibrated hardware activation was not rejected")
 
 
+def test_real_execution_cannot_skip_ordered_startup(tmp_path: Path) -> None:
+    import pytest
+    module = _load_launch_module()
+    context = _context(_profile(tmp_path), "true")
+    context.launch_configurations["startup_ready"] = "false"
+    with pytest.raises(RuntimeError, match="automatic J2"):
+        module._real_nodes(context)
+
+
+def test_real_execution_automatically_launches_startup_without_hold_override(tmp_path: Path) -> None:
+    module = _load_launch_module()
+    context = _context(_profile(tmp_path), "true")
+    # The startup process is nested in an event handler; inspect the source
+    # alongside default/disable-path tests without running a ROS process.
+    module._real_nodes(context)
+    source = LAUNCH_FILE.read_text()
+    assert '"--allow-motion", "--activate-controllers"' in source
+    assert '"--hold-current"' not in source
+
+
 def test_real_launch_rejects_v1_and_missing_gravity_installation_data(
     tmp_path: Path,
 ) -> None:
@@ -234,11 +257,11 @@ def test_real_launch_rejects_v1_and_missing_gravity_installation_data(
     profile = _profile(tmp_path)
     contents = profile.read_text(encoding="utf-8")
 
-    profile.write_text(contents.replace("schema_version: 2", "schema_version: 1"), encoding="utf-8")
+    profile.write_text(contents.replace("schema_version: 3", "schema_version: 2"), encoding="utf-8")
     try:
         module._real_nodes(_context(profile, "false"))
     except RuntimeError as error:
-        assert "schema v2" in str(error)
+        assert "schema v3" in str(error)
     else:
         raise AssertionError("schema v1 real profile was not rejected")
 
@@ -255,7 +278,7 @@ def test_real_launch_rejects_v1_and_missing_gravity_installation_data(
     except RuntimeError as error:
         assert "gravity_vector_base_m_s2" in str(error)
     else:
-        raise AssertionError("schema v2 profile without gravity vector was not rejected")
+        raise AssertionError("schema v3 profile without gravity vector was not rejected")
 
 
 def test_controller_manager_chain_requires_explicit_opt_in(tmp_path: Path) -> None:
