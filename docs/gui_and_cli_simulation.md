@@ -256,7 +256,7 @@ The URDF position limits are:
 |---|---:|---:|
 | `joint_1` | -2.86 | 2.86 |
 | `joint_2` | -1.57 | 2.09 |
-| `joint_3` | 0.00 | 3.14 |
+| `joint_3` | -1.57 | 1.57 |
 | `joint_4` | -1.57 | 1.57 |
 | `joint_5` | -1.54 | 1.54 |
 | `joint_6` | -2.79 | 2.79 |
@@ -286,7 +286,7 @@ source /workspaces/hex_arm_ros2/install/setup.bash
 ros2 action send_goal \
   /firefly_arm_controller/follow_joint_trajectory \
   control_msgs/action/FollowJointTrajectory \
-  'trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, 1.25, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}'
+  'trajectory: {joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], points: [{positions: [0.15, 0.25, -0.32, -0.2, 0.15, -0.1], time_from_start: {sec: 2, nanosec: 0}}]}'
 ```
 
 A successful run reports that the goal was accepted and finishes with

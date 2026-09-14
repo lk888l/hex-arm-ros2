@@ -34,7 +34,7 @@
 |---|---|
 | J1 | −0.03～0.01 |
 | J2 | −1.572～−1.33 |
-| J3 | 2.98～3.14 |
+| J3 | 1.41～1.57 |
 | J4 | −0.32～0.01 |
 | J5 | −0.03～0.01 |
 | J6 | −0.25～0.02 |
@@ -44,7 +44,11 @@ MoveIt 采用模型、commissioning 限位和本机 profile 的交集，J2 规�
 
 ## 日常启动与停止
 
-机械臂从断电折叠参考 `[0,-1.570,3.140,0,0,0]` 开始。
+每次断电后重新上电，并在执行自动启动前，机械臂必须摆放到折叠入口
+`[0,-1.570,1.570,0,0,0]` rad，即 **J2=−1.570、J3=1.570**，其余关节名义值为 0。
+自动启动完成后的安全位置为 `[0,-1.350,1.430,-0.300,0,0]` rad，其中
+**J3=1.430**。两组姿态以及动作时长统一由
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml) 定义。
 入口在使能前检查静止反馈和位置；J1/J5 容许 0.03 rad 摆放差异，J2/J3/J4 容许 0.01 rad，
 同时必须满足本机窗口。小偏差保留原零偏，J6 在允许范围内按需平滑回零。
 
@@ -57,15 +61,20 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-默认依次执行 **J2→−1.350（8 s）、J4→−0.300（10 s）、J3→3.000（6 s）**，
+默认依次执行 **J2→−1.350（8 s）、J4→−0.300（10 s）、J3→1.430（6 s）**，
 其余关节最终为 0；未轮到动作的 J2/J3/J4 保持实测位置。该折叠退出路径由操作者确认实物无碰撞，
 使用固定关节轨迹；后续 MoveIt 运动保留严格碰撞检查。
 
 等待 `startup_ready reached and verified; controller continues holding` 后，在 RViz 选择
 `arm`、当前状态作为起点，再使用 `Plan` / `Plan & Execute`。
-`startup_ready:=false` 为使能后原位保持；省略 `enable_execution:=true` 为观察/规划。
+真机执行必须完成自动 J2 → J4 → J3，不能用 `startup_ready:=false` 绕过；
+省略 `enable_execution:=true` 为保持失能的观察/规划。
 
-停止时在拥有 real-launch 的终端按 Ctrl-C，等待 `VERIFIED clean controller exit`。
+本机 profile 已配置退出阻尼（新增参数尚未实机验收）。第一次在 real-launch 终端按 Ctrl-C，
+会先通过 MoveIt 回安全启动位，再由 Rust 阻尼下落并确认失能；**不要提前断电**。
+再次 Ctrl-C 或故障走立即停机路径。等待柔和阶段结果和 `VERIFIED structured disabled_confirmed`；
+二者分别表示柔和流程和最终失能，不能相互替代。详见[退出阻尼说明](shutdown_damping_cn.md)。
+模块拆分、旧诊断命令迁移与生产镜像见 [架构说明](architecture_refactor_cn.md)。
 切换上位机、修改硬件配置或重新编译前，先结束当前控制端。
 
 CAN 名称由参数和 profile 选择，并核对 USB 序列号与物理通道。换口时在控制停止后运行

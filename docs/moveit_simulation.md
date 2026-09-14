@@ -105,7 +105,7 @@ The SRDF does not reuse the historical 21-pair collision-disable blanket. The
 strict default `firefly_y6.srdf` excludes only the six kinematically adjacent
 pairs because they share joint/interface geometry. FCL reports two additional
 contacts at the corrected physically occupied surveyed fold
-`q~=[0,-1.570,3.140,0,0,0]`:
+`q~=[0,-1.570,1.570,0,0,0]`:
 
 - `link_1` with `link_5`;
 - `link_2` with `link_4`.
@@ -122,14 +122,14 @@ colliding non-adjacent pairs. The overlay is therefore a documented
 visualization/debug workaround until corrected collision meshes are
 measured/exported. The other thirteen non-adjacent pairs remain active even in
 plan-only mode. In particular, the offline FCL regression at the discarded
-`q=[0,+1.570,3.140,0,0,0]` pose still exposes five non-exempt contacts. Any plan produced
+`q=[0,+1.570,1.570,0,0,0]` pose still exposes five non-exempt contacts. Any plan produced
 under `firefly_y6.plan_only.srdf` is preview-only and must not be reused for
 execution; real execution requires re-planning under the strict SRDF after the
 collision geometry and the physical start posture have been corrected. The
 first version uses `link_6` as the planning tip until a calibrated fixed
 TCP/tool frame is available. The old out-of-window `ready` state has been
 removed. `commissioning_start` matches the surveyed posture but places joints
-2/3 at -1.56/3.13 rad, 0.01 rad inside their provisional limits; it is a planning
+2/3 at -1.56/1.56 rad, 0.01 rad inside their provisional limits; it is a planning
 reference only and must not be executed on an uncalibrated arm.
 
 ## Real MoveIt: planning only by default
@@ -172,7 +172,7 @@ map directly to joints 1--6. Node 15 is still excluded from all drive control,
 but a configured `tip_payload` requires its exact identity and includes its
 fixed mass/COM in the `link_6` gravity model.
 
-The approximate pose `q=[0,-1.570,3.140,0,0,0]`, historical sign candidates, and
+The approximate pose `q=[0,-1.570,1.570,0,0,0]`, historical sign candidates, and
 one-snapshot offset fit are commissioning references, not a home or motion
 validation. Correcting the omitted joint-2 minus sign maps its full URDF range
 inside the single-turn seam guard. Joint 2 nevertheless starts at its lower

@@ -1,6 +1,7 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from launch import LaunchContext
 from launch.actions import (
@@ -92,7 +93,11 @@ def test_one_switch_gates_hardware_and_moveit_execution() -> None:
         expected = "true" if enabled else "false"
         assert arguments["activate_hardware"] == expected
         assert arguments["startup_ready"] == expected
-        assert module._bringup_arguments("/tmp/profile.yaml", "", enabled, False)["startup_ready"] == "false"
+        if enabled:
+            with pytest.raises(RuntimeError, match="automatic J2"):
+                module._bringup_arguments("/tmp/profile.yaml", "", enabled, False)
+        else:
+            assert module._bringup_arguments("/tmp/profile.yaml", "", False, False)["startup_ready"] == "false"
         assert arguments["use_rviz"] == "false"
         assert runtime["allow_trajectory_execution"] is enabled
 

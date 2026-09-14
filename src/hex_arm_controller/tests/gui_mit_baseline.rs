@@ -33,10 +33,10 @@ fn gui_park_coordinates_and_gravity_match_independent_reference() {
     let profile = reviewed_test_profile();
     profile.validate().unwrap();
     profile.validate_single_turn_command_windows().unwrap();
-    let q = [0.0, -1.57, 3.14, 0.0, 0.0, 0.0];
+    let q = [0.0, -1.57, 1.57, 0.0, 0.0, 0.0];
     let encoder = [0.000269, 0.249714, 0.251193, -0.00159, -0.004028, 0.000018];
     let expected_gravity = [0.0, 2.3794834, -4.3563867, -0.5624728, 0.0, 0.0];
-    let expected_motor_ff = [0.0, -0.7138450, -3.0494707, -0.3937309, 0.0, 0.0];
+    let expected_motor_ff = [0.0, -0.713_845, -3.0494707, -0.3937309, 0.0, 0.0];
     let dynamics = load_profile_dynamics(&profile).unwrap();
     let gravity = dynamics.gravity_torque_with(&q, profile.gravity_vector_base_m_s2);
     for (i, joint) in profile.joints.iter().enumerate() {

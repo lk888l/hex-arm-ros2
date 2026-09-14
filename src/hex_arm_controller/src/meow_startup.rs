@@ -10,17 +10,13 @@ use hex_arm_dynamics::ArmDynamics;
 use std::array;
 use std::time::{Duration, Instant};
 
-pub const FOLDED: [f32; DOF] = [0.0, -1.57, 3.14, 0.0, 0.0, 0.0];
-pub const READY: [f32; DOF] = [0.0, -1.35, 3.0, -0.30, 0.0, 0.0];
-// Order is physical commissioning knowledge supplied by the operator.
-pub const STEPS: [(usize, f32, f32); 3] = [(1, -1.35, 8.0), (3, -0.30, 10.0), (2, 3.0, 6.0)];
+use crate::startup_recipe::RECIPE;
+
 const TRACKING_LIMIT: f32 = 0.035;
 const ARRIVAL_LIMIT: f32 = 0.003 * std::f32::consts::TAU; // GUI's 0.003 Rev
-const STOPPED_SPEED: f32 = 0.02;
-const START_LIMIT: f32 = 0.01;
-// The operator verified this fixed fold exit despite mesh/reference uncertainty.
-// Match its feedback envelope to the tracking guard; command limits and the
-// normal ROS runtime's profile margin stay unchanged.
+                                                          // The operator verified this fixed fold exit despite mesh/reference uncertainty.
+                                                          // Match its feedback envelope to the tracking guard; command limits and the
+                                                          // normal ROS runtime's profile margin stay unchanged.
 const STARTUP_MEASURED_MARGIN: f32 = TRACKING_LIMIT;
 
 fn measured(
@@ -72,12 +68,14 @@ fn check_start(q: &[f32; DOF], dq: &[f32; DOF]) -> Result<()> {
         q.iter().all(|v| v.is_finite())
             && q[..5]
                 .iter()
-                .zip(FOLDED[..5].iter())
-                .all(|(a, b)| a.is_finite() && (*a - *b).abs() <= START_LIMIT),
+                .zip(RECIPE.folded_position_rad[..5].iter())
+                .zip(RECIPE.commissioning_folded_tolerance_rad)
+                .all(|((a, b), tolerance)| a.is_finite() && (*a - *b).abs() <= tolerance),
         "startup requires the confirmed J1-J5 folded reference; actual q={q:?}"
     );
     anyhow::ensure!(
-        dq.iter().all(|v| v.is_finite() && v.abs() <= STOPPED_SPEED),
+        dq.iter()
+            .all(|v| v.is_finite() && v.abs() <= RECIPE.stopped_velocity_rad_s),
         "startup requires a stationary arm"
     );
     Ok(())
@@ -156,10 +154,10 @@ pub async fn run(
     // Verify the complete fixed path and raw PD/gravity budgets before any enable.
     // The operator permits an arbitrary J6 orientation. Preserve its measured
     // position throughout this dedicated trial; ROS startup can align it to 0.
-    let mut folded = FOLDED;
+    let mut folded = RECIPE.folded_position_rad;
     folded[5] = q0[5];
     let mut q = folded;
-    for (axis, target, duration) in STEPS {
+    for (axis, target, duration) in RECIPE.waypoints() {
         anyhow::ensure!(
             5.774 * (target - q[axis]).abs() / (duration * duration)
                 <= profile.joints[axis].limits.acceleration_rad_s2,
@@ -212,7 +210,7 @@ pub async fn run(
             .await?;
     }
     let mut reference = folded;
-    for (axis, target, duration) in STEPS {
+    for (axis, target, duration) in RECIPE.waypoints() {
         let phase_start = Instant::now();
         let mut stable_since = None;
         let mut next_log = 0.0;
@@ -261,7 +259,9 @@ pub async fn run(
                     .iter()
                     .zip(command)
                     .all(|(a, b)| (*a - b).abs() <= ARRIVAL_LIMIT)
-                && velocity.iter().all(|v| v.abs() <= STOPPED_SPEED);
+                && velocity
+                    .iter()
+                    .all(|v| v.abs() <= RECIPE.stopped_velocity_rad_s);
             if arrived {
                 let since = stable_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_millis(500) {
@@ -303,8 +303,8 @@ mod tests {
     use super::*;
     #[test]
     fn exact_sequence_moves_one_axis_at_a_time_with_bounded_smooth_velocity() {
-        let mut q = FOLDED;
-        for (axis, target, duration) in STEPS {
+        let mut q = RECIPE.folded_position_rad;
+        for (axis, target, duration) in RECIPE.waypoints() {
             let mut previous_dq = [0.0_f32; DOF];
             for sample in 0..=1000 {
                 let (p, v) = waypoint(q, axis, target, duration, duration * sample as f32 / 1000.0);
@@ -325,7 +325,7 @@ mod tests {
             assert_eq!(v, [0.0; DOF]);
             q[axis] = target;
         }
-        assert_eq!(q, READY);
+        assert_eq!(q, RECIPE.ready());
     }
     #[test]
     fn software_feedforward_limit_is_enforced_without_an_optional_clamp() {
@@ -337,11 +337,27 @@ mod tests {
             "../../xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf"
         ))
         .unwrap();
-        let baseline = motor_targets(&profile, &dynamics, READY, [0.0; DOF], READY, 1.0).unwrap();
+        let baseline = motor_targets(
+            &profile,
+            &dynamics,
+            RECIPE.ready(),
+            [0.0; DOF],
+            RECIPE.ready(),
+            1.0,
+        )
+        .unwrap();
         assert!(baseline[1].torque_nm.abs() > 0.01);
         profile.joints[1].gravity_compensation_limit_nm = None;
         profile.joints[1].limits.torque_nm = 0.001;
-        assert!(motor_targets(&profile, &dynamics, READY, [0.0; DOF], READY, 1.0).is_err());
+        assert!(motor_targets(
+            &profile,
+            &dynamics,
+            RECIPE.ready(),
+            [0.0; DOF],
+            RECIPE.ready(),
+            1.0
+        )
+        .is_err());
     }
     #[test]
     fn startup_boundary_uncertainty_does_not_allow_stale_or_unbounded_feedback() {
@@ -355,7 +371,7 @@ mod tests {
             joint.fresh = true;
             joint.position_rev = ros_target_to_motor(
                 RosTarget {
-                    position_rad: FOLDED[i],
+                    position_rad: RECIPE.folded_position_rad[i],
                     ..Default::default()
                 },
                 &profile.joints[i],
@@ -374,25 +390,25 @@ mod tests {
     #[test]
     fn j6_offset_is_held_without_redefining_the_folded_reference() {
         for j6 in [-2.7, -0.219, 0.497, 2.7] {
-            let mut q = FOLDED;
+            let mut q = RECIPE.folded_position_rad;
             q[5] = j6;
             check_start(&q, &[0.0; DOF]).unwrap();
-            for (axis, target, duration) in STEPS {
+            for (axis, target, duration) in RECIPE.waypoints() {
                 q = waypoint(q, axis, target, duration, duration).0;
                 assert_eq!(q[5], j6);
             }
-            assert_eq!(&q[..5], &READY[..5]);
+            assert_eq!(&q[..5], &RECIPE.ready()[..5]);
         }
-        let mut q = FOLDED;
+        let mut q = RECIPE.folded_position_rad;
         q[5] = f32::NAN;
         assert!(check_start(&q, &[0.0; DOF]).is_err());
     }
     #[test]
     fn arbitrary_pose_or_moving_start_is_rejected() {
-        check_start(&FOLDED, &[0.0; DOF]).unwrap();
-        assert!(check_start(&READY, &[0.0; DOF]).is_err());
-        assert!(check_start(&FOLDED, &[0.03; DOF]).is_err());
-        let mut invalid = FOLDED;
+        check_start(&RECIPE.folded_position_rad, &[0.0; DOF]).unwrap();
+        assert!(check_start(&RECIPE.ready(), &[0.0; DOF]).is_err());
+        assert!(check_start(&RECIPE.folded_position_rad, &[0.03; DOF]).is_err());
+        let mut invalid = RECIPE.folded_position_rad;
         invalid[0] = f32::NAN;
         assert!(check_start(&invalid, &[0.0; DOF]).is_err());
     }

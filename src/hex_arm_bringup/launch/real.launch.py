@@ -1,4 +1,5 @@
 import math
+import os
 from pathlib import Path
 
 import yaml
@@ -104,10 +105,12 @@ def _real_nodes(context):
     if activate_hardware not in ("true", "false"):
         raise RuntimeError("activate_hardware must be 'true' or 'false'")
     activate_hardware = activate_hardware == "true"
-    startup_ready = LaunchConfiguration("startup_ready", default="false").perform(context).lower()
+    startup_ready = LaunchConfiguration("startup_ready", default="true").perform(context).lower()
     if startup_ready not in ("true", "false"):
         raise RuntimeError("startup_ready must be 'true' or 'false'")
-    startup_ready = activate_hardware and startup_ready == "true"
+    if activate_hardware and startup_ready != "true":
+        raise RuntimeError("real execution requires automatic J2 -> J4 -> J3 startup; startup_ready cannot be disabled")
+    startup_ready = activate_hardware
     if startup_ready and profile.get("bus", {}).get("protocol") != "meow":
         raise RuntimeError("ordered startup_ready requires a Meow hardware profile")
     controller_zenoh_args, bridge_zenoh_connect = _zenoh_routes(
@@ -118,14 +121,16 @@ def _real_nodes(context):
         "bridge_startup_timeout_sec",
     )
 
-    if profile.get("schema_version") != 2 or not profile.get("validated"):
+    if (profile.get("schema_version") != 3
+            or profile.get("joint_coordinate_version") != 2
+            or not profile.get("validated")):
         raise RuntimeError(
-            "real bringup requires a validated schema v2 profile with an explicit "
-            "gravity_vector_base_m_s2"
+            "real bringup requires a validated schema v3 profile with "
+            "joint_coordinate_version 2 and an explicit gravity_vector_base_m_s2"
         )
     if "gravity_vector_base_m_s2" not in profile:
         raise RuntimeError(
-            "real bringup requires the schema v2 gravity_vector_base_m_s2 installation parameter"
+            "real bringup requires the schema v3 gravity_vector_base_m_s2 installation parameter"
         )
     if activate_hardware and not profile.get("calibrated"):
         raise RuntimeError(
@@ -157,6 +162,13 @@ def _real_nodes(context):
             controller_executable,
             "--profile",
             str(profile_path),
+            "--urdf",
+            PathJoinSubstitution([
+                FindPackageShare("xpkg_urdf_firefly_y6"), "urdf", "xpkg_urdf_firefly_y6.urdf"
+            ]),
+            "--shutdown-report",
+            os.environ.get("HEX_ARM_SHUTDOWN_REPORT",
+                           str(Path(launch_config.log_dir) / "driver-shutdown.json")),
             *controller_zenoh_args,
         ],
         output="screen",
@@ -182,7 +194,7 @@ def _real_nodes(context):
         output="screen")
     startup = None
     if activate_hardware:
-        report = str(Path(launch_config.log_dir) / "startup-ready.json")
+        report = os.environ.get("HEX_ARM_STARTUP_REPORT", str(Path(launch_config.log_dir) / "startup-ready.json"))
         startup_script = PathJoinSubstitution([
             FindPackagePrefix("hex_arm_bringup"), "lib", "hex_arm_bringup", "commission-startup-ros.py"
         ]).perform(context)
@@ -193,7 +205,6 @@ def _real_nodes(context):
                 FindExecutable(name="python3"), startup_script,
                 "--profile", str(profile_path), "--allow-motion", "--activate-controllers",
                 "--output", report,
-                *([] if startup_ready else ["--hold-current"]),
             ],
             output="screen",
         )
@@ -296,8 +307,8 @@ def generate_launch_description() -> LaunchDescription:
             ),
         ),
         DeclareLaunchArgument(
-            "startup_ready", default_value="false", choices=["true", "false"],
-            description="After explicit activation, align J6 if needed and run J2 -> J4 -> J3, then hold.",
+            "startup_ready", default_value="true", choices=["true", "false"],
+            description="Mandatory for real activation: align J6 if needed, then J2 -> J4 -> J3.",
         ),
         DeclareLaunchArgument("use_rviz", default_value="true", choices=["true", "false"]),
         OpaqueFunction(function=_real_nodes),

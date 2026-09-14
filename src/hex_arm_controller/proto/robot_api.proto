@@ -48,6 +48,8 @@ enum EventSeverity {
 }
 
 message GenericResponse { bool ok = 1; optional string error = 2; }
+// One-shot, terminal stop. Requires ACTIVE at startup_ready. Returns only after disable.
+message DampedStopRequest { uint32 session_id = 1; }
 message Event { Header header = 1; EventSeverity severity = 2; string code = 3; string text = 4; map<string, string> kv = 5; }
 message EventLog { repeated Event events = 1; }
 message RobotDescription {

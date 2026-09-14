@@ -1,0 +1,36 @@
+# Standalone production file. Do NOT combine it with the developer compose files.
+services:
+  arm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.runtime
+      args:
+        BUILD_IMAGE: ${HEX_ARM_BUILD_IMAGE:-hex-arm-jazzy:local}
+    image: hex-arm-runtime:local
+    init: true
+    network_mode: host
+    ipc: host
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 180s
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      ROS_HOME: /tmp/ros
+    tmpfs:
+      - /tmp:rw,nosuid,nodev
+    volumes:
+      - type: bind
+        source: ${HEX_ARM_PROFILE:?Set HEX_ARM_PROFILE to an absolute verified hardware YAML path}
+        target: /etc/hex-arm/hardware.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - arm-logs:/var/log/hex-arm
+    command: [run]
+volumes:
+  arm-logs:

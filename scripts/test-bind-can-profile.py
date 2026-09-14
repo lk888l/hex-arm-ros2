@@ -32,7 +32,8 @@ class BindingTests(unittest.TestCase):
                 binding.adapter_binding("arm_bus", root / "net")
 
     def test_only_bus_binding_changes(self):
-        source = {"schema_version":2, "validated":True, "calibrated":False,
+        source = {"schema_version":3, "joint_coordinate_version":2,
+                  "validated":True, "calibrated":False,
                   "joints":[{"identity":{"serial_number":42}, "zero_offset_rad":0.3}],
                   "bus":{"transport":"socket_can", "interface":"can0", "channel":0,
                          "expected_link":{"data_bitrate":4000000, "adapter":{}}}}
@@ -54,7 +55,8 @@ class BindingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 binding.adapter_binding(interface)
         with self.assertRaises(ValueError):
-            binding.bind_profile({"schema_version":2,"bus":{"transport":"gs_usb"}}, "can0", {})
+            binding.bind_profile({"schema_version":3,"joint_coordinate_version":2,
+                                  "bus":{"transport":"gs_usb"}}, "can0", {})
 
 
 if __name__ == "__main__":

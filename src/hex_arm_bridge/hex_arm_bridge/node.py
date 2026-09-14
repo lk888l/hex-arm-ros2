@@ -558,6 +558,9 @@ class HexArmBridge(LifecycleNode):
                 )
             )
             self._diag_timer = self._stream_node.create_timer(0.01, self._publish_snapshot)
+            self._bridge_services.append(self.create_service(
+                Trigger, "/hex_arm_bridge/damped_stop", self._damped_stop,
+                callback_group=self._management_callback_group))
             self._start_streaming()
             self.get_logger().info("bridge configured with fresh DISABLED-state observation")
             return TransitionCallbackReturn.SUCCESS
@@ -1086,6 +1089,33 @@ class HexArmBridge(LifecycleNode):
             else f"deactivation failed: {release_error}"
         )
         return response
+
+    def _damped_stop(self, request, response):
+        del request
+        with self._hardware_transition_lock:
+            with self._lock:
+                session_id = self._session_id
+                if not self._hardware_active or not session_id:
+                    response.success = False
+                    response.message = "damped stop requires active ros2_control ownership"
+                    return response
+                self._hardware_active = False
+            try:
+                result = self._query_with_timeout(
+                    f"{self.prefix}/rpc/damped_stop",
+                    pb.DampedStopRequest(session_id=session_id).SerializeToString(),
+                    pb.GenericResponse, 35.0)
+                response.success = bool(result and result.ok)
+                response.message = ("folded, settled and disabled" if response.success else
+                                    (result.error if result else "damped stop acknowledgement timed out"))
+                if response.success:
+                    with self._lock:
+                        self._session_id = 0
+            except Exception as error:
+                response.success = False
+                response.message = str(error)
+            # A failed call is terminal too: never resume an old trajectory stream.
+            return response
 
     def _set_mode(self, request: SetOperatingMode.Request, response: SetOperatingMode.Response) -> SetOperatingMode.Response:
         if request.mode == pb.OPERATING_MODE_ACTIVE:

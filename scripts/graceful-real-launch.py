@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Own ROS launch until return-to-ready and driver damping have completed."""
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+import yaml
+
+
+def eligible(profile, startup_report):
+    try:
+        report = json.loads(Path(startup_report).read_text())
+        return (profile.get("controller", {}).get("shutdown_damping") is not None
+                and report.get("passed") is True and "ready_hold" in report
+                and not report.get("deactivated", False))
+    except (OSError, ValueError):
+        return False
+
+
+def signal_group(process, sig):
+    if process is not None:
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+
+
+def stop_child(process, signal_initial=True):
+    if process is None:
+        return
+    if signal_initial and process.poll() is None:
+        signal_group(process, signal.SIGINT)
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        signal_group(process, signal.SIGTERM)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            signal_group(process, signal.SIGKILL)
+            process.wait(timeout=5)
+    # A dead launch leader must not leave its group running.
+    signal_group(process, signal.SIGTERM)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", required=True, type=Path)
+    parser.add_argument("--scope", choices=["moveit", "bringup", "startup"], required=True)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    command = args.command
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        parser.error("ROS launch command required")
+    profile = yaml.safe_load(args.profile.read_text())
+    signals = []
+    def requested(sig, _frame):
+        signals.append(sig)
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, requested)
+    # Keep startup and soft-stop evidence beside the scoped final-disable receipt.
+    receipt = os.environ.get("HEX_ARM_SHUTDOWN_REPORT")
+    audit_dir = Path(receipt).parent if receipt else None
+    run_dir = Path(tempfile.mkdtemp(prefix="hex-arm-exit-", dir=audit_dir))
+    startup_report = run_dir / "startup-ready.json"
+    env = {**os.environ, "HEX_ARM_STARTUP_REPORT": str(startup_report)}
+    launch = None
+    helper = None
+    soft_failed = False
+    try:
+        if signals:
+            return 1
+        launch = subprocess.Popen(command, env=env, start_new_session=True)
+        while launch.poll() is None and not signals:
+            time.sleep(0.05)
+        if launch.poll() is not None:
+            return launch.returncode  # Unexpected ROS exit: never initiate more motion.
+        # TERM/HUP and the second interrupt retain the immediate disable path.
+        if (len(signals) == 1 and signals[0] == signal.SIGINT
+                and args.scope == "moveit" and eligible(profile, startup_report)):
+            print("graceful exit: returning to startup_ready, then damping; second Ctrl+C disables immediately", flush=True)
+            helper = subprocess.Popen([
+                sys.executable, str(Path(__file__).with_name("commission-shutdown-ros.py")),
+                "--profile", str(args.profile), "--startup-report", str(startup_report),
+                "--output", str(run_dir / "soft-stop.json"),
+            ], env=env, start_new_session=True)
+            deadline = time.monotonic() + 120
+            while (helper.poll() is None and launch.poll() is None and len(signals) == 1
+                   and time.monotonic() < deadline):
+                time.sleep(0.05)
+            soft_failed = helper.poll() != 0 or launch.poll() is not None
+            print(f"graceful exit: {'FAILED/interrupted' if soft_failed else 'complete'}; report {run_dir / 'soft-stop.json'}", flush=True)
+        else:
+            print("graceful exit: no qualified normal-stop request; disabling immediately", flush=True)
+    finally:
+        signal_group(launch, signal.SIGINT)
+        stop_child(helper)
+        stop_child(launch, signal_initial=False)
+    # ROS launch failures must remain visible even after a successful soft stop.
+    return 1 if soft_failed or launch.returncode != 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

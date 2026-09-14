@@ -3,13 +3,14 @@
 # from read-only discovery and supervised per-axis commissioning.
 # acceleration_rad_s2 is independently enforced by Rust; 0.1 is a provisional
 # commissioning value, not a measured capability.
-schema_version: 2
+schema_version: 3
+joint_coordinate_version: 2
 validated: false
 calibrated: false
 robot_prefix: hexmeow/wsl/firefly_y6_0
 urdf_path: /workspaces/hex_arm_ros2/install/xpkg_urdf_firefly_y6/share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf
 # Mandatory gravity acceleration expressed in base_link coordinates. Confirm
-# its direction for the physical mounting; schema v2 never guesses this value.
+# its direction for the physical mounting; schema v3 never guesses this value.
 gravity_vector_base_m_s2: [0.0, 0.0, -9.81]
 # Optional fixed tool mass model. Keep null until the attached auxiliary
 # device, its mount frame, and its inertial provenance have been reviewed.
@@ -58,8 +59,8 @@ controller:
 # Historical signs (-1,-1,+1,+1,+1,+1) and torque scales are deliberately not
 # prefilled. The speed and gains below are only the current low-authority
 # commissioning baseline; they do not make this template valid or calibrated.
-# joint_3's mechanical zero difference belongs in its explicit zero_offset_rad
-# after calibration, not in the geometry URDF.
+# J3 is centered in URDF v2. Its zero_offset_rad now contains only the
+# installation-specific encoder calibration residual.
 joints:
   - &uncommissioned
     name: joint_1
@@ -80,7 +81,7 @@ joints:
     limits: {position_lower_rad: -1.57, position_upper_rad: 2.09, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
   - <<: *uncommissioned
     name: joint_3
-    limits: {position_lower_rad: 0.0, position_upper_rad: 3.14, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
+    limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}
   - <<: *uncommissioned
     name: joint_4
     limits: {position_lower_rad: -1.57, position_upper_rad: 1.57, measured_position_margin_rad: 0.0, velocity_rad_s: 0.1, acceleration_rad_s2: 0.1, torque_nm: 0.5}

@@ -55,10 +55,12 @@ impl HistoricalCanXStatsAcknowledgement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanXStatsExpectation {
     StrictZero,
+    #[cfg(any(feature = "legacy", test))]
     AcknowledgedHistorical(HistoricalCanXStatsAcknowledgement),
 }
 
 /// Narrow entry point used only by the bounded J2 high-torque diagnostic.
+#[cfg(feature = "legacy")]
 pub(crate) fn preflight_socketcan_for_diagnostic(
     interface: &str,
     expected: &ExpectedSocketCanLink,
@@ -429,6 +431,7 @@ fn validate_link_with_xstats_expectation(
     );
     let (expected_warning, expected_passive) = match xstats_expectation {
         CanXStatsExpectation::StrictZero => (0, 0),
+        #[cfg(any(feature = "legacy", test))]
         CanXStatsExpectation::AcknowledgedHistorical(acknowledgement) => (
             u64::from(acknowledgement.error_warning),
             u64::from(acknowledgement.error_passive),

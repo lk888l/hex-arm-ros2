@@ -449,8 +449,8 @@ mod tests {
 
     #[test]
     fn multi_axis_stream_with_jitter_tracks_without_relaxing_continuous_bounds() {
-        let initial = [-0.0001, -1.568, 3.136, 0.001, 0.006, -0.00006];
-        let final_q = [0.0, -1.35, 3.14, 0.0, 0.0, 0.0];
+        let initial = [-0.0001, -1.568, 1.566, 0.001, 0.006, -0.00006];
+        let final_q = [0.0, -1.35, 1.57, 0.0, 0.0, 0.0];
         let mut interpolator =
             Interpolator::hold(initial.iter().map(|q| target(*q, 0.0)).collect(), 0);
         let mut now_ns = 0_u64;

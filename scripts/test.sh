@@ -10,9 +10,18 @@ set -u
 export PYTHONDONTWRITEBYTECODE=1
 
 case "${level}" in
-  unit)
+  unit|legacy)
+    python3 scripts/test-shutdown-ack.py
+    cargo_features=()
+    if [[ "${level}" == legacy ]]; then
+      cargo_features=(--features legacy)
+    else
+      cargo fmt --manifest-path src/hex_arm_controller/Cargo.toml --check
+      CARGO_TARGET_DIR="${workspace_dir}/build/hex_arm_controller/cargo" \
+        cargo clippy --locked --manifest-path src/hex_arm_controller/Cargo.toml --all-targets -- -D warnings
+    fi
     CARGO_TARGET_DIR="${workspace_dir}/build/hex_arm_controller/cargo" \
-      cargo test --locked --manifest-path src/hex_arm_controller/Cargo.toml
+      cargo test --locked --manifest-path src/hex_arm_controller/Cargo.toml "${cargo_features[@]}"
     colcon test --event-handlers console_direct+ \
       --packages-select \
         hex_arm_msgs \
@@ -34,7 +43,7 @@ case "${level}" in
     python3 src/hex_arm_bringup/test/test_gz_trajectory.py
     ;;
   *)
-    echo "usage: $0 {unit|protocol|mock|gz}" >&2
+    echo "usage: $0 {unit|legacy|protocol|mock|gz}" >&2
     exit 2
     ;;
 esac

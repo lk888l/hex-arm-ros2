@@ -37,9 +37,15 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-该入口从已确认的折叠姿态出发，先完成控制器配置与通信准备，再使能并顺序移动
-J2→−1.350、J4→−0.300、J3→3.000。等待启动完成日志后使用 MoveIt。
-停止时 Ctrl-C，等待 supervisor 确认失能和正常退出。完整前提与参数见
+每次断电后重新上电，并在执行自动启动前，先摆放到折叠入口
+`[0,-1.570,1.570,0,0,0]` rad，即 J2=−1.570、J3=1.570。该入口先完成控制器配置与
+通信准备并核对绝对编码器反馈，再使能并顺序移动 J2→−1.350、J4→−0.300、
+J3→1.430；最终安全启动姿态为 `[0,-1.350,1.430,-0.300,0,0]` rad。
+等待启动完成日志后使用 MoveIt。权威数值见
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml)。
+本机已配置退出阻尼：首次 Ctrl-C 会先回安全启动位、再阻尼下落，保持供电，
+等待柔和阶段结果及 supervisor 的失能确认。再次 Ctrl-C 请求立即停机。
+新增参数尚待实机验收，入口及异常行为见[退出阻尼](shutdown_damping_cn.md)。完整启动前提与参数见
 [启动与停止](commissioning_cn.md#日常启动与停止)。
 
 ## 更换 CAN 接口

@@ -38,7 +38,7 @@
         <state_interface name="effort"/>
       </joint>
       <joint name="joint_3">
-        <command_interface name="position"><param name="min">0.0</param><param name="max">3.14</param></command_interface>
+        <command_interface name="position"><param name="min">-1.57</param><param name="max">1.57</param></command_interface>
         <command_interface name="velocity"><param name="min">-6.0</param><param name="max">6.0</param></command_interface>
         <state_interface name="position"><param name="initial_value">${initial_positions['joint_3']}</param></state_interface>
         <state_interface name="velocity"/>

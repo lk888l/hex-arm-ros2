@@ -24,7 +24,7 @@ def _setup(context):
                 FindPackagePrefix("hex_arm_controller"),
                 "lib",
                 "hex_arm_controller",
-                "hex_arm_controller",
+                "hex_arm_commission",
             ]),
             "--profile",
             LaunchConfiguration("hardware_profile"),

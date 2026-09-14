@@ -1,0 +1,26 @@
+# Use the SAME reviewed ROS/Rust base in both stages: the MoveIt compatibility
+# package deliberately rejects any ABI other than MoveIt 2.12.4 / rclcpp 28.1.21.
+# Set BUILD_IMAGE to a digest in a release pipeline.
+ARG BUILD_IMAGE=hex-arm-jazzy:local
+FROM ${BUILD_IMAGE} AS build
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR /tmp/hex-arm-build
+COPY src ./src
+COPY config ./config
+COPY scripts ./scripts
+RUN source /opt/ros/jazzy/setup.bash \
+ && colcon build --merge-install --install-base /opt/hex-arm \
+      --packages-up-to hex_arm_moveit_config --executor sequential \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+                   -DHEX_ARM_BUILD_COMMISSIONING=OFF \
+ && python3 scripts/test-runtime-install.py /opt/hex-arm
+
+FROM ${BUILD_IMAGE} AS runtime
+WORKDIR /opt/hex-arm
+COPY --from=build /opt/hex-arm /opt/hex-arm
+COPY docker/runtime-entrypoint.sh /usr/local/bin/hex-arm-entrypoint
+ENV ROS_LOG_DIR=/var/log/hex-arm \
+    PYTHONDONTWRITEBYTECODE=1
+STOPSIGNAL SIGINT
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/hex-arm-entrypoint"]
+CMD ["run"]

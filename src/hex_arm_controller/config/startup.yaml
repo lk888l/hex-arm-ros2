@@ -1,0 +1,15 @@
+# Authority for both the ROS FJT client and the standalone commissioning tool.
+# After each power cycle and before automatic startup, place the arm at this folded entry:
+# J2=-1.570 rad and J3=1.570 rad (all other joints nominally zero).
+# Absolute encoders verify this posture; this is not a homing procedure.
+schema_version: 1
+folded_position_rad: [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
+ros_folded_tolerance_rad: [0.03, 0.01, 0.01, 0.01, 0.03]
+commissioning_folded_tolerance_rad: [0.01, 0.01, 0.01, 0.01, 0.01]
+stopped_velocity_rad_s: 0.02
+steps:
+  # joint_index is zero-based. The required physical order is J2 -> J4 -> J3.
+  # The resulting startup_ready pose has J3=1.430 rad.
+  - {joint_index: 1, target_rad: -1.350, duration_sec: 8.0}
+  - {joint_index: 3, target_rad: -0.300, duration_sec: 10.0}
+  - {joint_index: 2, target_rad: 1.430, duration_sec: 6.0}

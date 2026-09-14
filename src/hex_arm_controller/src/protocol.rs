@@ -72,6 +72,7 @@ pub async fn serve(
     handles.push(spawn_acquire(session.clone(), runtime.clone()));
     handles.push(spawn_release(session.clone(), runtime.clone()));
     handles.push(spawn_set_mode(session.clone(), runtime.clone()));
+    handles.push(spawn_damped_stop(session.clone(), runtime.clone()));
     handles.push(spawn_clear_fault(session.clone(), runtime.clone()));
     handles.push(spawn_event_log(session.clone(), runtime.clone()));
     handles.push(spawn_discovery(session.clone(), runtime.clone()));
@@ -339,6 +340,26 @@ fn spawn_set_mode(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> 
                     Ok(mode) => runtime.set_mode(request.session_id, mode).await,
                     Err(error) => Err(error),
                 },
+                Err(error) => Err(error),
+            };
+            reply(query, generic(result)).await;
+        }
+    })
+}
+
+fn spawn_damped_stop(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
+    tokio::spawn(async move {
+        let key = format!("{}/rpc/damped_stop", runtime.profile.robot_prefix);
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare damped stop queryable");
+        while let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await {
+            let result = match decode::<pb::DampedStopRequest>(&query) {
+                Ok(request) => runtime.damped_stop(request.session_id).await,
                 Err(error) => Err(error),
             };
             reply(query, generic(result)).await;

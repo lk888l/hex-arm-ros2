@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use can_transport::{CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError};
-use hex_motor::canopen::{nmt, sdo};
-use hex_motor::types::MotorIdentity;
+use hex_meow_motor::canopen::{nmt, sdo};
+use hex_meow_motor::types::MotorIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeRole {

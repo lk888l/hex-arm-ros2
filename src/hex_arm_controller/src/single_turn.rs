@@ -413,7 +413,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::approx_constant)] // The surveyed reference is 3.140 rad, not mathematical PI.
     fn per_axis_surveyed_candidates_resolve_to_expected_ros_angles() {
         let raw = [
             -0.004_082_441_3,
@@ -425,17 +424,17 @@ mod tests {
         ];
         let direction = [-1.0, -1.0, 1.0, 1.0, 1.0, 1.0];
         let offset = [
-            -0.025_651, 0.010_217, 1.545_484, 0.000_144, 0.026_979, 0.121_463,
+            -0.025_651, 0.010_217, -0.024_516, 0.000_144, 0.026_979, 0.121_463,
         ];
         let ros_limits = [
             (-2.86, 2.86),
             (-1.57, 2.09),
-            (0.0, 3.14),
+            (-1.57, 1.57),
             (-1.57, 1.57),
             (-1.54, 1.54),
             (-2.79, 2.79),
         ];
-        let expected = [0.0, -1.57, 3.14, 0.0, 0.0, 0.0];
+        let expected = [0.0, -1.57, 1.57, 0.0, 0.0, 0.0];
 
         for i in 0..6 {
             let motor_a = direction[i] * (ros_limits[i].0 - offset[i]) / TAU;
