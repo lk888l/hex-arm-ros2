@@ -3,7 +3,22 @@
 **English** | [中文](README_cn.md)
 
 See [architecture and production Docker migration](docs/architecture_refactor_cn.md)
-for the modular Meow driver, opt-in legacy tools, and mandatory ordered startup.
+for the modular Meow and CiA402 drivers, opt-in legacy tools, and protocol startup.
+
+Legacy CiA402 deployment, headless Docker, and staged hardware position windows:
+[deployment guide (Chinese)](docs/cia402_deployment_cn.md).
+The 2026-09-29 can2 trials passed isolated J2 +0.24 rad, J6 ±0.24 rad, and J4 −0.12 rad
+round trips with per-arm software offsets and gravity compensation. See the
+[measured results (Chinese)](docs/commissioning_evidence/2026-09-29-can2-expanded.md);
+full six-axis MoveIt execution remains unqualified.
+
+The replacement arm now runs Meow firmware with its existing per-arm offsets. See the
+[replacement-arm operating guide (Chinese)](docs/meow_replacement_deployment_cn.md) and the
+[firmware upgrade commissioning record (Chinese)](docs/commissioning_evidence/2026-09-29-can2-meow-upgrade.md).
+The CiA402 results above predate this upgrade and do not qualify the new firmware.
+
+For a replacement or recalibrated arm, use the [folded-pose zero calibration tool](docs/zero_calibration_cn.md)
+to read encoders, calculate `zero_offset_rad`, save a local profile, and verify it with a fresh read.
 
 ROS 2 Jazzy driver, MoveIt 2 motion planning, and Gazebo simulation workspace for
 the six-axis Firefly Y6 arm. **To open the MoveIt 2 window without connecting an
@@ -405,13 +420,15 @@ unnecessary.
 
 The current setup is a **Firefly Y6 with Meow firmware on can2, without a gripper or extra payload**.
 Six-axis communication, gravity compensation, ordered J2 → J4 → J3 startup and small MoveIt motions
-have been verified. Full travel, higher speeds and payload operation remain to be validated.
-The configuration, open regression item and remaining work are maintained in
+have been verified. The operator also reports successful large-range GUI MIT and full-range gravity
+compensation tests. The production MoveIt limits and current evidence are documented in the
+[replacement arm deployment guide](docs/meow_replacement_deployment_cn.md).
+Earlier commissioning configurations and historical regression records are maintained in
 [Current hardware state and next steps](docs/commissioning.md).
 
 ### Start and stop
 
-Use `config/hardware/firefly_y6.meow.can2.local.yaml` for this arm. It contains the current motor
+Use `config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml` for this arm. It contains the current motor
 identities, directions, encoder offsets and motion envelope and is excluded from Git. For another
 arm, create a profile from `firefly_y6.meow_mit.example.yaml` and verify its calibration separately.
 
@@ -428,8 +445,10 @@ the required motion order remains **J2 → J4 → J3**. From a graphical host te
 ```bash
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
-  enable_execution:=true
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml \
+  enable_execution:=true position_limits:=hardware dynamics_limits:=custom \
+  planning_limits_file:=/workspaces/hex_arm_ros2/src/hex_arm_moveit_config/config/joint_limits_deployment.yaml \
+  align_folded:=true allow_enable_transient:=true
 ```
 
 The entry checks feedback and position before enabling. Startup then moves **J2 to −1.350 (8 s),
@@ -442,18 +461,36 @@ Wait for `startup_ready reached and verified; controller continues holding`, the
 and the current start state in RViz for `Plan` / `Plan & Execute`. Subsequent MoveIt execution
 uses strict collision checks and the current local motion envelope.
 
-Current Kp is `[80,80,120,110,80,80]`, Kd is 15 on every axis, and J2/J3/J4 gravity scales are
-`1.0/1.05/0.7`. Velocity and acceleration caps are 0.1 rad/s and 0.1 rad/s²; see the deployment
-status document for detailed bounds. Real execution always requires ordered startup;
+Current Kp is `[100,100,150,110,80,80]`, Kd is 15 on every axis, and all gravity scales are 1.0.
+The hardware profile uses 1.256637 rad/s and rad/s², converting GUI 0.2 Rev/s and Rev/s² by `2π`.
+The deployment planning YAML retains that velocity cap and sets acceleration to 0.6 rad/s²,
+providing headroom for bounded Rust interpolation. `dynamics_limits:=hardware` uses the hardware
+caps directly; `custom` intersects the selected planning YAML with hardware and URDF limits.
+Normal real trajectory execution always requires ordered startup;
 `startup_ready:=false` cannot bypass it. Omitting `enable_execution:=true` selects
 disabled observation and planning.
 
-The local profile now opts into shutdown damping. The first Ctrl-C in the owning real-launch terminal
-can move the arm: MoveIt returns to startup_ready, then Rust damps descent and confirms disable.
-A second interrupt or a fault requests immediate teardown. Wait for both the soft-stop result and
-`VERIFIED structured disabled_confirmed`; keep power on until completion. Gains await physical validation.
-See [shutdown behavior and configuration](docs/shutdown_damping_cn.md); bare ros2 launch bypasses this wrapper.
+The first Ctrl-C in the owning real-launch terminal returns through startup_ready, then performs
+the controlled J3 → J4 → J2 folded return and confirms disable. A second interrupt or a fault
+requests immediate teardown. Wait for the controlled-return result and
+`VERIFIED structured disabled_confirmed` before removing power.
 Stop the current controller before switching applications, editing profiles or rebuilding.
+
+### Legacy CiA402 motors
+
+The default `hex_arm_controller` build includes both Meow and CiA402 backends. Select the
+firmware with `bus.protocol` in a separate hardware profile. For old motors, start from
+`config/hardware/firefly_y6.example.yaml`, set `protocol: cia402` and `loop_hz: 1000`, and
+verify each motor identity, direction, encoder offset, torque scale and motion window. The
+profile must use schema v3 and joint coordinates v2; set `calibrated: true` only after physical
+commissioning. The existing `firefly_y6.discovered.local.yaml` is a schema v2, uncalibrated record.
+
+After `./scripts/build.sh`, `real-launch moveit` accepts a calibrated CiA402 profile through the
+same `hardware_profile` argument. With `enable_execution:=true`, startup checks that all six axes
+are stationary and within their profile windows, enables a measured-pose hold, and checks hold
+error and speed before allowing trajectories. The Meow fold exit remains specific to Meow.
+Docker `real-launch` accepts SocketCAN profiles; the historical single-axis diagnostics still
+require `HEX_ARM_BUILD_COMMISSIONING=ON`.
 
 ### CAN selection and further development
 
@@ -468,6 +505,76 @@ control and run `./scripts/build.sh` in the container workspace, then source `in
 Build caches will be recreated. Continue with repeatability tests, model and limit checks,
 gradual envelope expansion, continuous operation and recovery tests, then freeze the deployment;
 see [Next optimization steps](docs/commissioning.md#next-optimization-steps).
+
+## Hand guiding with gravity compensation
+
+The dedicated `gravity_comp.launch.py` provides measured-pose gravity compensation with
+zero position stiffness and configurable joint damping. It starts no trajectory controller,
+MoveIt process or unfolding sequence. Stop other arm controllers before using it.
+Build the three affected packages and source the workspace inside the container:
+
+```bash
+./scripts/build.sh --packages-select hex_arm_controller hex_arm_bridge hex_arm_bringup
+source install/setup.bash
+ros2 launch hex_arm_bringup gravity_comp.launch.py \
+  hardware_profile:=/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.hand_guiding_full_range.local.yaml \
+  activate_hardware:=true \
+  damping:='[2.0, 2.0, 2.0, 2.0, 2.0, 2.0]'
+```
+
+The current arm uses `replacement.local.yaml`, matching its adapter and six motor identities.
+The older `firefly_y6.meow.can2.local.yaml` belongs to the previous arm; rebinding its adapter
+does not transfer motor identities or calibration. The dedicated `hand_guiding_full_range.local.yaml`
+uses separate 2.0 rad/s hand-guiding speed trips and the URDF position ranges: J1 ±2.86, J2 [-1.57, 2.09],
+J3/J4 ±1.57, J5 ±1.54, J6 ±2.79 rad. The original profile retains its narrow windows.
+This is an operator-requested tuning candidate, not physical full-range validation; inherited
+calibration flags refer to existing coordinates. Individual model limits do not establish
+collision-free joint combinations or verified mechanical stops. All six gravity scales are 1.0;
+torque caps retain prior tuning. Support may be insufficient in
+new poses. Keep supporting the arm. Profile changes require no rebuild.
+
+The six positive damping gains are joint-side N·m·s/rad, J1–J6, defaulting to 2.0 on each axis.
+More damping slows released motion faster but increases
+drag resistance. Gravity/model errors can still cause drift; this mode does not lock position.
+Existing gravity scales tuned alongside position PD may need separate qualification.
+
+Support the arm during enable and the gravity ramp; wait for `hand_guiding_ready`.
+Entry requires a calibrated schema v3 profile, fresh feedback, valid positions, and
+joint speeds at most 0.02 rad/s. The hand-guiding profile sets
+`controller.hand_guiding_velocity_limits_rad_s` to six absolute measured-speed trips of
+2.0 rad/s (114.6°/s), applied only in `GRAVITY_COMP` without adding joint speed margins.
+Command speeds and other modes continue using `joints[].limits.velocity_rad_s`.
+Omitting the optional array retains the ordinary speed-plus-margin trips; supplied limits
+must be six finite positive values at most 6 rad/s, ordered J1–J6. Damping cannot guarantee
+a speed bound, so overspeed and non-finite-feedback protection remain enforced.
+Overspeed faults disable the arm and do not indicate a locked joint or insufficient position range.
+The dedicated profile sets `controller.hand_guiding_position_margin_rad` to 0.012 rad
+(0.69°), replacing ordinary measured-position margins only when entering/running
+`GRAVITY_COMP`. Other modes and external position commands retain strict bounds.
+Omission uses each joint's ordinary margin; overrides must be finite within 0–0.012 rad
+and keep the feedback window shorter than a full turn. This also fits the existing
+Meow enable position-consistency check. Within the accepted margin, only the zero-Kp
+MIT position field is bounded to the command range; gravity still uses the actual
+encoder angles, without truncation. Out-of-envelope or non-finite feedback remains rejected.
+At the
+folded pose, J2 is near its -1.57 rad lower bound and must be guided inward.
+This mode has no MoveIt collision checking.
+Support the arm before stopping, then call:
+
+```bash
+ros2 service call /hex_arm_gravity_comp/stop std_srvs/srv/Trigger '{}'
+```
+
+A successful response confirms disable and session release; launch then exits. Ctrl-C also
+stops, without returning or folding. The owner renews a 500 ms driver lease every 50 ms;
+owner death, freezing or lost communication trips a latched fault and confirmed-disable retries.
+Restart only after investigating the fault. The driver writes `hand-guiding-shutdown.json`
+under the current ROS log directory; require `disabled_confirmed` as the stop acknowledgement.
+
+Without `activate_hardware:=true`, launch stays in observation mode. For software-only testing,
+use `mock:=true` with `src/hex_arm_controller/test/firefly_y6.mock.yaml` as an absolute profile path.
+Mock does not simulate gravity or hand-guiding feel. See the
+[Chinese operating instructions](README_cn.md#手扶拖动重力补偿与阻尼) for more detail.
 
 ## Control interface and architecture
 

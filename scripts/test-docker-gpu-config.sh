@@ -108,6 +108,22 @@ exit 99
 SH
 chmod +x "${mock_bin}/uname" "${mock_bin}/nvidia-smi" "${mock_bin}/docker"
 
+headless_output="$(
+  PATH="${mock_bin}:/usr/bin:/bin" DISPLAY="" XAUTHORITY="" HEX_ARM_HEADLESS=1 \
+  bash "${helper}" config
+)"
+[[ "${headless_output}" == *"compose.headless.yaml"* ]]
+[[ "${headless_output}" != *"compose.nvidia.yaml"* ]]
+docker compose -f "${workspace_dir}/compose.headless.yaml" config --format json >"${temporary_dir}/headless.json"
+python3 - "${temporary_dir}/headless.json" <<'PY'
+import json, sys
+service = json.load(open(sys.argv[1]))["services"]["ros2-jazzy-arm"]
+assert service["network_mode"] == "host"
+assert not service.get("devices") and not service.get("gpus")
+assert "DISPLAY" not in service["environment"] and "XAUTHORITY" not in service["environment"]
+assert len(service["volumes"]) == 1
+PY
+
 nvidia_output="$(
   PATH="${mock_bin}:/usr/bin:/bin" \
   DISPLAY=":${display_number}" \

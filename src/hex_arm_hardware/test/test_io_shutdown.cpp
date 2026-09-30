@@ -156,3 +156,25 @@ TEST_F(HardwareIoShutdown, FreshFeedbackAloneCannotEnableBeforeCommandSubscriber
   EXPECT_EQ(after_matching, hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(enables.load(), 1U);
 }
+
+TEST_F(HardwareIoShutdown, ErrorThenReconfigureJoinsOldExecutor)
+{
+  auto system = std::make_unique<hex_arm_hardware::HexArmSystem>();
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State()),
+      hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system->on_error(rclcpp_lifecycle::State()),
+      hardware_interface::CallbackReturn::SUCCESS);
+  }
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+}
+
+TEST_F(HardwareIoShutdown, ReconfigureWithoutCleanupJoinsOldExecutor)
+{
+  auto system = std::make_unique<hex_arm_hardware::HexArmSystem>();
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State()),
+      hardware_interface::CallbackReturn::SUCCESS);
+  }
+}

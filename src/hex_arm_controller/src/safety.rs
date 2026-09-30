@@ -58,11 +58,6 @@ impl SafetyState {
                 "PASSIVE is unavailable until torque-free operation is commissioned; use DISABLED"
             );
         }
-        if requested == OperatingMode::GravityComp {
-            anyhow::bail!(
-                "GRAVITY_COMP is unavailable until a session deadman is implemented; use ACTIVE"
-            );
-        }
         self.mode = requested;
         Ok(())
     }
@@ -138,18 +133,13 @@ mod tests {
     }
 
     #[test]
-    fn uncommissioned_modes_remain_fail_closed_when_all_readiness_inputs_are_true() {
-        for (requested, expected_reason) in [
-            (OperatingMode::Passive, "torque-free operation"),
-            (OperatingMode::GravityComp, "session deadman"),
-        ] {
-            let mut state = SafetyState::default();
-            let error = state
-                .request_mode(requested, true, true, true, true)
-                .unwrap_err();
-            assert!(error.to_string().contains(expected_reason));
-            assert_eq!(state.mode, OperatingMode::Disabled);
-        }
+    fn passive_remains_fail_closed_when_all_readiness_inputs_are_true() {
+        let mut state = SafetyState::default();
+        let error = state
+            .request_mode(OperatingMode::Passive, true, true, true, true)
+            .unwrap_err();
+        assert!(error.to_string().contains("torque-free operation"));
+        assert_eq!(state.mode, OperatingMode::Disabled);
     }
 
     #[test]

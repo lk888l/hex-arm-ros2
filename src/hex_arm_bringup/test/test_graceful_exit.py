@@ -78,3 +78,36 @@ record('damping')
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
                 process.wait(timeout=10)
+
+
+def test_cia402_normal_stop_requires_successful_sequence_and_live_holding(tmp_path):
+    import json
+    profile = {'bus': {'protocol': 'cia402'}}
+    path = tmp_path/'startup.json'
+    report = {'passed': True, 'ready_hold': {}, 'measured_hold': {}, 'sequence': {}}
+    path.write_text(json.dumps(report))
+    assert graceful.eligible(profile, path)
+    for field in ('sequence', 'measured_hold', 'ready_hold'):
+        incomplete = report.copy(); incomplete.pop(field)
+        path.write_text(json.dumps(incomplete))
+        assert not graceful.eligible(profile, path)
+    for field, value in (('passed', False), ('deactivated', True)):
+        path.write_text(json.dumps({**report, field: value}))
+        assert not graceful.eligible(profile, path)
+
+
+def test_meow_normal_stop_uses_verified_folded_return(tmp_path):
+    import json
+    profile = {'bus': {'protocol': 'meow'}}
+    path = tmp_path/'startup.json'
+    path.write_text(json.dumps({'passed': True, 'ready_hold': {}, 'steps': [{}]}))
+    assert graceful.eligible(profile, path)
+    command = graceful.stop_command(profile, 'arm.yaml', path, 'stop.json')
+    assert Path(command[1]).name == 'commission-meow-ros.py'
+    assert '--allow-motion' in command
+    profile['controller'] = {'shutdown_damping': {}}
+    assert Path(graceful.stop_command(profile, 'arm.yaml', path, 'stop.json')[1]).name == 'commission-shutdown-ros.py'
+    for report in ({'passed': True, 'ready_hold': {}, 'steps': []},
+                   {'passed': True, 'ready_hold': {}, 'steps': [{}], 'deactivated': True}):
+        path.write_text(json.dumps(report))
+        assert not graceful.eligible({'bus': {'protocol': 'meow'}}, path)

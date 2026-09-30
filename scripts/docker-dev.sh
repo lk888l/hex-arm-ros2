@@ -4,6 +4,7 @@ set -euo pipefail
 workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-up}"
 gpu_mode="${HEX_ARM_GPU:-auto}"
+headless="${HEX_ARM_HEADLESS:-0}"
 can_interface="${HEX_ARM_CAN_IFACE:-}"
 can_serial="${HEX_ARM_CAN_SERIAL:-}"
 can_channel="${HEX_ARM_CAN_CHANNEL:-}"
@@ -26,6 +27,10 @@ case "${gpu_mode}" in
     echo "error: HEX_ARM_GPU must be one of: auto, nvidia, none" >&2
     exit 2
     ;;
+esac
+case "${headless}" in
+  0|1) ;;
+  *) echo "error: HEX_ARM_HEADLESS must be 0 or 1" >&2; exit 2 ;;
 esac
 
 if [[ -n "${can_interface}" && ! "${can_interface}" =~ ^[[:alnum:]_.-]{1,15}$ ]]; then
@@ -51,7 +56,10 @@ if [[ -n "${can_interface}" && ( -z "${can_serial}" || -z "${can_channel}" ) ]];
   can_channel="${can_channel:-${detected_channel}}"
 fi
 
-if ! uname -r | tr '[:upper:]' '[:lower:]' | grep -q microsoft; then
+if [[ "${headless}" == "1" ]]; then
+  platform="headless"
+  compose_files=(-f "${workspace_dir}/compose.headless.yaml")
+elif ! uname -r | tr '[:upper:]' '[:lower:]' | grep -q microsoft; then
   platform="native Ubuntu"
   compose_files=(-f "${workspace_dir}/compose.ubuntu.yaml")
 
@@ -283,18 +291,24 @@ case "${action}" in
       exit 2
     fi
     ensure_container_running
-    run_supervised_real_launch "$@"
+    if [[ "${headless}" == "1" ]]; then
+      run_supervised_real_launch "$@" use_rviz:=false
+    else
+      run_supervised_real_launch "$@"
+    fi
     ;;
   doctor)
     ensure_container_running
     "${compose[@]}" exec -T \
       -e HEX_ARM_EXPECT_NVIDIA="${gpu_enabled}" \
+      -e HEX_ARM_HEADLESS="${headless}" \
       -e HEX_ARM_CAN_IFACE="${can_interface}" \
       -e HEX_ARM_CAN_SERIAL="${can_serial}" \
       -e HEX_ARM_CAN_CHANNEL="${can_channel}" \
       ros2-jazzy-arm bash -lc '
       set -e
       source /opt/ros/jazzy/setup.bash
+      if [[ "${HEX_ARM_HEADLESS}" != "1" ]]; then
       display_number="${DISPLAY##*:}"
       display_number="${display_number%%.*}"
       test -S "/tmp/.X11-unix/X${display_number}"
@@ -312,6 +326,9 @@ case "${action}" in
           exit 1
         fi
         echo "NVIDIA GPU acceleration: OK"
+      fi
+      else
+        echo "Headless mode: no desktop or GPU required"
       fi
       if [[ -n "${HEX_ARM_CAN_IFACE}" ]]; then
         command -v ip >/dev/null || {
@@ -424,7 +441,7 @@ for direction, previous, current in ((\"RX\", before_rx, rx), (\"TX\", before_tx
     "${compose[@]}" "${action}" "$@"
     ;;
   *)
-    echo "usage: HEX_ARM_GPU={auto|nvidia|none} HEX_ARM_CAN_IFACE=canN HEX_ARM_CAN_SERIAL=<32-hex> HEX_ARM_CAN_CHANNEL=N $0 {build|up|down|shell|doctor|real-launch|config|logs|ps} [arguments...]" >&2
+    echo "usage: HEX_ARM_HEADLESS={0|1} HEX_ARM_GPU={auto|nvidia|none} HEX_ARM_CAN_IFACE=canN HEX_ARM_CAN_SERIAL=<32-hex> HEX_ARM_CAN_CHANNEL=N $0 {build|up|down|shell|doctor|real-launch|config|logs|ps} [arguments...]" >&2
     exit 2
     ;;
 esac

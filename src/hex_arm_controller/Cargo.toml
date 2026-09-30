@@ -8,7 +8,8 @@ default-run = "hex_arm_controller"
 
 [features]
 default = []
-# Historical CiA402 / userspace USB and motion diagnostics are opt-in only.
+# CMake enables this for the production CiA402 backend; the historical
+# commissioning executable remains an independent CMake opt-in.
 legacy = ["dep:hex-motor", "can-transport/gs_usb", "zenoh/default"]
 
 [[bin]]

@@ -1,0 +1,503 @@
+{
+  "schema_version": 1,
+  "time_utc": "2026-09-30T09:56:01.124409+00:00",
+  "interface": "can2",
+  "protocol": "meow",
+  "passed": true,
+  "deactivated": true,
+  "hardware_profile": "config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml",
+  "hardware_profile_sha256": "d4dcf0d7b6214de6b6d7c7a8ad780c898aee3bc62342c75893d996232fadaa7d",
+  "planning_limits_file": "src/hex_arm_moveit_config/config/joint_limits_deployment.yaml",
+  "planning_limits_sha256": "965aae68e35c7b9cedfca3efe196bf1d08dc15b5d20810787b72356f43aec696",
+  "position_limits": "hardware",
+  "dynamics_limits": "custom",
+  "hardware_velocity_rad_s": 1.2566370614359172,
+  "hardware_acceleration_rad_s2": 1.2566370614359172,
+  "planning_velocity_rad_s": 1.2566370614359172,
+  "planning_acceleration_rad_s2": 0.6,
+  "velocity_scaling": 1.0,
+  "acceleration_scaling": 1.0,
+  "gravity_compensation_scales": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "measured_peak_velocity_rad_s": [
+    0.8902032375335693,
+    0.5602625012397766,
+    0.5831074714660645,
+    0.13596028089523315,
+    0.39791372418403625,
+    0.6650107502937317
+  ],
+  "max_goal_hold_error_rad": 0.011987483501434304,
+  "max_goal_hold_velocity_rad_s": 0.005617605522274971,
+  "path_tolerance_rad": 0.04,
+  "goal_tolerance_rad": 0.015,
+  "startup_passed": true,
+  "startup_steps": [
+    "align_folded",
+    "startup_j2",
+    "startup_j4",
+    "startup_j3"
+  ],
+  "moveit": [
+    {
+      "label": "unfolded_reach",
+      "target": [
+        0.0,
+        -0.9,
+        1.0,
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "passed": true,
+      "initial": [
+        0.00031720660626888275,
+        -1.3531222343444824,
+        1.4297823905944824,
+        -0.2997781038284302,
+        0.00033555738627910614,
+        3.81997087970376e-05
+      ],
+      "plan_points": 19,
+      "execution_timeout_sec": 30.0,
+      "velocity_scaling": 1.0,
+      "acceleration_scaling": 1.0,
+      "planned_duration_sec": 1.737990712,
+      "planned_peak_velocity_rad_s": [
+        0.000357681406542219,
+        0.5022000000000213,
+        0.4764651697301597,
+        0.00014165982565484458,
+        0.0004176096684326956,
+        5.960035435861852e-05
+      ],
+      "planned_peak_acceleration_rad_s2": [
+        0.0004273374033303643,
+        0.6000000000760072,
+        0.5692534883996385,
+        0.0001692471035514192,
+        0.0004989362825395227,
+        7.120711393807193e-05
+      ],
+      "actual": [
+        0.00031720660626888275,
+        -0.902179479598999,
+        1.0018746852874756,
+        -0.2998451292514801,
+        0.0005082059651613235,
+        3.81997087970376e-05
+      ],
+      "moveit_error_code": 1,
+      "hold_sec": 2.0,
+      "max_error_rad": [
+        0.00031720660626888275,
+        0.0021772146224975364,
+        0.001874685287475586,
+        0.00015487074851988636,
+        0.0005082059651613235,
+        3.81997087970376e-05
+      ],
+      "max_velocity_rad_s": 0.0
+    },
+    {
+      "label": "left_reach",
+      "target": [
+        0.65,
+        -0.6,
+        0.7,
+        -0.4,
+        0.25,
+        0.4
+      ],
+      "passed": true,
+      "initial": [
+        0.00031720660626888275,
+        -0.9021750092506409,
+        1.0018724203109741,
+        -0.2998451292514801,
+        0.0005082059651613235,
+        3.81997087970376e-05
+      ],
+      "plan_points": 22,
+      "execution_timeout_sec": 30.0,
+      "velocity_scaling": 1.0,
+      "acceleration_scaling": 1.0,
+      "planned_duration_sec": 2.081064273,
+      "planned_peak_velocity_rad_s": [
+        0.6000135885369189,
+        0.27911978136034776,
+        0.27874779156424717,
+        0.09241793242107928,
+        0.2304683376850827,
+        0.3694013209977803
+      ],
+      "planned_peak_acceleration_rad_s2": [
+        0.6000000001126876,
+        0.27911346017353866,
+        0.27874147880177796,
+        0.09241583944502214,
+        0.23046311830071425,
+        0.3693929552174698
+      ],
+      "actual": [
+        0.6484398245811462,
+        -0.6033456921577454,
+        0.7028945088386536,
+        -0.39911308884620667,
+        0.24843785166740417,
+        0.39906495809555054
+      ],
+      "moveit_error_code": 1,
+      "hold_sec": 2.0,
+      "max_error_rad": [
+        0.0015575528144836648,
+        0.0032565832138061745,
+        0.002894508838653609,
+        0.0008869111537933572,
+        0.0015621483325958252,
+        0.0009350419044494851
+      ],
+      "max_velocity_rad_s": 0.004681338090449572
+    },
+    {
+      "label": "right_reach",
+      "target": [
+        -0.65,
+        -0.8,
+        0.85,
+        -0.4,
+        -0.25,
+        -0.4
+      ],
+      "passed": true,
+      "initial": [
+        0.6484537124633789,
+        -0.6031355857849121,
+        0.7028945088386536,
+        -0.39911308884620667,
+        0.2484472244977951,
+        0.39906495809555054
+      ],
+      "plan_points": 31,
+      "execution_timeout_sec": 30.0,
+      "velocity_scaling": 1.0,
+      "acceleration_scaling": 1.0,
+      "planned_duration_sec": 2.942198466,
+      "planned_peak_velocity_rad_s": [
+        0.8652000000001484,
+        0.13114763136926708,
+        0.09796947355720302,
+        0.0006531590614332894,
+        0.33214159202721916,
+        0.5324320132720111
+      ],
+      "planned_peak_acceleration_rad_s2": [
+        0.6000000002393197,
+        0.09094842678332175,
+        0.06793999555912929,
+        0.00045295357953789594,
+        0.23033397514535894,
+        0.36923163209727655
+      ],
+      "actual": [
+        -0.647979199886322,
+        -0.7954149842262268,
+        0.838010311126709,
+        -0.39931419491767883,
+        -0.24937711656093597,
+        -0.39941999316215515
+      ],
+      "moveit_error_code": 1,
+      "hold_sec": 2.0,
+      "max_error_rad": [
+        0.002018535137176536,
+        0.004585015773773238,
+        0.011987483501434304,
+        0.0006858050823211892,
+        0.0006033927202224731,
+        0.0005800068378448708
+      ],
+      "max_velocity_rad_s": 0.005617605522274971
+    },
+    {
+      "label": "return_ready",
+      "target": [
+        0.0,
+        -1.35,
+        1.43,
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "passed": true,
+      "initial": [
+        -0.6479930281639099,
+        -0.7954195141792297,
+        0.8380192518234253,
+        -0.3993239402770996,
+        -0.24940596520900726,
+        -0.3994293510913849
+      ],
+      "plan_points": 22,
+      "execution_timeout_sec": 30.0,
+      "velocity_scaling": 1.0,
+      "acceleration_scaling": 1.0,
+      "planned_duration_sec": 2.078310729,
+      "planned_peak_velocity_rad_s": [
+        0.6004771303427057,
+        0.5139473469052666,
+        0.5486936966560486,
+        0.09198979115608855,
+        0.23106389302022676,
+        0.3702585079035454
+      ],
+      "planned_peak_acceleration_rad_s2": [
+        0.6000000001179945,
+        0.5135389719634322,
+        0.5482577127798257,
+        0.09191669743191881,
+        0.23088029307669258,
+        0.36996430598280916
+      ],
+      "actual": [
+        -0.0005958415567874908,
+        -1.3413454294204712,
+        1.4197200536727905,
+        -0.30092859268188477,
+        0.00010561011731624603,
+        -0.0003741325344890356
+      ],
+      "moveit_error_code": 1,
+      "hold_sec": 1.0,
+      "max_error_rad": [
+        0.0005546454340219498,
+        0.008652305603027433,
+        0.010266475677490172,
+        0.0009285926818847767,
+        0.00011497363448143005,
+        0.0003741325344890356
+      ],
+      "max_velocity_rad_s": 0.004868591669946909
+    }
+  ],
+  "controlled_return": [
+    {
+      "step": "return_startup_j3",
+      "started_at": 26368.313886034,
+      "duration_sec": 12.0,
+      "initial": [
+        -0.0005138246342539787,
+        -1.3413499593734741,
+        1.4197518825531006,
+        -0.30092859268188477,
+        0.00011497363448143005,
+        -0.0003643953532446176
+      ],
+      "target": [
+        0.0,
+        -1.35,
+        1.5649276971817017,
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "actual": [
+        -0.00038798991590738297,
+        -1.3414278030395508,
+        1.553447961807251,
+        -0.30078476667404175,
+        0.00023032166063785553,
+        -0.0003643953532446176
+      ],
+      "status": 4,
+      "error_code": 0,
+      "message": "Goal successfully reached!",
+      "max_tracking_error_rad": [
+        0.0005138246342539787,
+        0.008650040626525968,
+        0.013160495170414066,
+        0.0009285926818847767,
+        0.00023032166063785553,
+        0.0003643953532446176
+      ]
+    },
+    {
+      "step": "return_startup_j4",
+      "started_at": 26380.625007749,
+      "duration_sec": 20.0,
+      "initial": [
+        -0.00038798991590738297,
+        -1.3414278030395508,
+        1.553447961807251,
+        -0.30078476667404175,
+        0.00023032166063785553,
+        -0.0003643953532446176
+      ],
+      "target": [
+        0.0,
+        -1.35,
+        1.5649276971817017,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "actual": [
+        -0.000317208468914032,
+        -1.3416285514831543,
+        1.5538681745529175,
+        -0.0013997203204780817,
+        0.0003643948584794998,
+        -0.0003643953532446176
+      ],
+      "status": 4,
+      "error_code": 0,
+      "message": "Goal successfully reached!",
+      "max_tracking_error_rad": [
+        0.00038798991590738297,
+        0.008572196960449308,
+        0.011468172073364258,
+        0.0023829145306881183,
+        0.0003643948584794998,
+        0.0003643953532446176
+      ]
+    },
+    {
+      "step": "return_startup_j2",
+      "started_at": 26400.985168279,
+      "duration_sec": 16.0,
+      "initial": [
+        -0.000317208468914032,
+        -1.3416285514831543,
+        1.5538681745529175,
+        -0.0013997203204780817,
+        0.0003643948584794998,
+        -0.0003643953532446176
+      ],
+      "target": [
+        0.003006167709827423,
+        -1.5661170482635498,
+        1.564411997795105,
+        -0.00046981917694211006,
+        -0.00015317369252443314,
+        3.81997087970376e-05
+      ],
+      "actual": [
+        0.0002052290365099907,
+        -1.5550575256347656,
+        1.5539594888687134,
+        -0.0012652722653001547,
+        0.0003643948584794998,
+        -0.0003643953532446176
+      ],
+      "status": 4,
+      "error_code": 0,
+      "message": "Goal successfully reached!",
+      "max_tracking_error_rad": [
+        0.0028107444834676726,
+        0.012874194493946778,
+        0.011059522548555467,
+        0.0013997202473870372,
+        0.0005175685506278913,
+        0.0004025950619478748
+      ]
+    }
+  ],
+  "normal_interrupt_after_campaign": {
+    "passed": true,
+    "deactivated": true,
+    "already_inactive": true
+  },
+  "driver_shutdown": {
+    "error": null,
+    "pid": 14231,
+    "schema_version": 1,
+    "state": "disabled_confirmed",
+    "unix_time_ms": 1790762092870
+  },
+  "independent_final_readback": [
+    {
+      "node": 1,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": 0.00022133365372080382
+    },
+    {
+      "node": 2,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": -1.5687375368076266
+    },
+    {
+      "node": 3,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": 1.5687169389210702
+    },
+    {
+      "node": 4,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": 0.0006233669485926877
+    },
+    {
+      "node": 5,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": 0.0075646674644780434
+    },
+    {
+      "node": 6,
+      "mode": 0,
+      "error": 0,
+      "heartbeat_consumer": 0,
+      "span_rad": 0.0,
+      "position_rad": -0.00047936899621426287
+    }
+  ],
+  "first_full_acceleration_attempt": {
+    "planning_acceleration_rad_s2": 1.2566370614359172,
+    "passed": false,
+    "error": "MoveIt execution failed: -4",
+    "deactivated": true,
+    "controller_error": "J2 PATH_TOLERANCE_VIOLATED, position error 0.042052 > 0.04 rad",
+    "driver_shutdown": {
+      "error": null,
+      "pid": 12359,
+      "schema_version": 1,
+      "state": "disabled_confirmed",
+      "unix_time_ms": 1790761048670
+    }
+  },
+  "scope": "Three combined full-range-profile goals, return to ready, controlled fold, and confirmed disable. Complete workspace boundaries and 1.256637 rad/s execution were not exhaustively validated.",
+  "raw_evidence_directory": ".tmp-moveit-deployment",
+  "sample_count": 7402,
+  "command_count": 7393,
+  "software_validation": {
+    "ros_checks_passed": 302,
+    "ros_errors": 0,
+    "ros_failures": 0,
+    "ros_skipped": 0,
+    "rust_checks_initial_passed": 142,
+    "rust_explicitly_ignored": 1,
+    "additional_stream_headroom_regression_passed": 1,
+    "cargo_fmt": "passed",
+    "cargo_clippy": "passed",
+    "offline_profile_generation_tests_passed": 4
+  }
+}

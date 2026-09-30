@@ -8,6 +8,10 @@ use std::array;
 use std::f32::consts::{PI, TAU};
 use std::time::{Duration, Instant};
 
+#[path = "supported.rs"]
+mod supported;
+pub use supported::{run_supported_commissioning, SupportedRequest};
+
 use anyhow::{Context, Result};
 
 use crate::backend::{
@@ -26,6 +30,12 @@ use crate::conversion::{
 use crate::profile::HardwareProfile;
 
 pub const MAX_COMMISSION_DELTA_RAD: f32 = 0.03;
+pub const MAX_TRAVEL_TEST_DELTA_RAD: f32 = 0.25;
+const TRAVEL_TRACKING_ERROR_RAD: f32 = 0.02;
+const TRAVEL_ENDPOINT_ERROR_RAD: f32 = 0.005;
+const TRAVEL_PASSIVE_DRIFT_RAD: f32 = 0.005;
+const TRAVEL_KP_HARD_MAX_NM_RAD: f32 = 200.0;
+const TRAVEL_KD_HARD_MAX_NM_S_RAD: f32 = 20.0;
 pub const MAX_COMMISSION_DURATION_SEC: f32 = 30.0;
 const MIN_COMMISSION_DELTA_RAD: f32 = 1.0e-4;
 // Commissioning uses the gains explicitly reviewed in the hardware profile.
@@ -381,6 +391,9 @@ const J6_FIRST_POSITION_REQUIRED_RAW_NEGATIVE_REV: f32 = 0.000_397_887;
 const MAX_DIAGNOSTIC_TEMPERATURE_C: f32 = 70.0;
 const MIN_PLAUSIBLE_DIAGNOSTIC_TEMPERATURE_C: f32 = -40.0;
 const MAX_DIAGNOSTIC_TEMPERATURE_RISE_C: f32 = 2.0;
+// Firmware temperatures resolve 0.1 C. Absorb only f32 subtraction roundoff,
+// e.g. 33.9 - 31.9, without accepting the next physical temperature step.
+const DIAGNOSTIC_TEMPERATURE_ROUNDOFF_C: f32 = 0.0001;
 const RPDO_READBACK_SETTLE: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Default)]
@@ -501,6 +514,9 @@ pub struct CommissioningRequest {
     pub delta_rad: f32,
     /// Total time for the complete start -> delta -> start round trip.
     pub duration_sec: f32,
+    /// Explicitly selected staged travel test after smaller motions pass.
+    /// Retains profile limits and applies stricter tracking/endpoint gates.
+    pub expanded_motion: bool,
 }
 
 /// Compile-time-fixed authorization for J1's first physical position survey.
@@ -1420,19 +1436,47 @@ impl SingleAxisDiagnosticRequest {
 }
 
 impl CommissioningRequest {
+    fn gravity_slew_rate(&self, profile: &HardwareProfile) -> Option<f32> {
+        self.expanded_motion
+            .then_some(profile.controller.gravity_startup_slew_rate_nm_s)
+            .flatten()
+    }
+
     pub fn validate(&self, profile: &HardwareProfile) -> Result<()> {
-        validate_commissioning_gains(profile)?;
+        anyhow::ensure!(
+            profile
+                .joints
+                .iter()
+                .all(|j| j.motion_feedforward.is_none()),
+            "motion feed-forward requires supported commissioning or the qualified runtime"
+        );
+        if self.expanded_motion {
+            validate_selected_travel_gains(profile, self.selected_index)?;
+        } else {
+            validate_commissioning_gains(profile)?;
+        }
+        if let Some(rate) = self.gravity_slew_rate(profile) {
+            anyhow::ensure!(
+                rate.is_finite() && rate > 0.0,
+                "gravity slew rate must be finite and positive"
+            );
+        }
         anyhow::ensure!(
             self.selected_index < DOF,
             "commissioning joint index {} is outside 0..{}",
             self.selected_index,
             DOF
         );
+        let maximum_delta = if self.expanded_motion {
+            MAX_TRAVEL_TEST_DELTA_RAD
+        } else {
+            MAX_COMMISSION_DELTA_RAD
+        };
         anyhow::ensure!(
             self.delta_rad.is_finite()
-                && (MIN_COMMISSION_DELTA_RAD..=MAX_COMMISSION_DELTA_RAD)
+                && (MIN_COMMISSION_DELTA_RAD..=maximum_delta)
                     .contains(&self.delta_rad.abs()),
-            "--delta-rad magnitude must be within [{MIN_COMMISSION_DELTA_RAD}, {MAX_COMMISSION_DELTA_RAD}] rad"
+            "--delta-rad magnitude must be within [{MIN_COMMISSION_DELTA_RAD}, {maximum_delta}] rad"
         );
         anyhow::ensure!(
             self.duration_sec.is_finite()
@@ -1510,6 +1554,7 @@ pub async fn run_joint3_assisted_position_diagnostic(
         profile,
         dynamics,
         CommissioningRequest {
+            expanded_motion: false,
             selected_index: request.selected_index(),
             delta_rad: J3_ASSISTED_POSITION_DELTA_RAD,
             duration_sec: J3_ASSISTED_POSITION_DURATION_SEC,
@@ -1530,8 +1575,21 @@ async fn run_single_axis_commissioning_inner(
     profile.validate_single_turn_command_windows()?;
 
     let initial_feedback = wait_for_safe_feedback(backend).await?;
-    let initial_q = validate_feedback(profile, &initial_feedback, None)?;
+    let mut initial_q = validate_feedback(profile, &initial_feedback, None)?;
     let joint = &profile.joints[request.selected_index];
+    if request.expanded_motion {
+        let sensed = initial_q[request.selected_index];
+        initial_q[request.selected_index] =
+            canonical_travel_start(joint, sensed, request.delta_rad)?;
+        if initial_q[request.selected_index] != sensed {
+            tracing::info!(joint = %joint.name, measured_start_rad = sensed,
+                command_start_rad = initial_q[request.selected_index],
+                "inward travel starts at command boundary within explicit measurement margin");
+        }
+    }
+    let temperature_baseline =
+        joint1_first_position_temperature_baseline(profile, &initial_feedback)?;
+    let mut metrics = TravelMetrics::default();
     let assisted_temperature_baseline = if peak_phase_assistance_nm.is_some() {
         Some(joint1_first_position_temperature_baseline(
             profile,
@@ -1566,13 +1624,18 @@ async fn run_single_axis_commissioning_inner(
         joint.limits.position_upper_rad
     );
 
-    let initial_targets = build_safe_hold_targets(
+    let mut initial_targets = build_request_hold_targets(
         profile,
         dynamics,
         &initial_q,
-        request.selected_index,
+        request,
         initial_q[request.selected_index],
     )?;
+    // Validate the full model target first, then enter with PD hold and zero
+    // gravity torque. The stability gate slews to that target before motion.
+    if request.gravity_slew_rate(profile).is_some() {
+        initial_targets[request.selected_index].torque_nm = 0.0;
+    }
     let assisted_active_started = if peak_phase_assistance_nm.is_some() {
         backend
             .register_single_axis_diagnostic_baseline(request.selected_index, initial_targets)
@@ -1606,6 +1669,12 @@ async fn run_single_axis_commissioning_inner(
     let (start_feedback, start_q, initial_targets) =
         wait_for_enabled_axis_stability(backend, profile, dynamics, request, initial_q, None)
             .await?;
+    validate_travel_feedback(
+        request,
+        &initial_q,
+        &start_q,
+        initial_q[request.selected_index],
+    )?;
     if let (Some(active_started), Some(temperature_baseline)) =
         (assisted_active_started, assisted_temperature_baseline)
     {
@@ -1663,7 +1732,14 @@ async fn run_single_axis_commissioning_inner(
                 .ensure_single_axis_commissioning_state(request.selected_index)
                 .context("joint_3 assisted-position single-axis state failed during trajectory")?;
         }
+        backend.ensure_single_axis_commissioning_state(request.selected_index)?;
         let feedback = backend.feedback();
+        validate_six_axis_diagnostic_temperatures(
+            profile,
+            &feedback,
+            temperature_baseline,
+            "single-axis commissioning",
+        )?;
         if let Some(temperature_baseline) = assisted_temperature_baseline {
             validate_six_axis_diagnostic_temperatures(
                 profile,
@@ -1681,9 +1757,10 @@ async fn run_single_axis_commissioning_inner(
                 profile,
                 dynamics,
                 &feedback,
-                request.selected_index,
+                request,
                 initial_q[request.selected_index],
                 commanded_position,
+                None,
             );
         };
         let measured_q = result_with_safety_abort_hook(
@@ -1698,14 +1775,16 @@ async fn run_single_axis_commissioning_inner(
             ),
             |error| log_abort("validate_feedback", error),
         )?;
+        metrics.observe(
+            joint,
+            &feedback,
+            request.selected_index,
+            commanded_position,
+            measured_q[request.selected_index],
+        );
+        validate_travel_feedback(request, &initial_q, &measured_q, commanded_position)?;
         let mut targets = result_with_safety_abort_hook(
-            build_safe_hold_targets(
-                profile,
-                dynamics,
-                &measured_q,
-                request.selected_index,
-                commanded_position,
-            ),
+            build_request_hold_targets(profile, dynamics, &measured_q, request, commanded_position),
             |error| log_abort("build_safe_hold_targets", error),
         )?;
         if let Some(peak_assistance_nm) = peak_phase_assistance_nm {
@@ -1775,7 +1854,14 @@ async fn run_single_axis_commissioning_inner(
                 .ensure_single_axis_commissioning_state(request.selected_index)
                 .context("joint_3 assisted-position single-axis state failed during return")?;
         }
+        backend.ensure_single_axis_commissioning_state(request.selected_index)?;
         let feedback = backend.feedback();
+        validate_six_axis_diagnostic_temperatures(
+            profile,
+            &feedback,
+            temperature_baseline,
+            "single-axis commissioning",
+        )?;
         if let Some(temperature_baseline) = assisted_temperature_baseline {
             validate_six_axis_diagnostic_temperatures(
                 profile,
@@ -1795,9 +1881,10 @@ async fn run_single_axis_commissioning_inner(
                 profile,
                 dynamics,
                 &feedback,
-                request.selected_index,
+                request,
                 initial_q[request.selected_index],
                 initial_q[request.selected_index],
+                None,
             );
         };
         let measured_q = result_with_safety_abort_hook(
@@ -1812,12 +1899,25 @@ async fn run_single_axis_commissioning_inner(
             ),
             |error| log_abort("validate_feedback", error),
         )?;
+        metrics.observe(
+            joint,
+            &feedback,
+            request.selected_index,
+            initial_q[request.selected_index],
+            measured_q[request.selected_index],
+        );
+        validate_travel_feedback(
+            request,
+            &initial_q,
+            &measured_q,
+            initial_q[request.selected_index],
+        )?;
         let targets = result_with_safety_abort_hook(
-            build_safe_hold_targets(
+            build_request_hold_targets(
                 profile,
                 dynamics,
                 &measured_q,
-                request.selected_index,
+                request,
                 initial_q[request.selected_index],
             ),
             |error| log_abort("build_safe_hold_targets", error),
@@ -1878,6 +1978,19 @@ async fn run_single_axis_commissioning_inner(
             final_targets[request.selected_index],
         ),
     );
+    tracing::info!(
+        samples = metrics.samples,
+        max_tracking_error_rad = metrics.max_tracking_error_rad,
+        max_velocity_rad_s = metrics.max_velocity_rad_s,
+        max_torque_nm = metrics.max_torque_nm,
+        start_position_rad = initial_q[request.selected_index],
+        final_position_rad = final_q[request.selected_index],
+        return_error_rad = return_error,
+        most_positive_delta_rad = excursion.most_positive_delta_rad,
+        most_negative_delta_rad = excursion.most_negative_delta_rad,
+        expanded_motion = request.expanded_motion,
+        "single-axis commissioning measured metrics"
+    );
     if !return_stable {
         anyhow::bail!(
             "{} did not settle at its starting pose within {:.3} s: position {:.6} rad, start {:.6} rad, error {:.6} rad (limit {:.6} rad), velocity {:.6} rad/s (limit {:.6} rad/s); both limits must hold continuously for {:.3} s",
@@ -1893,6 +2006,7 @@ async fn run_single_axis_commissioning_inner(
         );
     }
     let measured_peak_delta = excursion.validate_completed()?;
+    validate_travel_endpoint(request, measured_peak_delta)?;
     tracing::info!(
         joint = %joint.name,
         measured_peak_delta_rad = measured_peak_delta,
@@ -1911,8 +2025,7 @@ fn apply_joint3_phase_assistance(
     anyhow::ensure!(
         assistance_nm.is_finite()
             && (J3_ASSISTED_POSITION_PEAK_TORQUE_NM..=0.0).contains(&assistance_nm),
-        "joint_3 trajectory assistance {assistance_nm:.6} Nm is outside [{:.6}, 0] Nm",
-        J3_ASSISTED_POSITION_PEAK_TORQUE_NM
+        "joint_3 trajectory assistance {assistance_nm:.6} Nm is outside [{J3_ASSISTED_POSITION_PEAK_TORQUE_NM:.6}, 0] Nm"
     );
     let joint = &profile.joints[J3_GRAVITY_UNLOAD_INDEX];
     let model_feedforward_nm =
@@ -1957,6 +2070,7 @@ struct DiagnosticTemperatureBaseline {
 #[derive(Debug, Clone, Copy)]
 struct SixAxisDiagnosticTemperatureBaseline {
     joints: [DiagnosticTemperatureBaseline; DOF],
+    rise_limit_c: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4700,8 +4814,7 @@ async fn run_joint4_first_position_round_trip(
     anyhow::ensure!(
         peak_assistance_nm == 0.0
             || peak_assistance_nm.to_bits() == J4_ASSISTED_POSITION_PEAK_TORQUE_NM.to_bits(),
-        "joint_4 position survey accepts only zero assistance or the fixed {:.3} Nm envelope",
-        J4_ASSISTED_POSITION_PEAK_TORQUE_NM
+        "joint_4 position survey accepts only zero assistance or the fixed {J4_ASSISTED_POSITION_PEAK_TORQUE_NM:.3} Nm envelope"
     );
     let assisted = peak_assistance_nm != 0.0;
     let maximum_feedforward_nm = if assisted {
@@ -6469,6 +6582,7 @@ pub async fn run_single_axis_diagnostic(
     // synthetic delta only sizes its tracking guard; this path never commands
     // a position delta.
     let stability_request = CommissioningRequest {
+        expanded_motion: false,
         selected_index,
         delta_rad: MIN_COMMISSION_DELTA_RAD,
         duration_sec: 1.0,
@@ -7289,6 +7403,26 @@ fn validate_joint1_first_position_temperature(
     temperature_c: f32,
     baseline_c: f32,
 ) -> Result<()> {
+    validate_temperature_with_rise_limit(
+        joint_name,
+        label,
+        temperature_c,
+        baseline_c,
+        MAX_DIAGNOSTIC_TEMPERATURE_RISE_C,
+    )
+}
+
+fn validate_temperature_with_rise_limit(
+    joint_name: &str,
+    label: &str,
+    temperature_c: f32,
+    baseline_c: f32,
+    rise_limit_c: f32,
+) -> Result<()> {
+    anyhow::ensure!(
+        baseline_c.is_finite() && rise_limit_c.is_finite() && (2.0..=10.0).contains(&rise_limit_c),
+        "temperature rise authority must be finite and in [2,10] C"
+    );
     anyhow::ensure!(
         temperature_c.is_finite()
             && (MIN_PLAUSIBLE_DIAGNOSTIC_TEMPERATURE_C..=MAX_DIAGNOSTIC_TEMPERATURE_C)
@@ -7296,8 +7430,8 @@ fn validate_joint1_first_position_temperature(
         "{joint_name} {label} temperature {temperature_c:.3} C is outside [{MIN_PLAUSIBLE_DIAGNOSTIC_TEMPERATURE_C:.1}, {MAX_DIAGNOSTIC_TEMPERATURE_C:.1}] C"
     );
     anyhow::ensure!(
-        temperature_c - baseline_c <= MAX_DIAGNOSTIC_TEMPERATURE_RISE_C,
-        "{joint_name} {label} temperature rose by {:.3} C from baseline {baseline_c:.3} C; limit is {MAX_DIAGNOSTIC_TEMPERATURE_RISE_C:.3} C",
+        temperature_c - baseline_c <= rise_limit_c + DIAGNOSTIC_TEMPERATURE_ROUNDOFF_C,
+        "{joint_name} {label} temperature rose by {:.3} C from baseline {baseline_c:.3} C; limit is {rise_limit_c:.3} C",
         temperature_c - baseline_c
     );
     Ok(())
@@ -7666,7 +7800,10 @@ fn joint1_first_position_temperature_baseline(
             motor_c: feedback_joint.motor_temperature_c,
         };
     }
-    Ok(SixAxisDiagnosticTemperatureBaseline { joints })
+    Ok(SixAxisDiagnosticTemperatureBaseline {
+        joints,
+        rise_limit_c: MAX_DIAGNOSTIC_TEMPERATURE_RISE_C,
+    })
 }
 
 fn validate_six_axis_diagnostic_temperatures(
@@ -7683,18 +7820,20 @@ fn validate_six_axis_diagnostic_temperatures(
         profile.joints.iter().zip(baseline.joints).enumerate()
     {
         let feedback_joint = feedback.joints[index];
-        validate_joint1_first_position_temperature(
+        validate_temperature_with_rise_limit(
             &profile_joint.name,
             "driver",
             feedback_joint.driver_temperature_c,
             baseline_joint.driver_c,
+            baseline.rise_limit_c,
         )
         .with_context(|| format!("{diagnostic_name} six-axis temperature gate"))?;
-        validate_joint1_first_position_temperature(
+        validate_temperature_with_rise_limit(
             &profile_joint.name,
             "motor",
             feedback_joint.motor_temperature_c,
             baseline_joint.motor_c,
+            baseline.rise_limit_c,
         )
         .with_context(|| format!("{diagnostic_name} six-axis temperature gate"))?;
     }
@@ -7714,7 +7853,7 @@ fn validate_diagnostic_temperature(
     );
     if let Some(baseline_c) = baseline_c {
         anyhow::ensure!(
-            temperature_c - baseline_c <= MAX_DIAGNOSTIC_TEMPERATURE_RISE_C,
+            temperature_c - baseline_c <= MAX_DIAGNOSTIC_TEMPERATURE_RISE_C + DIAGNOSTIC_TEMPERATURE_ROUNDOFF_C,
             "joint_2 {label} temperature rose by {:.3} C from baseline {:.3} C; diagnostic limit is {:.3} C",
             temperature_c - baseline_c,
             baseline_c,
@@ -9482,8 +9621,18 @@ async fn wait_for_enabled_axis_stability(
     diagnostic_guards: Option<DiagnosticStabilityGuards>,
 ) -> Result<(FeedbackSnapshot, [f32; DOF], [MotorTarget; DOF])> {
     let joint = &profile.joints[request.selected_index];
+    let temperature_baseline =
+        joint1_first_position_temperature_baseline(profile, &backend.feedback())?;
     let started_at = Instant::now();
-    let mut stability = ContinuousStabilityGate::new(STABILITY_DWELL, ENABLE_STABILITY_TIMEOUT);
+    let gravity_rate = request.gravity_slew_rate(profile);
+    let timeout = if gravity_rate.is_some() {
+        Duration::from_secs(10)
+    } else {
+        ENABLE_STABILITY_TIMEOUT
+    };
+    let mut stability = ContinuousStabilityGate::new(STABILITY_DWELL, timeout);
+    let mut gravity_output_nm = 0.0;
+    let mut last_slew_tick = started_at;
     let mut peak_position_deviation = 0.0_f32;
     let mut peak_velocity = 0.0_f32;
 
@@ -9504,8 +9653,14 @@ async fn wait_for_enabled_axis_stability(
             .ensure_single_axis_commissioning_state(request.selected_index)
             .context("single-axis drive-state contract failed during enable stability")?;
         let feedback = backend.feedback();
-        let normalized_time =
-            started_at.elapsed().as_secs_f32() / ENABLE_STABILITY_TIMEOUT.as_secs_f32();
+        validate_six_axis_diagnostic_temperatures(
+            profile,
+            &feedback,
+            temperature_baseline,
+            "commissioning enable stability",
+        )?;
+        let normalized_time = started_at.elapsed().as_secs_f32() / timeout.as_secs_f32();
+        let applied_gravity_for_log = gravity_rate.map(|_| gravity_output_nm);
         let log_abort = |abort_stage, error: &anyhow::Error| {
             log_safety_abort_telemetry(
                 abort_stage,
@@ -9515,9 +9670,10 @@ async fn wait_for_enabled_axis_stability(
                 profile,
                 dynamics,
                 &feedback,
-                request.selected_index,
+                request,
                 initial_q[request.selected_index],
                 initial_q[request.selected_index],
+                applied_gravity_for_log,
             );
         };
         let measured_q = result_with_safety_abort_hook(
@@ -9531,6 +9687,12 @@ async fn wait_for_enabled_axis_stability(
                 )),
             ),
             |error| log_abort("validate_feedback", error),
+        )?;
+        validate_travel_feedback(
+            request,
+            &initial_q,
+            &measured_q,
+            initial_q[request.selected_index],
         )?;
         if let Some(guards) = diagnostic_guards {
             result_with_safety_abort_hook(
@@ -9564,17 +9726,33 @@ async fn wait_for_enabled_axis_stability(
                     initial_q[request.selected_index],
                     gravity_scale,
                 ),
-                None => build_safe_hold_targets(
+                None => build_request_hold_targets(
                     profile,
                     dynamics,
                     &measured_q,
-                    request.selected_index,
+                    request,
                     initial_q[request.selected_index],
                 ),
             };
-        let targets = result_with_safety_abort_hook(targets_result, |error| {
+        let mut targets = result_with_safety_abort_hook(targets_result, |error| {
             log_abort("build_safe_hold_targets", error)
         })?;
+        let gravity_ready = if let Some(rate) = gravity_rate {
+            let now = Instant::now();
+            let target = &mut targets[request.selected_index];
+            let desired = target.torque_nm;
+            gravity_output_nm = slew_gravity_torque(
+                gravity_output_nm,
+                desired,
+                rate * joint.torque_scale,
+                now.duration_since(last_slew_tick).as_secs_f32(),
+            )?;
+            last_slew_tick = now;
+            target.torque_nm = gravity_output_nm;
+            gravity_output_nm == desired
+        } else {
+            true
+        };
         if let Some(guards) = diagnostic_guards {
             let diagnostic_gate = if guards.position_round_trip {
                 position_diagnostic_observation(
@@ -9630,7 +9808,8 @@ async fn wait_for_enabled_axis_stability(
             enable_stability_limits(diagnostic_guards);
         match stability.observe(
             elapsed,
-            position_deviation <= stability_position_limit
+            gravity_ready
+                && position_deviation <= stability_position_limit
                 && velocity.abs() <= stability_velocity_limit,
         ) {
             StabilityGateStatus::Stable => {
@@ -9676,7 +9855,7 @@ async fn wait_for_enabled_axis_stability(
                 anyhow::bail!(
                     "{} did not stabilize after enable within {:.3} s: current position deviation {:.6} rad (limit {:.6} rad), current velocity {:.6} rad/s (limit {:.6} rad/s), peak position deviation {:.6} rad, peak velocity {:.6} rad/s; both limits must hold continuously for {:.3} s",
                     joint.name,
-                    ENABLE_STABILITY_TIMEOUT.as_secs_f32(),
+                    timeout.as_secs_f32(),
                     position_deviation,
                     stability_position_limit,
                     velocity,
@@ -9789,10 +9968,11 @@ fn safety_abort_telemetry_sample(
     profile: &HardwareProfile,
     dynamics: &hex_arm_dynamics::ArmDynamics,
     feedback: &FeedbackSnapshot,
-    selected_index: usize,
+    request: CommissioningRequest,
     initial_q: f32,
     commanded_q: f32,
 ) -> SafetyAbortTelemetrySample {
+    let selected_index = request.selected_index;
     let measured_q = feedback_positions_unchecked(profile, feedback);
     let joint = &profile.joints[selected_index];
     let gravity_torque =
@@ -9814,16 +9994,11 @@ fn safety_abort_telemetry_sample(
         },
         joint,
     );
-    let (target, safe_target_built, target_build_error) = match build_safe_hold_targets(
-        profile,
-        dynamics,
-        &measured_q,
-        selected_index,
-        commanded_q,
-    ) {
-        Ok(targets) => (targets[selected_index], true, None),
-        Err(error) => (diagnostic_target, false, Some(format!("{error:#}"))),
-    };
+    let (target, safe_target_built, target_build_error) =
+        match build_request_hold_targets(profile, dynamics, &measured_q, request, commanded_q) {
+            Ok(targets) => (targets[selected_index], true, None),
+            Err(error) => (diagnostic_target, false, Some(format!("{error:#}"))),
+        };
     let state = feedback.joints[selected_index];
 
     SafetyAbortTelemetrySample {
@@ -9853,20 +10028,20 @@ fn log_safety_abort_telemetry(
     profile: &HardwareProfile,
     dynamics: &hex_arm_dynamics::ArmDynamics,
     feedback: &FeedbackSnapshot,
-    selected_index: usize,
+    request: CommissioningRequest,
     initial_q: f32,
     commanded_q: f32,
+    applied_gravity_motor_nm: Option<f32>,
 ) {
+    let selected_index = request.selected_index;
     let joint = &profile.joints[selected_index];
-    let abort = safety_abort_telemetry_sample(
-        profile,
-        dynamics,
-        feedback,
-        selected_index,
-        initial_q,
-        commanded_q,
-    );
-    let sample = abort.telemetry;
+    let abort =
+        safety_abort_telemetry_sample(profile, dynamics, feedback, request, initial_q, commanded_q);
+    let mut sample = abort.telemetry;
+    let nominal_gravity_ff = sample.gravity_ff;
+    if let Some(torque) = applied_gravity_motor_nm {
+        sample.gravity_ff = motor_torque_to_ros(torque, joint);
+    }
     tracing::error!(
         milestone = "safety_abort",
         phase,
@@ -9884,6 +10059,7 @@ fn log_safety_abort_telemetry(
         raw_motor_velocity_rev_s = abort.raw_motor_velocity_rev_s,
         raw_motor_torque_nm = abort.raw_motor_torque_nm,
         gravity_ff = sample.gravity_ff,
+        nominal_gravity_ff,
         kp = sample.kp,
         kd = sample.kd,
         estimated_pd_torque = sample.estimated_pd_torque,
@@ -9995,6 +10171,36 @@ fn validate_feedback(
         );
     }
     Ok(q)
+}
+
+/// Higher gains are admitted only with this explicit request and only on its
+/// selected drive. Historical diagnostics keep using build_safe_hold_targets.
+fn build_request_hold_targets(
+    profile: &HardwareProfile,
+    dynamics: &hex_arm_dynamics::ArmDynamics,
+    measured_q: &[f32; DOF],
+    request: CommissioningRequest,
+    selected_position: f32,
+) -> Result<[MotorTarget; DOF]> {
+    request.validate(profile)?;
+    if request.expanded_motion {
+        build_hold_targets_inner(
+            profile,
+            dynamics,
+            measured_q,
+            request.selected_index,
+            selected_position,
+            None,
+        )
+    } else {
+        build_safe_hold_targets(
+            profile,
+            dynamics,
+            measured_q,
+            request.selected_index,
+            selected_position,
+        )
+    }
 }
 
 fn build_safe_hold_targets(
@@ -10134,8 +10340,7 @@ fn build_joint4_assisted_position_trajectory_targets(
     anyhow::ensure!(
         assistance_nm.is_finite()
             && (J4_ASSISTED_POSITION_PEAK_TORQUE_NM..=0.0).contains(&assistance_nm),
-        "joint_4 trajectory assistance {assistance_nm:.6} Nm is outside [{:.6}, 0] Nm",
-        J4_ASSISTED_POSITION_PEAK_TORQUE_NM
+        "joint_4 trajectory assistance {assistance_nm:.6} Nm is outside [{J4_ASSISTED_POSITION_PEAK_TORQUE_NM:.6}, 0] Nm"
     );
     let mut targets =
         build_joint4_first_position_trajectory_targets(profile, dynamics, measured_q, commanded_q)?;
@@ -10145,8 +10350,7 @@ fn build_joint4_assisted_position_trajectory_targets(
     let total_feedforward_nm = model_feedforward_nm + assistance_nm;
     anyhow::ensure!(
         total_feedforward_nm.abs() <= J4_ASSISTED_POSITION_MAX_FEEDFORWARD_NM,
-        "joint_4 assisted feed-forward {total_feedforward_nm:.6} Nm exceeds {:.6} Nm",
-        J4_ASSISTED_POSITION_MAX_FEEDFORWARD_NM
+        "joint_4 assisted feed-forward {total_feedforward_nm:.6} Nm exceeds {J4_ASSISTED_POSITION_MAX_FEEDFORWARD_NM:.6} Nm"
     );
     targets[J4_FIRST_POSITION_INDEX] = ros_target_to_motor(
         RosTarget {
@@ -10232,6 +10436,25 @@ fn build_safe_hold_targets_with_selected_gravity_scale(
     selected_gravity_scale: Option<f32>,
 ) -> Result<[MotorTarget; DOF]> {
     validate_commissioning_gains(profile)?;
+    build_hold_targets_inner(
+        profile,
+        dynamics,
+        measured_q,
+        selected_index,
+        selected_position,
+        selected_gravity_scale,
+    )
+}
+
+// Arithmetic only. Callers above must validate their gain authority first.
+fn build_hold_targets_inner(
+    profile: &HardwareProfile,
+    dynamics: &hex_arm_dynamics::ArmDynamics,
+    measured_q: &[f32; DOF],
+    selected_index: usize,
+    selected_position: f32,
+    selected_gravity_scale: Option<f32>,
+) -> Result<[MotorTarget; DOF]> {
     let gravity_torque = dynamics.gravity_torque_with(measured_q, profile.gravity_vector_base_m_s2);
     anyhow::ensure!(
         gravity_torque.len() == DOF,
@@ -10292,7 +10515,36 @@ fn build_safe_hold_targets_with_selected_gravity_scale(
     }))
 }
 
+fn validate_selected_travel_gains(profile: &HardwareProfile, selected_index: usize) -> Result<()> {
+    for (index, joint) in profile.joints.iter().enumerate() {
+        let (kp, kd) = if index == selected_index {
+            (TRAVEL_KP_HARD_MAX_NM_RAD, TRAVEL_KD_HARD_MAX_NM_S_RAD)
+        } else {
+            (
+                COMMISSION_KP_HARD_MAX_NM_RAD,
+                COMMISSION_KD_HARD_MAX_NM_S_RAD,
+            )
+        };
+        anyhow::ensure!(
+            joint.default_kp.is_finite()
+                && (0.0..=kp).contains(&joint.default_kp)
+                && joint.default_kd.is_finite()
+                && (0.0..=kd).contains(&joint.default_kd),
+            "{} gains exceed selected-axis travel authority (Kp <= {kp}, Kd <= {kd})",
+            joint.name
+        );
+    }
+    Ok(())
+}
+
 fn validate_commissioning_gains(profile: &HardwareProfile) -> Result<()> {
+    anyhow::ensure!(
+        profile
+            .joints
+            .iter()
+            .all(|j| j.motion_feedforward.is_none()),
+        "historical diagnostics do not support motion feed-forward profiles"
+    );
     for joint in &profile.joints {
         anyhow::ensure!(
             joint.default_kp <= COMMISSION_KP_HARD_MAX_NM_RAD,
@@ -10325,6 +10577,120 @@ fn joint1_first_position_friction_compensation(normalized_time: f32) -> f32 {
     } else {
         J1_FIRST_POSITION_NEGATIVE_COMPENSATION_NM * signed_velocity_envelope
     }
+}
+
+fn slew_gravity_torque(current: f32, desired: f32, rate_nm_s: f32, dt_s: f32) -> Result<f32> {
+    anyhow::ensure!(
+        [current, desired, rate_nm_s, dt_s]
+            .iter()
+            .all(|v| v.is_finite())
+            && rate_nm_s > 0.0
+            && dt_s >= 0.0,
+        "invalid gravity slew input"
+    );
+    let step = rate_nm_s * dt_s;
+    let delta = desired - current;
+    Ok(if delta.abs() <= step {
+        desired
+    } else {
+        current + delta.signum() * step
+    })
+}
+
+fn canonical_travel_start(
+    joint: &crate::profile::JointProfile,
+    measured: f32,
+    delta: f32,
+) -> Result<f32> {
+    let limits = &joint.limits;
+    anyhow::ensure!(
+        measured.is_finite()
+            && delta.is_finite()
+            && measured >= limits.measured_position_lower_rad()
+            && measured <= limits.measured_position_upper_rad(),
+        "{} travel start is outside its explicit measured envelope",
+        joint.name
+    );
+    let command = measured.clamp(limits.position_lower_rad, limits.position_upper_rad);
+    if command != measured {
+        anyhow::ensure!(
+            (command - measured).abs() <= 0.001,
+            "{} travel start correction exceeds 0.001 rad",
+            joint.name
+        );
+        anyhow::ensure!(
+            (command - measured) * delta > 0.0,
+            "{} measured-margin start permits only inward travel",
+            joint.name
+        );
+    }
+    Ok(command)
+}
+
+#[derive(Debug, Default)]
+struct TravelMetrics {
+    samples: u64,
+    max_tracking_error_rad: f32,
+    max_velocity_rad_s: f32,
+    max_torque_nm: f32,
+}
+
+impl TravelMetrics {
+    fn observe(
+        &mut self,
+        joint: &crate::profile::JointProfile,
+        feedback: &FeedbackSnapshot,
+        index: usize,
+        commanded_q: f32,
+        measured_q: f32,
+    ) {
+        self.samples += 1;
+        self.max_tracking_error_rad = self
+            .max_tracking_error_rad
+            .max((commanded_q - measured_q).abs());
+        self.max_velocity_rad_s = self
+            .max_velocity_rad_s
+            .max(motor_velocity_to_ros(feedback.joints[index].velocity_rev_s, joint).abs());
+        self.max_torque_nm = self
+            .max_torque_nm
+            .max(motor_torque_to_ros(feedback.joints[index].torque_nm, joint).abs());
+    }
+}
+
+fn validate_travel_feedback(
+    request: CommissioningRequest,
+    initial_q: &[f32; DOF],
+    measured_q: &[f32; DOF],
+    commanded_q: f32,
+) -> Result<()> {
+    if !request.expanded_motion {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        (measured_q[request.selected_index] - commanded_q).abs() <= TRAVEL_TRACKING_ERROR_RAD,
+        "expanded travel tracking error {:.6} rad exceeds {TRAVEL_TRACKING_ERROR_RAD} rad",
+        (measured_q[request.selected_index] - commanded_q).abs()
+    );
+    for index in 0..DOF {
+        if index != request.selected_index {
+            anyhow::ensure!(
+                (measured_q[index] - initial_q[index]).abs() <= TRAVEL_PASSIVE_DRIFT_RAD,
+                "passive joint {} moved more than {TRAVEL_PASSIVE_DRIFT_RAD} rad during expanded travel", index + 1
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_travel_endpoint(request: CommissioningRequest, measured_peak: f32) -> Result<()> {
+    if request.expanded_motion {
+        anyhow::ensure!(
+            (measured_peak - request.delta_rad).abs() <= TRAVEL_ENDPOINT_ERROR_RAD,
+            "expanded travel peak {measured_peak:.6} rad missed requested endpoint {:.6} rad by more than {TRAVEL_ENDPOINT_ERROR_RAD} rad",
+            request.delta_rad
+        );
+    }
+    Ok(())
 }
 
 fn return_tolerance_rad(requested_delta_rad: f32) -> f32 {
@@ -10403,7 +10769,7 @@ mod tests {
         JointLimits, JointProfile,
     };
 
-    fn profile_with_velocity_limit(velocity_rad_s: f32) -> HardwareProfile {
+    pub(super) fn profile_with_velocity_limit(velocity_rad_s: f32) -> HardwareProfile {
         HardwareProfile {
             schema_version: crate::profile::HARDWARE_PROFILE_SCHEMA_VERSION,
             joint_coordinate_version: crate::profile::JOINT_COORDINATE_VERSION,
@@ -10427,6 +10793,9 @@ mod tests {
                 expected_link: None,
             },
             controller: ControllerProfile {
+                max_measured_temperature_c: None,
+                hand_guiding_velocity_limits_rad_s: None,
+                hand_guiding_position_margin_rad: None,
                 loop_hz: 1000,
                 state_publish_hz: 50,
                 discovery_timeout_ms: 2000,
@@ -10451,12 +10820,15 @@ mod tests {
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
                     gravity_compensation_limit_nm: None,
+                    motion_feedforward: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
+                    meow_torque_budget: Default::default(),
                     limits: JointLimits {
                         position_lower_rad: -1.0,
                         position_upper_rad: 1.0,
                         measured_position_margin_rad: 0.0,
+                        measured_velocity_margin_rad_s: 0.0,
                         velocity_rad_s,
                         acceleration_rad_s2: 0.1,
                         torque_nm: 5.0,
@@ -10553,6 +10925,7 @@ mod tests {
             position_lower_rad: J1_FIRST_POSITION_EXPECTED_PROFILE_LOWER_RAD,
             position_upper_rad: J1_FIRST_POSITION_EXPECTED_PROFILE_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: J1_FIRST_POSITION_EXPECTED_PROFILE_VELOCITY_RAD_S,
             acceleration_rad_s2: J1_FIRST_POSITION_EXPECTED_PROFILE_ACCELERATION_RAD_S2,
             torque_nm: J1_FIRST_POSITION_EXPECTED_PROFILE_TORQUE_NM,
@@ -10580,6 +10953,7 @@ mod tests {
             position_lower_rad: J5_FIRST_POSITION_EXPECTED_PROFILE_LOWER_RAD,
             position_upper_rad: J5_FIRST_POSITION_EXPECTED_PROFILE_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: J5_FIRST_POSITION_EXPECTED_PROFILE_VELOCITY_RAD_S,
             acceleration_rad_s2: J5_FIRST_POSITION_EXPECTED_PROFILE_ACCELERATION_RAD_S2,
             torque_nm: J5_FIRST_POSITION_EXPECTED_PROFILE_TORQUE_NM,
@@ -10607,6 +10981,7 @@ mod tests {
             position_lower_rad: J4_FIRST_POSITION_EXPECTED_PROFILE_LOWER_RAD,
             position_upper_rad: J4_FIRST_POSITION_EXPECTED_PROFILE_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: J4_FIRST_POSITION_EXPECTED_PROFILE_VELOCITY_RAD_S,
             acceleration_rad_s2: J4_FIRST_POSITION_EXPECTED_PROFILE_ACCELERATION_RAD_S2,
             torque_nm: J4_FIRST_POSITION_EXPECTED_PROFILE_TORQUE_NM,
@@ -10629,6 +11004,7 @@ mod tests {
             position_lower_rad: J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_LOWER_RAD,
             position_upper_rad: J3_GRAVITY_UNLOAD_EXPECTED_PROFILE_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: 0.1,
             acceleration_rad_s2: 0.1,
             torque_nm: 7.5,
@@ -10647,6 +11023,7 @@ mod tests {
             position_lower_rad: J3_ASSISTED_POSITION_EXPECTED_LOWER_RAD,
             position_upper_rad: J3_ASSISTED_POSITION_EXPECTED_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: J3_ASSISTED_POSITION_EXPECTED_VELOCITY_RAD_S,
             acceleration_rad_s2: J3_ASSISTED_POSITION_EXPECTED_ACCELERATION_RAD_S2,
             torque_nm: J3_ASSISTED_POSITION_EXPECTED_TORQUE_NM,
@@ -10694,6 +11071,7 @@ mod tests {
             position_lower_rad: J6_FIRST_POSITION_EXPECTED_PROFILE_LOWER_RAD,
             position_upper_rad: J6_FIRST_POSITION_EXPECTED_PROFILE_UPPER_RAD,
             measured_position_margin_rad: 0.0,
+            measured_velocity_margin_rad_s: 0.0,
             velocity_rad_s: J6_FIRST_POSITION_EXPECTED_PROFILE_VELOCITY_RAD_S,
             acceleration_rad_s2: J6_FIRST_POSITION_EXPECTED_PROFILE_ACCELERATION_RAD_S2,
             torque_nm: J6_FIRST_POSITION_EXPECTED_PROFILE_TORQUE_NM,
@@ -11937,6 +12315,18 @@ mod tests {
         let raw_delta = accepted_peak.position_rev - start.position_rev;
         assert!(raw_delta.is_sign_negative());
         assert!(raw_delta <= -J1_FIRST_POSITION_REQUIRED_RAW_NEGATIVE_REV);
+    }
+
+    #[test]
+    fn diagnostic_temperature_roundoff_accepts_exact_two_degrees_but_not_next_sample() {
+        validate_joint1_first_position_temperature("joint_3", "motor", 33.9, 31.9).unwrap();
+        validate_diagnostic_temperature("motor", 33.9, Some(31.9)).unwrap();
+        for hot in [33.901, 34.0, 71.0, f32::NAN] {
+            assert!(
+                validate_joint1_first_position_temperature("joint_3", "motor", hot, 31.9).is_err()
+            );
+            assert!(validate_diagnostic_temperature("motor", hot, Some(31.9)).is_err());
+        }
     }
 
     #[test]
@@ -13663,6 +14053,7 @@ mod tests {
         let profile = profile_with_velocity_limit(0.1);
         assert!(!profile.calibrated);
         CommissioningRequest {
+            expanded_motion: false,
             selected_index: 2,
             delta_rad: -0.02,
             duration_sec: 2.0,
@@ -13675,6 +14066,7 @@ mod tests {
     fn request_rejects_excess_delta_and_too_fast_smooth_round_trip() {
         let profile = profile_with_velocity_limit(0.1);
         assert!(CommissioningRequest {
+            expanded_motion: false,
             selected_index: 0,
             delta_rad: 0.031,
             duration_sec: 2.0,
@@ -13682,6 +14074,7 @@ mod tests {
         .validate(&profile)
         .is_err());
         let error = CommissioningRequest {
+            expanded_motion: false,
             selected_index: 0,
             delta_rad: 0.03,
             duration_sec: 0.5,
@@ -13691,6 +14084,7 @@ mod tests {
         assert!(error.to_string().contains("peak velocity"));
 
         let error = CommissioningRequest {
+            expanded_motion: false,
             selected_index: 0,
             delta_rad: 0.01,
             duration_sec: 1.0,
@@ -13698,6 +14092,137 @@ mod tests {
         .validate(&profile)
         .unwrap_err();
         assert!(error.to_string().contains("peak acceleration"));
+    }
+
+    #[test]
+    fn commissioning_gravity_slew_preserves_direction_units_and_legacy_authority() {
+        assert!((slew_gravity_torque(0.0, -4.0, 0.85, 0.1).unwrap() + 0.085).abs() < 1e-6);
+        assert_eq!(slew_gravity_torque(-3.99, -4.0, 1.0, 0.1).unwrap(), -4.0);
+        assert_eq!(slew_gravity_torque(0.0, 4.0, 1.0, 0.1).unwrap(), 0.1);
+        assert_eq!(slew_gravity_torque(0.0, 4.0, 1.0, 0.0).unwrap(), 0.0);
+        assert!(slew_gravity_torque(0.0, f32::NAN, 1.0, 0.1).is_err());
+        assert!(slew_gravity_torque(0.0, 1.0, -1.0, 0.1).is_err());
+        let mut profile = profile_with_velocity_limit(0.1);
+        profile.controller.gravity_startup_slew_rate_nm_s = Some(1.0);
+        let mut request = CommissioningRequest {
+            selected_index: 0,
+            delta_rad: 0.015,
+            duration_sec: 24.0,
+            expanded_motion: false,
+        };
+        assert_eq!(request.gravity_slew_rate(&profile), None);
+        request.expanded_motion = true;
+        assert_eq!(request.gravity_slew_rate(&profile), Some(1.0));
+        profile.joints[0].default_kp = 200.0;
+        let sample = safety_abort_telemetry_sample(
+            &profile,
+            &zero_gravity_dynamics(),
+            &FeedbackSnapshot::default(),
+            request,
+            0.0,
+            0.01,
+        );
+        assert!(sample.safe_target_built, "{:?}", sample.target_build_error);
+        request.expanded_motion = false;
+        let sample = safety_abort_telemetry_sample(
+            &profile,
+            &zero_gravity_dynamics(),
+            &FeedbackSnapshot::default(),
+            request,
+            0.0,
+            0.01,
+        );
+        assert!(!sample.safe_target_built);
+    }
+
+    #[test]
+    fn travel_boundary_normalization_requires_explicit_margin_and_inward_direction() {
+        let mut profile = profile_with_velocity_limit(0.1);
+        let joint = &mut profile.joints[2];
+        let upper = joint.limits.position_upper_rad;
+        assert!(canonical_travel_start(joint, upper + 0.0001, -0.015).is_err());
+        joint.limits.measured_position_margin_rad = 0.001;
+        assert_eq!(
+            canonical_travel_start(joint, upper + 0.0001, -0.015).unwrap(),
+            upper
+        );
+        assert!(canonical_travel_start(joint, upper + 0.0001, 0.015).is_err());
+        assert!(canonical_travel_start(joint, upper + 0.0011, -0.015).is_err());
+        joint.limits.measured_position_margin_rad = 0.01;
+        assert!(canonical_travel_start(joint, upper + 0.002, -0.015).is_err());
+        assert!(canonical_travel_start(joint, f32::NAN, -0.015).is_err());
+        let lower = joint.limits.position_lower_rad;
+        assert_eq!(
+            canonical_travel_start(joint, lower - 0.0001, 0.015).unwrap(),
+            lower
+        );
+        assert!(canonical_travel_start(joint, lower - 0.0001, -0.015).is_err());
+        assert_eq!(canonical_travel_start(joint, 0.0, 0.015).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn staged_gain_authority_is_confined_to_the_selected_request() {
+        let mut profile = profile_with_velocity_limit(0.1);
+        profile.joints[1].default_kp = 120.0;
+        profile.joints[1].default_kd = 8.0;
+        let mut request = CommissioningRequest {
+            selected_index: 1,
+            delta_rad: 0.015,
+            duration_sec: 12.0,
+            expanded_motion: true,
+        };
+        request.validate(&profile).unwrap();
+        let q = [0.0; DOF];
+        let dynamics = zero_gravity_dynamics();
+        build_request_hold_targets(&profile, &dynamics, &q, request, 0.0).unwrap();
+        assert!(build_safe_hold_targets(&profile, &dynamics, &q, 1, 0.0).is_err());
+        request.expanded_motion = false;
+        assert!(request.validate(&profile).is_err());
+        request.expanded_motion = true;
+        request.selected_index = 0;
+        assert!(request.validate(&profile).is_err());
+        request.selected_index = 1;
+        profile.joints[1].default_kp = 200.1;
+        assert!(request.validate(&profile).is_err());
+        profile.joints[1].default_kp = 200.0;
+        profile.joints[1].default_kd = 20.0;
+        request.validate(&profile).unwrap();
+        profile.joints[1].default_kd = 20.1;
+        assert!(request.validate(&profile).is_err());
+    }
+
+    #[test]
+    fn expanded_travel_retains_rate_limits_and_requires_close_tracking() {
+        let profile = profile_with_velocity_limit(0.1);
+        let mut request = CommissioningRequest {
+            selected_index: 5,
+            delta_rad: 0.15,
+            duration_sec: 20.0,
+            expanded_motion: true,
+        };
+        request.validate(&profile).unwrap();
+        request.expanded_motion = false;
+        assert!(request.validate(&profile).is_err());
+        request.expanded_motion = true;
+        request.delta_rad = 0.251;
+        assert!(request.validate(&profile).is_err());
+        request.delta_rad = -0.15;
+        request.duration_sec = 1.0;
+        assert!(request.validate(&profile).is_err());
+        request.duration_sec = 20.0;
+        request.validate(&profile).unwrap();
+        assert!(validate_travel_endpoint(request, -0.148).is_ok());
+        assert!(validate_travel_endpoint(request, -0.14).is_err());
+        assert!(validate_travel_endpoint(request, 0.15).is_err());
+        let start = [0.0; DOF];
+        let mut measured = start;
+        measured[5] = -0.149;
+        validate_travel_feedback(request, &start, &measured, -0.15).unwrap();
+        assert!(validate_travel_feedback(request, &start, &measured, -0.1).is_err());
+        measured[0] = 0.0051;
+        assert!(validate_travel_feedback(request, &start, &measured, -0.15).is_err());
+        measured[0] = f32::NAN;
+        assert!(validate_travel_feedback(request, &start, &measured, -0.15).is_err());
     }
 
     #[test]
@@ -13884,7 +14409,19 @@ mod tests {
         feedback.joints[0].velocity_rev_s = 0.01;
         feedback.joints[0].torque_nm = 0.2;
 
-        let abort = safety_abort_telemetry_sample(&profile, &dynamics, &feedback, 0, 0.0, 0.01);
+        let abort = safety_abort_telemetry_sample(
+            &profile,
+            &dynamics,
+            &feedback,
+            CommissioningRequest {
+                selected_index: 0,
+                delta_rad: 0.01,
+                duration_sec: 2.0,
+                expanded_motion: false,
+            },
+            0.0,
+            0.01,
+        );
 
         assert!(!abort.safe_target_built);
         assert!(abort

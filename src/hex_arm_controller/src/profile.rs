@@ -132,10 +132,21 @@ pub struct ControllerProfile {
     pub discovery_timeout_ms: u64,
     pub feedback_timeout_ms: u64,
     pub command_watchdog_ms: u64,
+    /// Optional arm-specific thermal trip; omitted profiles retain 70 C.
+    #[serde(default)]
+    pub max_measured_temperature_c: Option<f32>,
     /// Enable-time gravity ramp in joint-side Nm/s. Once settled, gravity
     /// follows feedback directly, without a continuous slew limiter.
     #[serde(default)]
     pub gravity_startup_slew_rate_nm_s: Option<f32>,
+    /// Absolute measured-speed trips for hand guiding only, J1..J6.
+    /// Omission retains each joint's ordinary speed limit and feedback margin.
+    #[serde(default)]
+    pub hand_guiding_velocity_limits_rad_s: Option<[f32; 6]>,
+    /// Symmetric measured-position allowance used only in hand guiding.
+    /// Bound below the Meow enable hold tolerance (0.002 rev) including roundoff.
+    #[serde(default)]
+    pub hand_guiding_position_margin_rad: Option<f32>,
     /// Explicitly enabled, bounded pre-disable damping after a verified ready pose.
     #[serde(default)]
     pub shutdown_damping: Option<ShutdownDamping>,
@@ -190,11 +201,85 @@ pub struct JointProfile {
     /// Independent clamp on scaled gravity, before motor-unit conversion.
     #[serde(default)]
     pub gravity_compensation_limit_nm: Option<f32>,
+    /// Optional, empirically identified motion assistance in joint-side Nm.
+    /// Zero at rest; smooth and directional. Requalify if gravity/load changes.
+    #[serde(default)]
+    pub motion_feedforward: Option<MotionFeedforward>,
     pub torque_permille: u16,
     pub kp_kd_torque_permille: u16,
+    /// Per-frame allocation inside the Meow drive's unchanged total ceiling.
+    #[serde(default)]
+    pub meow_torque_budget: MeowTorqueBudget,
     pub limits: JointLimits,
     pub default_kp: f32,
     pub default_kd: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MeowTorqueBudget {
+    pub feedforward_reserve_ratio: f64,
+    pub pd_allocation: MeowPdAllocation,
+}
+
+impl Default for MeowTorqueBudget {
+    fn default() -> Self {
+        Self {
+            feedforward_reserve_ratio: 0.15,
+            pd_allocation: MeowPdAllocation::Fixed,
+        }
+    }
+}
+
+impl MeowTorqueBudget {
+    pub(crate) fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.feedforward_reserve_ratio.is_finite()
+                && (0.0..=1.0).contains(&self.feedforward_reserve_ratio),
+            "Meow feedforward_reserve_ratio must be finite and in [0, 1]"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MeowPdAllocation {
+    /// Reserve the complete configured PD cap; reject an inadequate total.
+    Fixed,
+    /// Grant PD up to its configured cap from the budget left by feed-forward.
+    Remaining,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MotionFeedforward {
+    pub positive_nm: f32,
+    pub negative_nm: f32,
+    pub velocity_scale_rad_s: f32,
+}
+
+impl MotionFeedforward {
+    pub fn validate(&self, limits: &JointLimits) -> Result<()> {
+        anyhow::ensure!(
+            [self.positive_nm, self.negative_nm]
+                .iter()
+                .all(|x| x.is_finite() && (0.0..=limits.torque_nm).contains(x))
+                && self.velocity_scale_rad_s.is_finite()
+                && (0.0001..=limits.velocity_rad_s).contains(&self.velocity_scale_rad_s),
+            "invalid motion feed-forward magnitude or velocity scale"
+        );
+        Ok(())
+    }
+
+    pub fn torque(&self, commanded_velocity: f32) -> f32 {
+        let magnitude = if commanded_velocity >= 0.0 {
+            self.positive_nm
+        } else {
+            self.negative_nm
+        };
+        magnitude * (commanded_velocity / self.velocity_scale_rad_s).tanh()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,6 +303,9 @@ pub struct JointLimits {
     #[serde(default)]
     pub measured_position_margin_rad: f32,
     pub velocity_rad_s: f32,
+    /// Feedback-only allowance; never increases commanded/planned speed.
+    #[serde(default)]
+    pub measured_velocity_margin_rad_s: f32,
     pub acceleration_rad_s2: f32,
     pub torque_nm: f32,
 }
@@ -365,6 +453,26 @@ impl HardwareProfile {
                 "gravity_startup_slew_rate_nm_s must be finite and positive"
             );
         }
+        if let Some(limits) = self.controller.hand_guiding_velocity_limits_rad_s {
+            anyhow::ensure!(
+                limits
+                    .iter()
+                    .all(|limit| limit.is_finite() && *limit > 0.0 && *limit <= 6.0),
+                "hand_guiding_velocity_limits_rad_s must contain six finite positive limits no greater than 6 rad/s"
+            );
+        }
+        if let Some(margin) = self.controller.hand_guiding_position_margin_rad {
+            anyhow::ensure!(
+                margin.is_finite() && (0.0..=0.012).contains(&margin),
+                "hand_guiding_position_margin_rad must be finite and within 0..=0.012 rad"
+            );
+        }
+        if let Some(limit) = self.controller.max_measured_temperature_c {
+            anyhow::ensure!(
+                limit.is_finite() && (40.0..=100.0).contains(&limit),
+                "max_measured_temperature_c must be finite and within 40..100 C"
+            );
+        }
         anyhow::ensure!(
             self.joints.len() == 6,
             "exactly six joint entries are required"
@@ -442,6 +550,11 @@ impl HardwareProfile {
                 "{} Meow protocol requires torque_scale=1; calibrate gravity with gravity_compensation_scale",
                 joint.name
             );
+            if let Some(motion) = &joint.motion_feedforward {
+                motion
+                    .validate(&joint.limits)
+                    .with_context(|| joint.name.clone())?;
+            }
             if let Some(limit) = joint.gravity_compensation_limit_nm {
                 anyhow::ensure!(
                     limit.is_finite() && limit >= 0.0 && limit <= joint.limits.torque_nm,
@@ -457,6 +570,16 @@ impl HardwareProfile {
             anyhow::ensure!(
                 (1..=1000).contains(&joint.kp_kd_torque_permille),
                 "{} kp/kd torque limit is invalid",
+                joint.name
+            );
+            joint
+                .meow_torque_budget
+                .validate()
+                .with_context(|| joint.name.clone())?;
+            anyhow::ensure!(
+                self.bus.protocol == MotorProtocol::Meow
+                    || joint.meow_torque_budget == MeowTorqueBudget::default(),
+                "{} meow_torque_budget overrides require the Meow protocol",
                 joint.name
             );
             anyhow::ensure!(
@@ -483,9 +606,25 @@ impl HardwareProfile {
                 "{} measured position envelope spans a full turn and is ambiguous",
                 joint.name
             );
+            if let Some(margin) = self.controller.hand_guiding_position_margin_rad {
+                anyhow::ensure!(
+                    joint.limits.position_upper_rad - joint.limits.position_lower_rad
+                        + 2.0 * margin
+                        < TAU,
+                    "{} hand-guiding position envelope spans a full turn and is ambiguous",
+                    joint.name
+                );
+            }
             anyhow::ensure!(
                 joint.limits.velocity_rad_s.is_finite() && joint.limits.velocity_rad_s > 0.0,
                 "{} velocity limit is invalid",
+                joint.name
+            );
+            anyhow::ensure!(
+                joint.limits.measured_velocity_margin_rad_s.is_finite()
+                    && (0.0..=0.02).contains(&joint.limits.measured_velocity_margin_rad_s)
+                    && joint.limits.measured_velocity_margin_rad_s <= joint.limits.velocity_rad_s * 0.2,
+                "{} measured velocity margin must be within 0..=0.02 rad/s and at most 20% of command speed",
                 joint.name
             );
             anyhow::ensure!(
@@ -677,6 +816,12 @@ impl ExpectedSocketCanLink {
 }
 
 impl JointProfile {
+    pub fn motion_feedforward_nm(&self, commanded_velocity: f32) -> f32 {
+        self.motion_feedforward
+            .as_ref()
+            .map_or(0.0, |f| f.torque(commanded_velocity))
+    }
+
     pub fn clamp_gravity_feedforward(&self, torque_nm: f32) -> f32 {
         // Preserve non-finite dynamics output for the caller's fault gate.
         match self.gravity_compensation_limit_nm {
@@ -783,7 +928,10 @@ mod tests {
                 discovery_timeout_ms: 1000,
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
+                max_measured_temperature_c: None,
                 gravity_startup_slew_rate_nm_s: None,
+                hand_guiding_velocity_limits_rad_s: None,
+                hand_guiding_position_margin_rad: None,
                 shutdown_damping: None,
             },
             joints: JOINT_NAMES
@@ -798,12 +946,15 @@ mod tests {
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
                     gravity_compensation_limit_nm: None,
+                    motion_feedforward: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
+                    meow_torque_budget: MeowTorqueBudget::default(),
                     limits: JointLimits {
                         position_lower_rad: -1.0,
                         position_upper_rad: 1.0,
                         measured_position_margin_rad: 0.0,
+                        measured_velocity_margin_rad_s: 0.0,
                         velocity_rad_s: 1.0,
                         acceleration_rad_s2: 1.0,
                         torque_nm: 1.0,
@@ -816,6 +967,32 @@ mod tests {
     }
 
     #[test]
+    fn motion_feedforward_is_directional_continuous_zero_at_rest_and_bounded() {
+        let p = valid_profile("unused".into());
+        let mut f = MotionFeedforward {
+            positive_nm: 0.2,
+            negative_nm: 0.8,
+            velocity_scale_rad_s: 0.001,
+        };
+        f.validate(&p.joints[0].limits).unwrap();
+        assert_eq!(f.torque(0.0), 0.0);
+        assert!((f.torque(1.0) - 0.2).abs() < 1e-6);
+        assert!((f.torque(-1.0) + 0.8).abs() < 1e-6);
+        assert!(f.torque(1e-8).abs() < 1e-5);
+        assert!(f.torque(-1e-8).abs() < 1e-5);
+        assert!(f.torque(f32::NAN).is_nan());
+        for value in [-0.1, 1.01, f32::NAN, f32::INFINITY] {
+            f.negative_nm = value;
+            assert!(f.validate(&p.joints[0].limits).is_err());
+        }
+        f.negative_nm = 0.8;
+        for value in [0.0, -0.001, 2.0, f32::NAN] {
+            f.velocity_scale_rad_s = value;
+            assert!(f.validate(&p.joints[0].limits).is_err());
+        }
+    }
+
+    #[test]
     fn rejects_duplicate_nodes_and_unvalidated_profile() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut profile = valid_profile(file.path().display().to_string());
@@ -824,6 +1001,89 @@ mod tests {
         profile.joints[1].node_id = 2;
         profile.validated = false;
         assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn hand_guiding_position_margin_is_optional_finite_and_bounded() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        assert!(profile
+            .controller
+            .hand_guiding_position_margin_rad
+            .is_none());
+        profile.validate().unwrap();
+        for margin in [0.0, 0.01, 0.012] {
+            profile.controller.hand_guiding_position_margin_rad = Some(margin);
+            profile.validate().unwrap();
+        }
+        for margin in [-0.001, 0.01201, f32::NAN, f32::INFINITY] {
+            profile.controller.hand_guiding_position_margin_rad = Some(margin);
+            assert!(profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("hand_guiding_position_margin_rad"));
+        }
+        profile.controller.hand_guiding_position_margin_rad = Some(0.012);
+        profile.joints[0].limits.position_lower_rad = -3.13;
+        profile.joints[0].limits.position_upper_rad = 3.13;
+        assert!(profile
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("hand-guiding position envelope spans a full turn"));
+    }
+
+    #[test]
+    fn hand_guiding_speed_limits_are_optional_positive_and_bounded() {
+        let yaml = include_str!("../test/firefly_y6.mock.yaml");
+        let legacy: HardwareProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(legacy
+            .controller
+            .hand_guiding_velocity_limits_rad_s
+            .is_none());
+        for value in ["[]", "[2, 2, 2, 2, 2]", "[2, 2, 2, 2, 2, 2, 2]"] {
+            let malformed = yaml.replacen(
+                "controller:\n",
+                &format!("controller:\n  hand_guiding_velocity_limits_rad_s: {value}\n"),
+                1,
+            );
+            assert!(serde_yaml::from_str::<HardwareProfile>(&malformed).is_err());
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        assert!(profile
+            .controller
+            .hand_guiding_velocity_limits_rad_s
+            .is_none());
+        profile.validate().unwrap();
+        profile.controller.hand_guiding_velocity_limits_rad_s = Some([2.0; 6]);
+        profile.validate().unwrap();
+        for index in 0..6 {
+            for invalid in [0.0, -1.0, 6.01, f32::NAN, f32::INFINITY] {
+                let mut limits = [2.0; 6];
+                limits[index] = invalid;
+                profile.controller.hand_guiding_velocity_limits_rad_s = Some(limits);
+                assert!(profile
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("hand_guiding_velocity_limits_rad_s"));
+            }
+        }
+    }
+
+    #[test]
+    fn temperature_override_is_optional_finite_and_bounded() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        assert!(profile.validate().is_ok());
+        profile.controller.max_measured_temperature_c = Some(85.0);
+        assert!(profile.validate().is_ok());
+        for value in [39.9, 100.1, f32::NAN, f32::INFINITY] {
+            profile.controller.max_measured_temperature_c = Some(value);
+            assert!(profile.validate().is_err());
+        }
     }
 
     #[test]
@@ -884,6 +1144,33 @@ mod tests {
             let error = profile.validate().unwrap_err().to_string();
             assert!(error.contains("joint_1 acceleration limit is invalid"));
         }
+    }
+
+    #[test]
+    fn measured_velocity_margin_defaults_to_zero_and_is_bounded() {
+        let parsed: HardwareProfile =
+            serde_yaml::from_str(include_str!("../test/firefly_y6.mock.yaml")).unwrap();
+        assert_eq!(parsed.joints[0].limits.measured_velocity_margin_rad_s, 0.0);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        profile.joints[0].limits.velocity_rad_s = 0.1;
+        profile.joints[0].limits.measured_velocity_margin_rad_s = 0.02;
+        profile.validate().unwrap();
+        for value in [-0.001, 0.021, f32::NAN, f32::INFINITY] {
+            profile.joints[0].limits.measured_velocity_margin_rad_s = value;
+            assert!(profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("measured velocity margin"));
+        }
+        profile.joints[0].limits.velocity_rad_s = 0.05;
+        profile.joints[0].limits.measured_velocity_margin_rad_s = 0.02;
+        assert!(profile
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("measured velocity margin"));
     }
 
     #[test]
@@ -1030,6 +1317,36 @@ default_kd: 0.3
             joint.clamp_gravity_feedforward(f32::INFINITY),
             f32::INFINITY
         );
+    }
+
+    #[test]
+    fn meow_budget_defaults_are_backwards_compatible_and_overrides_are_explicit() {
+        let profile: HardwareProfile = serde_yaml::from_str(include_str!(
+            "../../../config/hardware/firefly_y6.meow_mit.example.yaml"
+        ))
+        .unwrap();
+        assert!(profile
+            .joints
+            .iter()
+            .all(|joint| joint.meow_torque_budget == MeowTorqueBudget::default()));
+        let budget: MeowTorqueBudget =
+            serde_yaml::from_str("feedforward_reserve_ratio: 0.0\npd_allocation: remaining\n")
+                .unwrap();
+        assert_eq!(budget.feedforward_reserve_ratio, 0.0);
+        assert_eq!(budget.pd_allocation, MeowPdAllocation::Remaining);
+        budget.validate().unwrap();
+        let partial: MeowTorqueBudget = serde_yaml::from_str("pd_allocation: remaining\n").unwrap();
+        assert_eq!(partial.feedforward_reserve_ratio, 0.15);
+        assert!(serde_yaml::from_str::<MeowTorqueBudget>("pd_allocation: unchecked\n").is_err());
+        assert!(serde_yaml::from_str::<MeowTorqueBudget>("reserve_ratio: 0.0\n").is_err());
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut profile = valid_profile(file.path().display().to_string());
+        profile.joints[0].meow_torque_budget = budget;
+        assert!(profile
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("Meow protocol"));
     }
 
     #[test]

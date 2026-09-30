@@ -12,6 +12,11 @@ export PYTHONDONTWRITEBYTECODE=1
 case "${level}" in
   unit|legacy)
     python3 scripts/test-shutdown-ack.py
+    python3 scripts/test-read-cia402-state.py
+    python3 scripts/test-calibrate-zero.py
+    python3 scripts/test-commission-cia402.py
+    python3 scripts/test-check-joint-direction.py
+    python3 scripts/test-prepare-moveit-profile.py
     cargo_features=()
     if [[ "${level}" == legacy ]]; then
       cargo_features=(--features legacy)

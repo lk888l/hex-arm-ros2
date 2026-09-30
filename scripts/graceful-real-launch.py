@@ -16,11 +16,28 @@ import yaml
 def eligible(profile, startup_report):
     try:
         report = json.loads(Path(startup_report).read_text())
-        return (profile.get("controller", {}).get("shutdown_damping") is not None
+        qualified_stop = (profile.get("controller", {}).get("shutdown_damping") is not None
+                          or (profile.get("bus", {}).get("protocol") == "meow"
+                              and bool(report.get("steps")))
+                          or (profile.get("bus", {}).get("protocol") == "cia402"
+                              and "sequence" in report and "measured_hold" in report))
+        return (qualified_stop
                 and report.get("passed") is True and "ready_hold" in report
                 and not report.get("deactivated", False))
     except (OSError, ValueError):
         return False
+
+
+def stop_command(profile, profile_path, startup_report, output):
+    folded_meow = (profile.get("bus", {}).get("protocol") == "meow"
+                   and profile.get("controller", {}).get("shutdown_damping") is None)
+    script = "commission-meow-ros.py" if folded_meow else "commission-shutdown-ros.py"
+    command = [sys.executable, str(Path(__file__).with_name(script)),
+               "--profile", str(profile_path), "--startup-report", str(startup_report),
+               "--output", str(output)]
+    if folded_meow:
+        command.append("--allow-motion")
+    return command
 
 
 def signal_group(process, sig):
@@ -86,12 +103,10 @@ def main():
         # TERM/HUP and the second interrupt retain the immediate disable path.
         if (len(signals) == 1 and signals[0] == signal.SIGINT
                 and args.scope == "moveit" and eligible(profile, startup_report)):
-            print("graceful exit: returning to startup_ready, then damping; second Ctrl+C disables immediately", flush=True)
-            helper = subprocess.Popen([
-                sys.executable, str(Path(__file__).with_name("commission-shutdown-ros.py")),
-                "--profile", str(args.profile), "--startup-report", str(startup_report),
-                "--output", str(run_dir / "soft-stop.json"),
-            ], env=env, start_new_session=True)
+            print("graceful exit: returning through the verified startup pose and stop sequence; second Ctrl+C disables immediately", flush=True)
+            helper = subprocess.Popen(stop_command(
+                profile, args.profile, startup_report, run_dir / "soft-stop.json"),
+                env=env, start_new_session=True)
             deadline = time.monotonic() + 120
             while (helper.poll() is None and launch.poll() is None and len(signals) == 1
                    and time.monotonic() < deadline):

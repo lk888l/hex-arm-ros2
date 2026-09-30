@@ -1,0 +1,6 @@
+# Real deployment derives all six dynamic limits from the explicit hardware
+# profile, intersecting velocity with the URDF. No commissioning cap is applied.
+# Units: joint-side rad/s and rad/s^2; request scaling is dimensionless.
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 1.0
+joint_limits: {}

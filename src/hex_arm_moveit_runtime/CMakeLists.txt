@@ -7,6 +7,7 @@ find_package(moveit_ros_move_group REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 
 # The destructor interposer uses pointers to private fields from the installed
@@ -32,6 +33,7 @@ ament_target_dependencies(hex_arm_move_group
   moveit_ros_planning
   pluginlib
   rclcpp
+  std_msgs
   tf2_ros)
 
 add_library(hex_arm_moveit_tem_shutdown SHARED src/tem_shutdown_interpose.cpp)

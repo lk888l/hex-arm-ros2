@@ -2,7 +2,7 @@
 <package format="3">
   <name>hex_arm_moveit_runtime</name>
   <version>0.1.0</version>
-  <description>Ordered-shutdown MoveIt runtime compatibility for ROS 2 Jazzy.</description>
+  <description>Startup-gated and ordered-shutdown MoveIt runtime for ROS 2 Jazzy.</description>
   <maintainer email="kisonhe@icloud.com">HEX arm maintainers</maintainer>
   <license>BSD-3-Clause</license>
 
@@ -12,6 +12,7 @@
   <depend>moveit_ros_planning</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
   <depend>tf2_ros</depend>
 
   <export><build_type>ament_cmake</build_type></export>

@@ -13,7 +13,7 @@ use std::{fmt, path::PathBuf, sync::Arc};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(about = "Firefly Y6 Meow / SocketCAN production driver")]
+#[command(about = "Firefly Y6 Meow / CiA402 production driver")]
 struct Arguments {
     #[arg(long)]
     profile: PathBuf,

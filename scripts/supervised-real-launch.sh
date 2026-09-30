@@ -549,17 +549,6 @@ for line in text.splitlines():
     if match and int(match.group(1)) not in (-2, -15, 130):
         unexpected_process_deaths.append(line.strip())
 
-# A verified controller shutdown proves the drives were made safe, but it must
-# not hide an independent ROS/MoveIt crash.  In particular, MoveIt 2.12.4 can
-# otherwise report a CallbackGroup teardown SIGSEGV while this supervisor exits
-# successfully because the Rust controller completed its own shutdown first.
-if "Segmentation fault" in text or unexpected_process_deaths:
-    details = "; ".join(unexpected_process_deaths[:3])
-    raise SystemExit(
-        "error: a supervised ROS child crashed during shutdown"
-        + (f": {details}" if details else " (segmentation fault in launch log)")
-    )
-
 if sys.argv[3] != "startup":
     try:
         report = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
@@ -594,10 +583,21 @@ else:
     raise SystemExit(
         "error: controller never started; no real-controller shutdown claim can be made"
     )
+
+# Verify physical disable independently before reporting a ROS failure. A
+# startup helper failure also triggers teardown; it is not a shutdown crash.
+# Keep the run unsuccessful even when the controller's disable receipt passes.
+if "Segmentation fault" in text or unexpected_process_deaths:
+    details = "; ".join(unexpected_process_deaths[:3])
+    startup_failure = re.search(r"controller startup (?:report verification )?failed", text)
+    reason = ("controller startup verification failed; final drive disable was verified"
+              if startup_failure else "a supervised ROS child failed; final drive disable was verified")
+    raise SystemExit("error: " + reason
+                     + (f": {details}" if details else " (segmentation fault in launch log)"))
 PY
 
 if (( tee_status != 0 || verification_status != 0 )); then
-  echo "error: supervised real launch did not produce a verified clean shutdown" >&2
+  echo "error: supervised real launch verification failed; inspect the result above" >&2
   echo "error: retained audit log: ${log_path}" >&2
   exit 1
 fi

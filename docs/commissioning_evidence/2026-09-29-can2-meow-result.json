@@ -1,0 +1,6182 @@
+{
+  "date": "2026-09-29",
+  "reference_commit": "86c197f07c0d14a49b0020d2978be9000a540c4e",
+  "protocol": "meow",
+  "interface": "can2",
+  "profile": "config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+  "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+  "zeros_unchanged": true,
+  "kp": [
+    100.0,
+    100.0,
+    150.0,
+    110.0,
+    80.0,
+    80.0
+  ],
+  "kd": [
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0
+  ],
+  "gravity_scales": [
+    0.0,
+    1.0,
+    1.05,
+    0.7,
+    0.0,
+    0.0
+  ],
+  "manual_motion_feedforward": [
+    null,
+    {
+      "positive_nm": 0.0,
+      "negative_nm": 0.8,
+      "velocity_scale_rad_s": 0.001
+    },
+    {
+      "positive_nm": 0.8,
+      "negative_nm": 0.0,
+      "velocity_scale_rad_s": 0.001
+    },
+    null,
+    null,
+    null
+  ],
+  "measured_velocity_margins_rad_s": [
+    0,
+    0.02,
+    0,
+    0.02,
+    0,
+    0
+  ],
+  "windows": [
+    [
+      -0.04,
+      0.01
+    ],
+    [
+      -1.572,
+      -1.33
+    ],
+    [
+      1.41,
+      1.571
+    ],
+    [
+      -0.32,
+      0.02
+    ],
+    [
+      -0.03,
+      0.045
+    ],
+    [
+      -0.25,
+      0.02
+    ]
+  ],
+  "real_controller_position_tolerance_rad": {
+    "trajectory": 0.04,
+    "goal": 0.01
+  },
+  "trials": [
+    {
+      "trial": 1,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-01-audit",
+      "startup": {
+        "time": "2026-09-29T10:00:57.354957+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "4ee0c04c69b215f3cbdcfdcfd308eccc8383deafd071e4296bbca7bab5205a0d",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 112222.659062957,
+            "duration_sec": 6,
+            "initial": [
+              -0.03086012974381447,
+              -1.5681577920913696,
+              1.5658568143844604,
+              0.01018191035836935,
+              0.00801519863307476,
+              -0.1277904212474823
+            ],
+            "target": [
+              0.0,
+              -1.5681577920913696,
+              1.5658568143844604,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.005777520127594471,
+              -1.5681053400039673,
+              1.5651947259902954,
+              0.002301158383488655,
+              0.001744828186929226,
+              -0.0004505319520831108
+            ],
+            "status": 6,
+            "error_code": -5,
+            "message": "Aborted due to goal_time_tolerance exceeding by 1.010000 seconds",
+            "max_tracking_error_rad": [
+              0.0054388386737740935,
+              0.0019769556289077617,
+              0.0042111534513926685,
+              0.002377640971878092,
+              0.001538759701288965,
+              0.002318913677351535
+            ]
+          }
+        ],
+        "measured_hold": {
+          "seconds": 3.0,
+          "reference_q": [
+            -0.03086012974381447,
+            -1.5701347589492798,
+            1.5700663328170776,
+            0.011399432085454464,
+            0.008063135668635368,
+            -0.1277904212474823
+          ],
+          "q": [
+            -0.03086012974381447,
+            -1.5681577920913696,
+            1.5658636093139648,
+            0.010153072886168957,
+            0.00801519863307476,
+            -0.1277904212474823
+          ],
+          "samples": 319,
+          "max_error_rad": [
+            0.0,
+            0.0019769668579101562,
+            0.004202723503112793,
+            0.001620117574930191,
+            4.793703556060791e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.01909985952079296,
+          "post_controller_max_error_rad": 0.0042095184326171875,
+          "post_controller_max_velocity_rad_s": 0.004681338090449572
+        },
+        "passed": false,
+        "error": "fixed startup FJT failed: {'step': 'align_folded', 'started_at': 112222.659062957, 'duration_sec': 6, 'initial': [-0.03086012974381447, -1.5681577920913696, 1.5658568143844604, 0.01018191035836935, 0.00801519863307476, -0.1277904212474823], 'target': [0.0, -1.5681577920913696, 1.5658568143844604, 0.0, 0.0, 0.0], 'actual': [-0.005777520127594471, -1.5681053400039673, 1.5651947259902954, 0.002301158383488655, 0.001744828186929226, -0.0004505319520831108], 'status': 6, 'error_code': -5, 'message': 'Aborted due to goal_time_tolerance exceeding by 1.010000 seconds', 'max_tracking_error_rad': [0.0054388386737740935, 0.0019769556289077617, 0.0042111534513926685, 0.002377640971878092, 0.001538759701288965, 0.002318913677351535]}",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.03651443496346474,
+        0.010298943147063255,
+        0.009175422601401806,
+        0.01909985952079296,
+        0.014418520964682102,
+        0.07101763039827347
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 53434,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790676071163
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-01.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0028210878372192383,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.006074503998902612
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2513166069984436,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699131143694363
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25355279445648193,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5698996321164176
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.001026928424835205,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.00972164069392808
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.001910388469696045,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.002876213977285578
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -3.355741500854492e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004891061789498651
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 2,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-02-audit",
+      "startup": {
+        "time": "2026-09-29T10:05:18.183461+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "774f136659c8f28eca515e3a4855c0750c8ff27edd4dc767bf72fbc0e4cd5371",
+        "steps": [],
+        "passed": false,
+        "error": "measured-pose hold exceeded 0.005 rad or the stationary velocity limit",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.0,
+        0.0011235211277380586,
+        0.057112324982881546,
+        0.1245235875248909,
+        0.0,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 53736,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790676320010
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-02.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0028472542762756348,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.006238912584322971
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132501125335693,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699659198604257
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25356727838516235,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5699906373242927
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00102996826171875,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.009740740552370992
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.00193023681640625,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.00275150313686421
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -3.355741500854492e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004891061789498651
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 3,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-03-audit",
+      "startup": {
+        "time": "2026-09-29T10:09:28.097286+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "774f136659c8f28eca515e3a4855c0750c8ff27edd4dc767bf72fbc0e4cd5371",
+        "steps": [],
+        "passed": false,
+        "error": "measured-pose hold exceeded its bounded startup/stationary velocity limit",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.004681338090449572,
+        0.009101943112909794,
+        0.007864647544920444,
+        0.029012443497776985,
+        0.0,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 54045,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790676570913
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-03.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.002848684787750244,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.006247900753001991
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25131916999816895,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699292181716529
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535523772239685,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5698970105672196
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0007995963096618652,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.008293270888020893
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0019164681434631348,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0028380142603997537
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -3.355741500854492e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004891061789498651
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 4,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-04-audit",
+      "startup_report_missing": true,
+      "startup_log": ".tmp-meow-upgrade/ros-startup-04.log",
+      "failure_log_excerpt": [
+        "[ros2_control_node-6] [ERROR] [1790676692.923095182] [hex_arm_system_io_0]: deactivate rejected: deactivation failed: DISABLED mode request rejected: controller is shutting down and session release request returned no response",
+        "[hex_arm_bridge-2] [ERROR] [1790676692.934572408] [hex_arm_bridge]: destroy release failed: DISABLED mode request returned no response and session release request returned no response",
+        "[ros2_control_node-6] [ERROR] [1790676692.943355822] [hex_arm_system_io_0]: error stop service disappeared while waiting",
+        "[ros2_control_node-6] [ERROR] [1790676692.943380498] [resource_manager]: Failed to 'deactivate' hardware 'FireflyY6System'",
+        "[ros2_control_node-6] [ERROR] [1790676692.943451002] [controller_manager]: Failed shutting down hardware components.",
+        "[ros2_control_node-6] [ERROR] [1790676692.943539218] [controller_manager.pal_statistics]: Exception in publisher thread: context cannot be slept with because it's invalid!. Aborting!",
+        "[ros2_control_node-6] [ERROR] [1790676692.943539188] [controller_manager.pal_statistics]: Exception in publisher thread: context cannot be slept with because it's invalid!. Aborting!",
+        "error: a supervised ROS child crashed during shutdown: [ERROR] [python3-7]: process has died [pid 54504, exit code -6, cmd '/usr/bin/python3 /workspaces/hex_arm_ros2/install/hex_arm_bringup/lib/hex_arm_bringup/commission-startup-ros.py --profile /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml --allow-motion --activate-controllers --allow-enable-transient --align-folded --output /tmp/hex-arm-real-launch.can2.QXFTBc/hex-arm-exit-qe34tx9d/startup-ready.json']."
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 54355,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790676692954
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-04.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0027698278427124023,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.005752427954571156
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25131773948669434,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.569920230002974
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25355350971221924,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5699041262007571
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.001063525676727295,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.009951588009299609
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0019622445106506348,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.002550392862671195
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.7418136596679688e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004505319550357486
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 5,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-05-audit",
+      "startup": {
+        "time": "2026-09-29T10:13:23.017374+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "774f136659c8f28eca515e3a4855c0750c8ff27edd4dc767bf72fbc0e4cd5371",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 112969.430566494,
+            "duration_sec": 3,
+            "initial": [
+              -0.005900734104216099,
+              -1.5681488513946533,
+              1.565781593322754,
+              0.008705228567123413,
+              0.0025694919750094414,
+              -0.0004505319520831108
+            ],
+            "target": [
+              0.0,
+              -1.5681488513946533,
+              1.565781593322754,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.004958099685609341,
+              -1.5681030750274658,
+              1.5653157234191895,
+              0.002186184749007225,
+              0.001466943882405758,
+              -0.000431432097684592
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.004985165192163125,
+              0.0017712516338945772,
+              0.0041233232966404465,
+              0.0024297403493790774,
+              0.0014922360637545443,
+              0.0004347781336371374
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 112972.739538627,
+            "duration_sec": 8.0,
+            "initial": [
+              -0.004958099685609341,
+              -1.5681030750274658,
+              1.5653157234191895,
+              0.002186184749007225,
+              0.001466943882405758,
+              -0.000431432097684592
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565781593322754,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.0002512950450181961,
+              -1.3549962043762207,
+              1.564822793006897,
+              0.002368195215240121,
+              0.0017066281288862228,
+              -0.00042206942453049123
+            ],
+            "status": 6,
+            "error_code": -5,
+            "message": "Aborted due to goal_time_tolerance exceeding by 1.000004 seconds",
+            "max_tracking_error_rad": [
+              0.004958099685609341,
+              0.011317300066109537,
+              0.0009565353393554688,
+              0.002186184749007225,
+              0.001466943882405758,
+              0.000431432097684592
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 112964.749800065,
+          "seconds": 3.0,
+          "reference_q": [
+            -0.005759543739259243,
+            -1.5699201822280884,
+            1.569904088973999,
+            0.00995158776640892,
+            0.0025597549974918365,
+            -0.0004505319520831108
+          ],
+          "q": [
+            -0.005900734104216099,
+            -1.5681509971618652,
+            1.5657882690429688,
+            0.008695865981280804,
+            0.0025694919750094414,
+            -0.0004505319520831108
+          ],
+          "samples": 315,
+          "max_error_rad": [
+            0.00014119036495685577,
+            0.0017691850662231445,
+            0.0041158199310302734,
+            0.002061286009848118,
+            9.736977517604828e-06,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.11010506749153137,
+          "settled_max_error_rad": [
+            0.00014119036495685577,
+            0.0017691850662231445,
+            0.0041158199310302734,
+            0.0012557217851281166,
+            9.736977517604828e-06,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0,
+          "post_controller_max_error_rad": 0.004122495651245117,
+          "post_controller_max_velocity_rad_s": 0.004681338090449572
+        },
+        "passed": false,
+        "error": "fixed startup FJT failed: {'step': 'startup_j2', 'started_at': 112972.739538627, 'duration_sec': 8.0, 'initial': [-0.004958099685609341, -1.5681030750274658, 1.5653157234191895, 0.002186184749007225, 0.001466943882405758, -0.000431432097684592], 'target': [0.0, -1.35, 1.565781593322754, 0.0, 0.0, 0.0], 'actual': [-0.0002512950450181961, -1.3549962043762207, 1.564822793006897, 0.002368195215240121, 0.0017066281288862228, -0.00042206942453049123], 'status': 6, 'error_code': -5, 'message': 'Aborted due to goal_time_tolerance exceeding by 1.000004 seconds', 'max_tracking_error_rad': [0.004958099685609341, 0.011317300066109537, 0.0009565353393554688, 0.002186184749007225, 0.001466943882405758, 0.000431432097684592]}",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.023134106770157814,
+        0.07622877508401871,
+        0.03384433686733246,
+        0.11010506749153137,
+        0.014601033180952072,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 54674,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790676823830
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-05.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0018960833549499512,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.00026252942683296747
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25134462118148804,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5700891326727338
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535538673400879,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.569906373242927
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.001179516315460205,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.010680378686356606
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0018355846405029297,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0033462202977925307
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.8967857360839844e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004602691377713508
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 6,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-06-audit",
+      "startup": {
+        "time": "2026-09-29T10:15:00.980971+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "af56e1b48e4ecb8db496895e1ce5d08c007a17bee907633c2fb3da081c5194cf",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 113066.498537916,
+            "duration_sec": 3,
+            "initial": [
+              -0.0002419324591755867,
+              -1.5681443214416504,
+              1.5655875205993652,
+              0.009434019215404987,
+              0.0032694460824131966,
+              -0.0004602691624313593
+            ],
+            "target": [
+              0.0,
+              -1.5681443214416504,
+              1.5655875205993652,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00022395607084035873,
+              -1.5680619478225708,
+              1.5650759935379028,
+              0.0021573477424681187,
+              0.0015148809179663658,
+              -0.000431432097684592
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00023069688864813713,
+              0.001944693417455845,
+              0.004319473135008023,
+              0.002481244290176033,
+              0.0015536861217644582,
+              0.0004411691400630553
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 113069.858313217,
+            "duration_sec": 8.0,
+            "initial": [
+              -0.00022395607084035873,
+              -1.5680619478225708,
+              1.5650759935379028,
+              0.0021573477424681187,
+              0.0015148809179663658,
+              -0.000431432097684592
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5655875205993652,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00020785164088010788,
+              -1.3543022871017456,
+              1.564854621887207,
+              0.0020423741079866886,
+              0.0014860434457659721,
+              -0.00042206942453049123
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00022395607084035873,
+              0.004505190355074795,
+              0.0007328987121582031,
+              0.0021573477424681187,
+              0.0015148809179663658,
+              0.000431432097684592
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 113078.168482683,
+            "duration_sec": 10.0,
+            "initial": [
+              -0.00020785164088010788,
+              -1.3543022871017456,
+              1.564854621887207,
+              0.0020423741079866886,
+              0.0014860434457659721,
+              -0.00042206942453049123
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5655875205993652,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00017826631665229797,
+              -1.3542472124099731,
+              1.5648341178894043,
+              -0.2976497709751129,
+              0.0014287438243627548,
+              -0.00042206942453049123
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00020785164088010788,
+              0.004300022125244052,
+              0.0007512569427490234,
+              0.003783973241608729,
+              0.0014860434457659721,
+              0.00042206942453049123
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 113088.478443558,
+            "duration_sec": 6.0,
+            "initial": [
+              -0.00017826631665229797,
+              -1.3542472124099731,
+              1.5648341178894043,
+              -0.2976497709751129,
+              0.0014287438243627548,
+              -0.00042206942453049123
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00017826631665229797,
+              -1.3542405366897583,
+              1.4296998977661133,
+              -0.29806211590766907,
+              0.0014287438243627548,
+              -0.00042206942453049123
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.0001850072294473648,
+              0.004247212409973056,
+              0.0025568378746938514,
+              0.002350229024887074,
+              0.0014287438243627548,
+              0.00042206942453049123
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 113061.818510456,
+          "seconds": 3.0,
+          "reference_q": [
+            -0.0002602832391858101,
+            -1.5700891017913818,
+            1.5699063539505005,
+            0.01068037934601307,
+            0.0033462196588516235,
+            -0.0004602691624313593
+          ],
+          "q": [
+            -0.0002468004822731018,
+            -1.5681465864181519,
+            1.565603256225586,
+            0.009434019215404987,
+            0.003278808668255806,
+            -0.0004602691624313593
+          ],
+          "samples": 315,
+          "max_error_rad": [
+            1.3482756912708282e-05,
+            0.0019425153732299805,
+            0.004303097724914551,
+            0.002377745695412159,
+            6.741099059581757e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.05467802658677101,
+          "settled_max_error_rad": [
+            1.3482756912708282e-05,
+            0.0019425153732299805,
+            0.0043097734451293945,
+            0.0012463601306080818,
+            6.741099059581757e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0011235211277380586,
+          "post_controller_max_error_rad": 0.004318833351135254,
+          "post_controller_max_velocity_rad_s": 0.002404242753982544
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            -0.0001711500808596611,
+            -1.3542405366897583,
+            1.429659128189087,
+            -0.29806211590766907,
+            0.0014287438243627548,
+            -0.00042206942453049123
+          ],
+          "max_error_rad": [
+            0.00017826631665229797,
+            0.004240536689758212,
+            0.00034087181091302377,
+            0.0019378840923309215,
+            0.0014287438243627548,
+            0.00042206942453049123
+          ],
+          "max_velocity_rad_s": 0.0011377428891137242
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.005878338124603033,
+        0.07433965057134628,
+        0.06497696787118912,
+        0.09833209961652756,
+        0.00954992976039648,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 54981,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790677004259
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-06.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0019338726997375488,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004999668827703439
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2513304352760315,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.57
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535247802734375,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5697236138131203
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 7.325410842895508e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.003729528241249794
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0034241080284118652,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.036393843995398155
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.8967857360839844e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004602691377713508
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "af56e1b48e4ecb8db496895e1ce5d08c007a17bee907633c2fb3da081c5194cf",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.zb0cyO/hex-arm-exit-halodi1b/startup-ready.json",
+        "moveit": [],
+        "error": "shutdown feedback stale",
+        "deactivated": true,
+        "steps": [],
+        "fixed_return_path_samples": 0
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 7,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-07-audit",
+      "startup": {
+        "time": "2026-09-29T10:18:00.905597+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "af56e1b48e4ecb8db496895e1ce5d08c007a17bee907633c2fb3da081c5194cf",
+        "steps": [],
+        "passed": false,
+        "error": "trajectory exceeds joint_5 profile authority: 0.036393843591213226",
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 55457,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790677082721
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-07.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0019208192825317383,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.00041794984357431016
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2513304352760315,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.57
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535254955291748,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5697281078974599
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 7.933378219604492e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.003767727958135618
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0034241080284118652,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.036393843995398155
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.8967857360839844e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004602691377713508
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 8,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-08-audit",
+      "startup_report_missing": true,
+      "startup_log": ".tmp-meow-upgrade/ros-startup-08.log",
+      "failure_log_excerpt": [
+        "[ros2_control_node-6] [ERROR] [1790677214.699689566] [controller_manager]: Error while attempting mode switch when deactivating controllers in read cycle!",
+        "[ros2_control_node-6] terminate called without an active exception",
+        "[ERROR] [ros2_control_node-6]: process has died [pid 55980, exit code -11, cmd '/opt/ros/jazzy/lib/controller_manager/ros2_control_node --ros-args --params-file /tmp/launch_params_i89sywyc --params-file /workspaces/hex_arm_ros2/install/hex_arm_bringup/share/hex_arm_bringup/config/controllers.yaml --params-file /workspaces/hex_arm_ros2/install/hex_arm_bringup/share/hex_arm_bringup/config/controllers_real.yaml --params-file /tmp/launch_params_b3twwrdi'].",
+        "[INFO] [launch.user]: ERROR: critical process ros2_control_node exited with code -11",
+        "[python3-7]     raise RuntimeError(f\"fixed startup FJT failed: {record}\")",
+        "[python3-7] RuntimeError: fixed startup FJT failed: {'step': 'startup_j4', 'started_at': 113369.083559699, 'duration_sec': 10.0, 'initial': [-0.0001370701938867569, -1.3542449474334717, 1.564749836921692, 0.0018506264314055443, 0.0017066281288862228, -0.00042206942453049123], 'target': [0.0, -1.35, 1.5653362274169922, -0.3, 0.0, 0.0], 'actual': [-0.00010299030691385269, -1.4685587882995605, 1.5699337720870972, 0.009577830322086811, 0.0041416725143790245, -0.0003741325344890356], 'status': 6, 'error_code': -1, 'message': 'Current goal cancelled during deactivate transition.', 'max_tracking_error_rad': [0.0001370701938867569, 0.004242682456970126, 0.0005935430526733398, 0.00814362756849954, 0.0017066281288862228, 0.00042206942453049123]}",
+        "[ERROR] [python3-7]: process has died [pid 55981, exit code -2, cmd '/usr/bin/python3 /workspaces/hex_arm_ros2/install/hex_arm_bringup/lib/hex_arm_bringup/commission-startup-ros.py --profile /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml --allow-motion --activate-controllers --allow-enable-transient --align-folded --output /tmp/hex-arm-real-launch.can2.1Oc4qV/hex-arm-exit-br3byh3_/startup-ready.json'].",
+        "error: a supervised ROS child crashed during shutdown: [ERROR] [ros2_control_node-6]: process has died [pid 55980, exit code -11, cmd '/opt/ros/jazzy/lib/controller_manager/ros2_control_node --ros-args --params-file /tmp/launch_params_i89sywyc --params-file /workspaces/hex_arm_ros2/install/hex_arm_bringup/share/hex_arm_bringup/config/controllers.yaml --params-file /workspaces/hex_arm_ros2/install/hex_arm_bringup/share/hex_arm_bringup/config/controllers_real.yaml --params-file /tmp/launch_params_b3twwrdi']."
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 55832,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790677215676
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-08.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0018830299377441406,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0001805123876369337
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132864713668823,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699887647891515
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535582184791565,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5699337122559922
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00060272216796875,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0070562741735711206
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0018829107284545898,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0030488617173283702
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -1.6748905181884766e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0003834951969714103
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 9,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-09-audit",
+      "startup": {
+        "time": "2026-09-29T11:18:07.538798+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "cd190599b1b2342d0dd61736fdd1823c234a38ad658f602aad01be2244375c10",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 116853.09354209,
+            "duration_sec": 3,
+            "initial": [
+              1.8349848687648773e-05,
+              -1.5680301189422607,
+              1.5660302639007568,
+              0.006442831829190254,
+              0.0031447354704141617,
+              -0.00047000631457194686
+            ],
+            "target": [
+              0.0,
+              -1.5680301189422607,
+              1.5660302639007568,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              3.4079886972904205e-05,
+              -1.5676623582839966,
+              1.565642237663269,
+              0.002138247713446617,
+              0.0014572059735655785,
+              -0.0003834952076431364
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.8427128309493364e-05,
+              0.0019401639285303585,
+              0.003935161787388841,
+              0.0024198482867269517,
+              0.0014832035156703074,
+              0.00039058315014260767
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 116856.40344431,
+            "duration_sec": 8.0,
+            "initial": [
+              3.4079886972904205e-05,
+              -1.5676623582839966,
+              1.565642237663269,
+              0.002138247713446617,
+              0.0014572059735655785,
+              -0.0003834952076431364
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660302639007568,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              2.7338042855262756e-05,
+              -1.4952524900436401,
+              1.565110445022583,
+              0.0020135371014475822,
+              0.001466943882405758,
+              -0.0003741325344890356
+            ],
+            "status": 6,
+            "error_code": -4,
+            "message": "Aborted due to path tolerance violation",
+            "max_tracking_error_rad": [
+              3.4079886972904205e-05,
+              0.019079171934814454,
+              0.0009108781814575195,
+              0.002138247713446617,
+              0.0014572059735655785,
+              0.0003834952076431364
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 116848.383640123,
+          "seconds": 3.0,
+          "reference_q": [
+            1.5729106962680817e-05,
+            -1.5699703693389893,
+            1.5699633359909058,
+            0.007353632710874081,
+            0.0031735720112919807,
+            -0.00047000631457194686
+          ],
+          "q": [
+            1.8349848687648773e-05,
+            -1.5680301189422607,
+            1.5660463571548462,
+            0.006442831829190254,
+            0.0031447354704141617,
+            -0.00047000631457194686
+          ],
+          "samples": 318,
+          "max_error_rad": [
+            2.6207417249679565e-06,
+            0.0019402503967285156,
+            0.00391697883605957,
+            0.0010355114936828613,
+            2.883654087781906e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.01142246462404728,
+          "settled_max_error_rad": [
+            2.6207417249679565e-06,
+            0.0019402503967285156,
+            0.003923773765563965,
+            0.0009108008816838264,
+            2.883654087781906e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0,
+          "post_controller_max_error_rad": 0.003933072090148926,
+          "post_controller_max_velocity_rad_s": 0.0011235211277380586
+        },
+        "passed": false,
+        "error": "fixed startup FJT failed: {'step': 'startup_j2', 'started_at': 116856.40344431, 'duration_sec': 8.0, 'initial': [3.4079886972904205e-05, -1.5676623582839966, 1.565642237663269, 0.002138247713446617, 0.0014572059735655785, -0.0003834952076431364], 'target': [0.0, -1.35, 1.5660302639007568, 0.0, 0.0, 0.0], 'actual': [2.7338042855262756e-05, -1.4952524900436401, 1.565110445022583, 0.0020135371014475822, 0.001466943882405758, -0.0003741325344890356], 'status': 6, 'error_code': -4, 'message': 'Aborted due to path tolerance violation', 'max_tracking_error_rad': [3.4079886972904205e-05, 0.019079171934814454, 0.0009108781814575195, 0.002138247713446617, 0.0014572059735655785, 0.0003834952076431364]}",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.002247042255476117,
+        0.28758442401885986,
+        0.008051901124417782,
+        0.009860438294708729,
+        0.009670814499258995,
+        0.009737183339893818
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 58780,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790680701353
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-09.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0018510222434997559,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 2.0597886556080955e-05
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132864713668823,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699887647891515
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25355714559555054,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.569926971129483
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0005432367324829102,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.006682516159335312
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0018508434295654297,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0032503464985496784
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -1.3709068298339844e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.00036439533852849825
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 10,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-10-audit",
+      "startup": {
+        "time": "2026-09-29T11:19:50.497923+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "cd190599b1b2342d0dd61736fdd1823c234a38ad658f602aad01be2244375c10",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 116956.913713913,
+            "duration_sec": 3,
+            "initial": [
+              2.0597130060195923e-05,
+              -1.5680663585662842,
+              1.565980076789856,
+              0.0059443628415465355,
+              0.0032215090468525887,
+              -0.0003834952076431364
+            ],
+            "target": [
+              0.0,
+              -1.5680663585662842,
+              1.565980076789856,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              3.4079886972904205e-05,
+              -1.5677424669265747,
+              1.5655782222747803,
+              0.002234121784567833,
+              0.00153398048132658,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.613459719648648e-05,
+              0.0019222830911695965,
+              0.00394672397777085,
+              0.0025079979209176005,
+              0.0015626418216984003,
+              0.00038332247133997027
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 116960.223483079,
+            "duration_sec": 8.0,
+            "initial": [
+              3.4079886972904205e-05,
+              -1.5677424669265747,
+              1.5655782222747803,
+              0.002234121784567833,
+              0.00153398048132658,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565980076789856,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              2.7338042855262756e-05,
+              -1.3536629676818848,
+              1.5650714635849,
+              0.0020708367228507996,
+              0.001466943882405758,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.4079886972904205e-05,
+              0.0043459027103767145,
+              0.000904083251953125,
+              0.002224384341388941,
+              0.00153398048132658,
+              0.0003741325344890356
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 116968.533489992,
+            "duration_sec": 10.0,
+            "initial": [
+              2.7338042855262756e-05,
+              -1.3536629676818848,
+              1.5650714635849,
+              0.0020708367228507996,
+              0.001466943882405758,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565980076789856,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              2.7338042855262756e-05,
+              -1.353350281715393,
+              1.564772605895996,
+              -0.2976977229118347,
+              0.0014287438243627548,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              2.9585324227809906e-05,
+              0.003633403778076083,
+              0.0012074708938598633,
+              0.003736986650837798,
+              0.001466943882405758,
+              0.0003741325344890356
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 116978.893183993,
+            "duration_sec": 6.0,
+            "initial": [
+              2.7338042855262756e-05,
+              -1.353350281715393,
+              1.564772605895996,
+              -0.2976977229118347,
+              0.0014287438243627548,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              2.7338042855262756e-05,
+              -1.3533413410186768,
+              1.429640769958496,
+              -0.2981193959712982,
+              0.0014287438243627548,
+              -0.0003643953532446176
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              2.7338042855262756e-05,
+              0.0033502817153929776,
+              0.0026755450477105036,
+              0.002302277088165272,
+              0.0014287438243627548,
+              0.0003741325344890356
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 116952.223546717,
+          "seconds": 3.0,
+          "reference_q": [
+            2.0597130060195923e-05,
+            -1.56998872756958,
+            1.5699269771575928,
+            0.006682516075670719,
+            0.0032503465190529823,
+            -0.0003741325344890356
+          ],
+          "q": [
+            2.0597130060195923e-05,
+            -1.5680735111236572,
+            1.5659890174865723,
+            0.0059443628415465355,
+            0.0032215090468525887,
+            -0.0003834952076431364
+          ],
+          "samples": 316,
+          "max_error_rad": [
+            0.0,
+            0.0019152164459228516,
+            0.003937959671020508,
+            0.0009684748947620392,
+            2.8837472200393677e-05,
+            9.362673154100776e-06
+          ],
+          "max_velocity_rad_s": 0.03314387425780296,
+          "settled_max_error_rad": [
+            0.0,
+            0.0019152164459228516,
+            0.003940224647521973,
+            0.0007381532341241837,
+            2.8837472200393677e-05,
+            9.362673154100776e-06
+          ],
+          "settled_max_velocity_rad_s": 0.0011235211277380586,
+          "post_controller_max_error_rad": 0.003946900367736816,
+          "post_controller_max_velocity_rad_s": 0.0
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            2.9585324227809906e-05,
+            -1.3527132272720337,
+            1.4288487434387207,
+            -0.2982538640499115,
+            0.00141900684684515,
+            -0.0003643953532446176
+          ],
+          "max_error_rad": [
+            3.1832605600357056e-05,
+            0.003341341018676669,
+            0.0011512565612792347,
+            0.0019094228744506725,
+            0.0014287438243627548,
+            0.0003643953532446176
+          ],
+          "max_velocity_rad_s": 0.021721407771110535
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.0011235211277380586,
+        0.07864648103713989,
+        0.05897301062941551,
+        0.09587380290031433,
+        0.00954992976039648,
+        0.0
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 59100,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790680931730
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-10.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.002857029438018799,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.006300331736962924
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132501125335693,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699659198604257
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25353825092315674,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5698082524015144
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00093841552734375,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.009165497756913877
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.00414729118347168,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.011178660287499633
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.1338462829589844e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.00041233223814992454
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "cd190599b1b2342d0dd61736fdd1823c234a38ad658f602aad01be2244375c10",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.cBNoqN/hex-arm-exit-cak7xco5/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              2.7338042855262756e-05,
+              -1.3525582551956177,
+              1.4280952215194702,
+              -0.2982538640499115,
+              0.0013999072834849358,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.01830964908003807,
+              -1.3525582551956177,
+              1.4278738498687744,
+              -0.2979467511177063,
+              0.001371069811284542,
+              -0.00035465817200019956
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.01830964908003807,
+              -1.3525582551956177,
+              1.4278738498687744,
+              -0.29796624183654785,
+              0.001371069811284542,
+              -0.00035465817200019956
+            ],
+            "actual": [
+              -0.0049648405984044075,
+              -1.3525582551956177,
+              1.4278442859649658,
+              -0.2979276478290558,
+              0.0013999072834849358,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004939748905599117,
+              -1.3525582551956177,
+              1.4278442859649658,
+              -0.2979276478290558,
+              0.0013999072834849358,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.00494199525564909,
+              -1.3367300033569336,
+              1.4275405406951904,
+              -0.2979467511177063,
+              0.0013519702479243279,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 28
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0049375006929039955,
+              -1.3367277383804321,
+              1.4275405406951904,
+              -0.2980426251888275,
+              0.0013422323390841484,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.0048577310517430305,
+              -1.3413364887237549,
+              1.427501916885376,
+              -0.29788947105407715,
+              0.00141900684684515,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 25
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004346529953181744,
+              -1.3413410186767578,
+              1.427501916885376,
+              -0.29788947105407715,
+              0.00141900684684515,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.0039263321086764336,
+              -1.3413912057876587,
+              1.4144080877304077,
+              -0.2979276478290558,
+              0.0013999072834849358,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          }
+        ],
+        "return_preflight_samples": 243,
+        "error": "MoveIt execution failed: -4",
+        "failure_feedback_age_s": {
+          "joint": 0.0009498979925410822,
+          "driver": 0.000611578012467362
+        },
+        "deactivated": true,
+        "steps": [],
+        "driver_at": 117056.573617424,
+        "joint_at": 117056.573283983,
+        "finished_at": 117056.573953681,
+        "fixed_return_path_samples": 0
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 11,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-11-audit",
+      "startup": {
+        "time": "2026-09-29T11:23:18.426627+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "2e7eb60f7c97a0b4a233acc00196a9c4788a505990695d489a0029d2e2aa00cb",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 117163.978828004,
+            "duration_sec": 3,
+            "initial": [
+              -0.0063276709988713264,
+              -1.5679638385772705,
+              1.5660029649734497,
+              0.007785065099596977,
+              -0.01105432491749525,
+              -0.0004123322432860732
+            ],
+            "target": [
+              0.0,
+              -1.5679638385772705,
+              1.5660029649734497,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.004949110560119152,
+              -1.567557454109192,
+              1.5650100708007812,
+              0.0020805737003684044,
+              0.000268520787358284,
+              -0.0003932323888875544
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.005001804838397496,
+              0.002002030529621557,
+              0.003805109647874394,
+              0.0023827935808034117,
+              0.001167778222123713,
+              0.0003932006993388284
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 117167.287798385,
+            "duration_sec": 8.0,
+            "initial": [
+              -0.004949110560119152,
+              -1.567557454109192,
+              1.5650100708007812,
+              0.0020805737003684044,
+              0.000268520787358284,
+              -0.0003932323888875544
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660029649734497,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00021683983504772186,
+              -1.3535237312316895,
+              1.5648434162139893,
+              0.0018790890462696552,
+              0.00028762128204107285,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.004949110560119152,
+              0.014252865397546444,
+              0.0011504888534545898,
+              0.0020805737003684044,
+              0.00028762128204107285,
+              0.0003834952076431364
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 117175.648264391,
+            "duration_sec": 10.0,
+            "initial": [
+              -0.00021683983504772186,
+              -1.3535237312316895,
+              1.5648434162139893,
+              0.0018790890462696552,
+              0.00028762128204107285,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660029649734497,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00018275994807481766,
+              -1.353395938873291,
+              1.5648341178894043,
+              -0.2977744936943054,
+              0.0004123318940401077,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00022133439779281616,
+              0.0035237312316893643,
+              0.0011688470840454102,
+              0.015547028311896804,
+              0.0004123318940401077,
+              0.0003741325344890356
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 117185.95794698,
+            "duration_sec": 6.0,
+            "initial": [
+              -0.00018275994807481766,
+              -1.353395938873291,
+              1.5648341178894043,
+              -0.2977744936943054,
+              0.0004123318940401077,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.0001370701938867569,
+              -1.3532705307006836,
+              1.4296565055847168,
+              -0.2982250154018402,
+              0.0004123318940401077,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00018275994807481766,
+              0.003395938873290927,
+              0.01534603367279952,
+              0.002225506305694569,
+              0.0004123318940401077,
+              0.0003741325344890356
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 117159.267885369,
+          "seconds": 3.0,
+          "reference_q": [
+            -0.006300332956016064,
+            -1.5699659585952759,
+            1.5698082447052002,
+            0.009165497496724129,
+            -0.011178660206496716,
+            -0.0004123322432860732
+          ],
+          "q": [
+            -0.006318683736026287,
+            -1.567975401878357,
+            1.566019058227539,
+            0.007785065099596977,
+            -0.01105432491749525,
+            -0.0004123322432860732
+          ],
+          "samples": 317,
+          "max_error_rad": [
+            4.119612276554108e-05,
+            0.0019905567169189453,
+            0.003789186477661133,
+            0.0014954060316085815,
+            0.0001340731978416443,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.029576454311609268,
+          "settled_max_error_rad": [
+            5.0183385610580444e-05,
+            0.001997709274291992,
+            0.0037986040115356445,
+            0.0013804323971271515,
+            0.00012433528900146484,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.005878338124603033,
+          "post_controller_max_error_rad": 0.0038052797317504883,
+          "post_controller_max_velocity_rad_s": 0.0
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            -0.0001325756311416626,
+            -1.3532682657241821,
+            1.4294167757034302,
+            -0.2982250154018402,
+            0.00042206887155771255,
+            -0.0003741325344890356
+          ],
+          "max_error_rad": [
+            0.0001370701938867569,
+            0.003270530700683505,
+            0.000583224296569762,
+            0.001774984598159779,
+            0.00042206887155771255,
+            0.0003741325344890356
+          ],
+          "max_velocity_rad_s": 0.008051901124417782
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.023968450725078583,
+        0.08089352399110794,
+        0.07752295583486557,
+        0.1007423922419548,
+        0.029576454311609268,
+        0.004868591669946909
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 59610,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790681152830
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-11.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0019099116325378418,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0003494150573968031
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2513217329978943,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699453219738695
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535015344619751,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5695775560720862
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0006057620048522949,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.007075374032014032
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.00165557861328125,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.004477231523235557
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -2.4378299713134766e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.0004314320965928366
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "2e7eb60f7c97a0b4a233acc00196a9c4788a505990695d489a0029d2e2aa00cb",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.vpAGja/hex-arm-exit-qo0_vox1/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00010299030691385269,
+              -1.3515515327453613,
+              1.4280015230178833,
+              -0.29853174090385437,
+              0.00042206887155771255,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.018332496285438538,
+              -1.3515515327453613,
+              1.4278168678283691,
+              -0.29816734790802,
+              0.0007096901535987854,
+              -0.0003643953532446176
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.018336988985538483,
+              -1.3515515327453613,
+              1.4278168678283691,
+              -0.29816734790802,
+              0.0006902161985635757,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.00496708694845438,
+              -1.3515515327453613,
+              1.427782416343689,
+              -0.29816734790802,
+              0.0007190527394413948,
+              -0.0003643953532446176
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004944617860019207,
+              -1.3515515327453613,
+              1.427782416343689,
+              -0.29816734790802,
+              0.0007190527394413948,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.00499704759567976,
+              -1.3366750478744507,
+              1.4277757406234741,
+              -0.2980905771255493,
+              0.0007190527394413948,
+              -0.0003643953532446176
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004987685941159725,
+              -1.3366705179214478,
+              1.4277757406234741,
+              -0.2980905771255493,
+              0.0007190527394413948,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.004882822744548321,
+              -1.3414802551269531,
+              1.4277689456939697,
+              -0.298023521900177,
+              0.0007576271891593933,
+              -0.0003643953532446176
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 25
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004720662720501423,
+              -1.341484785079956,
+              1.4277689456939697,
+              -0.2980332672595978,
+              0.0007576271891593933,
+              -0.0003643953532446176
+            ],
+            "actual": [
+              -0.0039881253615021706,
+              -1.341534972190857,
+              1.414257526397705,
+              -0.2980426251888275,
+              0.000786089338362217,
+              -0.0003643953532446176
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          }
+        ],
+        "return_preflight_samples": 243,
+        "error": "MoveIt execution failed: -4",
+        "failure_feedback_age_s": {
+          "joint": 0.0010887699900195003,
+          "driver": 0.0007816790021024644
+        },
+        "deactivated": true,
+        "steps": [],
+        "driver_at": 117269.957705804,
+        "joint_at": 117269.957616094,
+        "finished_at": 117269.96056848,
+        "fixed_return_path_samples": 0
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 12,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-12-audit",
+      "startup": {
+        "time": "2026-09-29T11:28:00.284892+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "7a567832cbe4365366be89ae03510758656c82671d7d2645b3ba4288ebc904fb",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 117446.702706265,
+            "duration_sec": 3,
+            "initial": [
+              -0.00022620242089033127,
+              -1.5680233240127563,
+              1.5654414892196655,
+              0.0060593364760279655,
+              0.004381357692182064,
+              -0.000431432097684592
+            ],
+            "target": [
+              0.0,
+              -1.5680233240127563,
+              1.5654414892196655,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00021009892225265503,
+              -1.5676672458648682,
+              1.5649070739746094,
+              0.002138247713446617,
+              0.0017163651064038277,
+              -0.0003834952076431364
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00021262314002037344,
+              0.001921925441108252,
+              0.004135900583308594,
+              0.0023717942024109274,
+              0.001763228733105672,
+              0.0003907995541993178
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 117450.012033634,
+            "duration_sec": 8.0,
+            "initial": [
+              -0.00021009892225265503,
+              -1.5676672458648682,
+              1.5649070739746094,
+              0.002138247713446617,
+              0.0017163651064038277,
+              -0.0003834952076431364
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5654414892196655,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00016890279948711395,
+              -1.3535487651824951,
+              1.5647565126419067,
+              0.001984700094908476,
+              0.0016395915299654007,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00021009892225265503,
+              0.004438128637737293,
+              0.0006849765777587891,
+              0.002138247713446617,
+              0.0017163651064038277,
+              0.0003834952076431364
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 117458.372198786,
+            "duration_sec": 10.0,
+            "initial": [
+              -0.00016890279948711395,
+              -1.3535487651824951,
+              1.5647565126419067,
+              0.001984700094908476,
+              0.0016395915299654007,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5654414892196655,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.0001370701938867569,
+              -1.353485107421875,
+              1.564749836921692,
+              -0.29776474833488464,
+              0.0015246178954839706,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00016890279948711395,
+              0.0035442352294920987,
+              0.0006916522979736328,
+              0.003942787900900191,
+              0.0016395915299654007,
+              0.0003741325344890356
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 117468.732028759,
+            "duration_sec": 6.0,
+            "initial": [
+              -0.0001370701938867569,
+              -1.353485107421875,
+              1.564749836921692,
+              -0.29776474833488464,
+              0.0015246178954839706,
+              -0.0003741325344890356
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00013482291251420975,
+              -1.35347580909729,
+              1.4296362400054932,
+              -0.29816734790802,
+              0.0015148809179663658,
+              -0.0003741325344890356
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.0001370701938867569,
+              0.003485107421874911,
+              0.0025649809542964697,
+              0.0022352516651153453,
+              0.0015246178954839706,
+              0.0003741325344890356
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 117442.01217779,
+          "seconds": 3.0,
+          "reference_q": [
+            -0.00034941546618938446,
+            -1.5699453353881836,
+            1.5695775747299194,
+            0.007075374014675617,
+            0.004477230831980705,
+            -0.000431432097684592
+          ],
+          "q": [
+            -0.00022620242089033127,
+            -1.5680278539657593,
+            1.5654549598693848,
+            0.006040236912667751,
+            0.004381357692182064,
+            -0.000431432097684592
+          ],
+          "samples": 316,
+          "max_error_rad": [
+            0.0001232130452990532,
+            0.0019174814224243164,
+            0.004122614860534668,
+            0.002041812054812908,
+            9.58731397986412e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.04417262598872185,
+          "settled_max_error_rad": [
+            0.0001232130452990532,
+            0.0019197463989257812,
+            0.004129290580749512,
+            0.001035137102007866,
+            9.58731397986412e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0,
+          "post_controller_max_error_rad": 0.004136085510253906,
+          "post_controller_max_velocity_rad_s": 0.0011235211277380586
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1000,
+          "last_q": [
+            -0.00013482291251420975,
+            -1.35347580909729,
+            1.429613471031189,
+            -0.29816734790802,
+            0.0015148809179663658,
+            -0.0003643953532446176
+          ],
+          "max_error_rad": [
+            0.00013482291251420975,
+            0.0034758090972899502,
+            0.000386528968810973,
+            0.0018326520919799694,
+            0.0015148809179663658,
+            0.0003741325344890356
+          ],
+          "max_velocity_rad_s": 0.0011235211277380586
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.008051901124417782,
+        0.07658668607473373,
+        0.06272993236780167,
+        0.09708739072084427,
+        0.014601033180952072,
+        0.004868591669946909
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 60162,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790681467497
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-12.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.001874685287475586,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.00012808140367599752
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132060050964355,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.569938206340332
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2535037398338318,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.569591412832133
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00031131505966186523,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.005225309312249611
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.001536548137664795,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.005225122058735465
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.003169238567352295,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.019634654479313573
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "7a567832cbe4365366be89ae03510758656c82671d7d2645b3ba4288ebc904fb",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.bKhzU8/hex-arm-exit-mb_enrn1/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00012096669524908066,
+              -1.3534690141677856,
+              1.4296040534973145,
+              -0.29816734790802,
+              0.001495780423283577,
+              -0.00035465817200019956
+            ],
+            "actual": [
+              -0.01830964908003807,
+              -1.3534690141677856,
+              1.4296040534973145,
+              -0.29806211590766907,
+              0.0015246178954839706,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.01830964908003807,
+              -1.3534690141677856,
+              1.4296040534973145,
+              -0.2980714738368988,
+              0.0015246178954839706,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.004985437728464603,
+              -1.3534690141677856,
+              1.4296040534973145,
+              -0.2979467511177063,
+              0.00153398048132658,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004974202252924442,
+              -1.3534690141677856,
+              1.4296040534973145,
+              -0.2979467511177063,
+              0.00153398048132658,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.005001542158424854,
+              -1.3366727828979492,
+              1.4296040534973145,
+              -0.2979085445404053,
+              0.0014287438243627548,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004983191378414631,
+              -1.3366659879684448,
+              1.4296040534973145,
+              -0.29791828989982605,
+              0.0014287438243627548,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.004919149912893772,
+              -1.341489315032959,
+              1.4296040534973145,
+              -0.2979085445404053,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 25
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0048850709572434425,
+              -1.3414959907531738,
+              1.4296040534973145,
+              -0.29791828989982605,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.0049330079928040504,
+              -1.341569423675537,
+              1.4141979217529297,
+              -0.2979564964771271,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004866720177233219,
+              -1.3415716886520386,
+              1.4141777753829956,
+              -0.29796624183654785,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.004551759921014309,
+              -1.3416035175323486,
+              1.4205807447433472,
+              -0.2979085445404053,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.315,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.003981010057032108,
+              -1.3416080474853516,
+              1.4205807447433472,
+              -0.2979085445404053,
+              0.001495780423283577,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.003955918364226818,
+              -1.3416147232055664,
+              1.4205667972564697,
+              -0.31306636333465576,
+              0.0014381064102053642,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 28
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.003898993134498596,
+              -1.3416173458099365,
+              1.4205667972564697,
+              -0.31306636333465576,
+              0.0014381064102053642,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.0006643757224082947,
+              -1.341624140739441,
+              1.4205533266067505,
+              -0.2998069226741791,
+              0.0014092698693275452,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              -0.02,
+              0.0
+            ],
+            "initial": [
+              -0.0005273064598441124,
+              -1.341624140739441,
+              1.4205533266067505,
+              -0.2997972071170807,
+              0.0014092698693275452,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.00016216188669204712,
+              -1.341624140739441,
+              1.420514464378357,
+              -0.29962456226348877,
+              -0.018858302384614944,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 31
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00016216188669204712,
+              -1.341624140739441,
+              1.420514464378357,
+              -0.29962456226348877,
+              -0.018858302384614944,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.00014605838805437088,
+              -1.341612458229065,
+              1.4205121994018555,
+              -0.29943281412124634,
+              0.00043143145740032196,
+              -0.0003452954697422683
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.015
+            ],
+            "initial": [
+              -0.00014605838805437088,
+              -1.341612458229065,
+              1.4205121994018555,
+              -0.29943281412124634,
+              0.00043143145740032196,
+              -0.0003452954697422683
+            ],
+            "actual": [
+              -0.00014381110668182373,
+              -1.341612458229065,
+              1.4205031394958496,
+              -0.2992987334728241,
+              0.0006040791049599648,
+              0.015100124292075634
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00012808199971914291,
+              -1.341612458229065,
+              1.4205031394958496,
+              -0.2992987334728241,
+              0.0006040791049599648,
+              0.015119223855435848
+            ],
+            "actual": [
+              -0.0001325756311416626,
+              -1.3416147232055664,
+              1.4204938411712646,
+              -0.2992028594017029,
+              0.0006617531180381775,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          }
+        ],
+        "hold_position_tolerance_rad": 0.01,
+        "ready_hold": {
+          "max_error_rad": [
+            0.0001325756311416626,
+            0.008385276794433683,
+            0.00950615882873529,
+            0.000797140598297108,
+            0.0006617531180381775,
+            0.00045053198118694127
+          ],
+          "max_velocity_rad_s": 0.004930219147354364
+        },
+        "error": "shutdown requires healthy active driver",
+        "failure_feedback_age_s": {
+          "joint": 0.009967721998691559,
+          "driver": 4.199000250082463e-05
+        },
+        "deactivated": true,
+        "steps": [],
+        "fixed_return_path_samples": 243
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 13,
+      "startup_passed": false,
+      "evidence_directory": ".tmp-meow-upgrade/startup-13-audit",
+      "startup": {
+        "time": "2026-09-29T11:33:55.181114+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "53e44960d018a9eeee06a608474738ac3e10515e942ac40857aa041c160adfbb",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 117800.688926122,
+            "duration_sec": 3,
+            "initial": [
+              -0.00012096669524908066,
+              -1.5679638385772705,
+              1.5656377077102661,
+              0.00477440282702446,
+              0.0051771849393844604,
+              0.019634654745459557
+            ],
+            "target": [
+              0.0,
+              -1.5679638385772705,
+              1.5656377077102661,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00010299030691385269,
+              -1.5675642490386963,
+              1.5648797750473022,
+              0.0021573477424681187,
+              0.001773664727807045,
+              0.0005273058777675033
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              0.00010904263457944688,
+              0.00039958953857421875,
+              0.0007534027099609375,
+              0.0023809643971722328,
+              0.0018381681430257764,
+              0.001805917557169634
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 117804.04886831,
+            "duration_sec": 8.0,
+            "initial": [
+              -0.00010299030691385269,
+              -1.5675642490386963,
+              1.5648797750473022,
+              0.0021573477424681187,
+              0.001773664727807045,
+              0.0005273058777675033
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5656377077102661,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -0.00011422485113143921,
+              -1.5699430704116821,
+              1.5698858499526978,
+              0.00653870590031147,
+              0.0037581780925393105,
+              0.000661379424855113
+            ],
+            "status": 6,
+            "error_code": -1,
+            "message": "Current goal cancelled during deactivate transition.",
+            "max_tracking_error_rad": [
+              6.137185432925437e-05,
+              0.008224247243088012,
+              0.0009679299153491083,
+              0.00190146598831198,
+              0.0013429446885929953,
+              0.0003561074546139669
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 117796.018742618,
+          "seconds": 3.0,
+          "reference_q": [
+            -0.00012808199971914291,
+            -1.5699381828308105,
+            1.5695914030075073,
+            0.005225309170782566,
+            0.005225121974945068,
+            0.019634654745459557
+          ],
+          "q": [
+            -0.00012096669524908066,
+            -1.5679682493209839,
+            1.565646767616272,
+            0.004755303263664246,
+            0.0051771849393844604,
+            0.019634654745459557
+          ],
+          "samples": 314,
+          "max_error_rad": [
+            7.115304470062256e-06,
+            0.00196993350982666,
+            0.0039446353912353516,
+            0.0009684748947620392,
+            4.793703556060791e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.057112324982881546,
+          "settled_max_error_rad": [
+            7.115304470062256e-06,
+            0.00196993350982666,
+            0.003946900367736816,
+            0.00047000590711832047,
+            4.793703556060791e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.001109650474973023,
+          "post_controller_max_error_rad": 0.003953695297241211,
+          "post_controller_max_velocity_rad_s": 0.0011235211277380586
+        },
+        "passed": false,
+        "error": "fixed startup FJT failed: {'step': 'startup_j2', 'started_at': 117804.04886831, 'duration_sec': 8.0, 'initial': [-0.00010299030691385269, -1.5675642490386963, 1.5648797750473022, 0.0021573477424681187, 0.001773664727807045, 0.0005273058777675033], 'target': [0.0, -1.35, 1.5656377077102661, 0.0, 0.0, 0.0], 'actual': [-0.00011422485113143921, -1.5699430704116821, 1.5698858499526978, 0.00653870590031147, 0.0037581780925393105, 0.000661379424855113], 'status': 6, 'error_code': -1, 'message': 'Current goal cancelled during deactivate transition.', 'max_tracking_error_rad': [6.137185432925437e-05, 0.008224247243088012, 0.0009679299153491083, 0.00190146598831198, 0.0013429446885929953, 0.0003561074546139669]}",
+        "deactivated": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.003370563266798854,
+        0.2967968285083771,
+        0.057112324982881546,
+        0.10182798653841019,
+        0.01909985952079296,
+        0.028649788349866867
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 60801,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790681650003
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-13.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0018644928932189941,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -6.404070183799876e-05
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25132060050964355,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.569938206340332
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25355058908462524,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5698857753563709
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0004776120185852051,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.006270183921185387
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0017547607421875,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.003854051828157014
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00015109777450561523,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.000671116594699968
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 14,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-14-audit",
+      "startup": {
+        "time": "2026-09-29T11:36:31.097368+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "13ff903faa14425d93c68ae6768ec68cc8e83d9201e2c6ab65bf9b9cdf8bbbec",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 117956.650517903,
+            "duration_sec": 3,
+            "initial": [
+              -5.505327135324478e-05,
+              -1.5679477453231812,
+              1.5660141706466675,
+              0.005493456497788429,
+              0.003815852105617523,
+              0.0006711166352033615
+            ],
+            "target": [
+              0.0,
+              -1.5679477453231812,
+              1.5660141706466675,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.505327135324478e-05,
+              -1.5675506591796875,
+              1.5651288032531738,
+              0.002138247713446617,
+              0.0017163651064038277,
+              0.0005273058777675033
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.5048998164479814e-05,
+              0.0003948211669921875,
+              0.0008785724639892578,
+              0.002352792941603777,
+              0.0017842941982477347,
+              0.0005401011806230567
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 117959.959476168,
+            "duration_sec": 8.0,
+            "initial": [
+              -5.505327135324478e-05,
+              -1.5675506591796875,
+              1.5651288032531738,
+              0.002138247713446617,
+              0.0017163651064038277,
+              0.0005273058777675033
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660141706466675,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.505327135324478e-05,
+              -1.3535559177398682,
+              1.5647542476654053,
+              0.0018408892210572958,
+              0.0016395915299654007,
+              0.0004984688712283969
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.730055272579193e-05,
+              0.004448215590884708,
+              0.001259922981262207,
+              0.002138247713446617,
+              0.0017163651064038277,
+              0.0005175687838345766
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 117968.320033158,
+            "duration_sec": 10.0,
+            "initial": [
+              -5.505327135324478e-05,
+              -1.3535559177398682,
+              1.5647542476654053,
+              0.0018408892210572958,
+              0.0016395915299654007,
+              0.0004984688712283969
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660141706466675,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.243159830570221e-05,
+              -1.3534600734710693,
+              1.564749836921692,
+              -0.2977744936943054,
+              0.0015628170222043991,
+              0.0004984688712283969
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.505327135324478e-05,
+              0.0035559177398680752,
+              0.001264333724975586,
+              0.003857703644665089,
+              0.0016395915299654007,
+              0.0004984688712283969
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 117978.679715695,
+            "duration_sec": 6.0,
+            "initial": [
+              -5.243159830570221e-05,
+              -1.3534600734710693,
+              1.564749836921692,
+              -0.2977744936943054,
+              0.0015628170222043991,
+              0.0004984688712283969
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.018431693315506e-05,
+              -1.353446125984192,
+              1.4296313524246216,
+              -0.29816734790802,
+              0.0015628170222043991,
+              0.0004887316608801484
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.243159830570221e-05,
+              0.003460073471069247,
+              0.00248690985616129,
+              0.0022161483764648326,
+              0.0015628170222043991,
+              0.0004984688712283969
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 117951.939798739,
+          "seconds": 3.0,
+          "reference_q": [
+            -6.404146552085876e-05,
+            -1.5699381828308105,
+            1.5698858499526978,
+            0.006270184181630611,
+            0.0038540512323379517,
+            0.0006711166352033615
+          ],
+          "q": [
+            -5.505327135324478e-05,
+            -1.5679570436477661,
+            1.5660234689712524,
+            0.005474356468766928,
+            0.003815852105617523,
+            0.0006711166352033615
+          ],
+          "samples": 318,
+          "max_error_rad": [
+            3.670156002044678e-05,
+            0.0019811391830444336,
+            0.0038623809814453125,
+            0.000987575389444828,
+            3.819912672042847e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.030709577724337578,
+          "settled_max_error_rad": [
+            8.988194167613983e-06,
+            0.0019856691360473633,
+            0.0038667917251586914,
+            0.0007958277128636837,
+            3.819912672042847e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0,
+          "post_controller_max_error_rad": 0.0038716793060302734,
+          "post_controller_max_velocity_rad_s": 0.0
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            -5.243159830570221e-05,
+            -1.353309154510498,
+            1.429362177848816,
+            -0.29818645119667053,
+            0.0015628170222043991,
+            0.0004887316608801484
+          ],
+          "max_error_rad": [
+            5.243159830570221e-05,
+            0.0034461259841918057,
+            0.0006378221511840199,
+            0.0018326520919799694,
+            0.0015628170222043991,
+            0.0004887316608801484
+          ],
+          "max_velocity_rad_s": 0.006928380113095045
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.004681338090449572,
+        0.07767553627490997,
+        0.06385345011949539,
+        0.1007423922419548,
+        0.009737183339893818,
+        0.004808485507965088
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 61140,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790682037268
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-14.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0018641352653503418,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -6.17936596682446e-05
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.2513231635093689,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699543101425486
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.25350916385650635,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5696254929717077
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.0002288818359375,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.004707366092121232
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": -0.0015990734100341797,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.004832264186056746
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "position_rev": 0.00014346837997436523,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0006231796950785418
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "13ff903faa14425d93c68ae6768ec68cc8e83d9201e2c6ab65bf9b9cdf8bbbec",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.z8Wr4e/hex-arm-exit-_k5kazig/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -4.793703556060791e-05,
+              -1.3532660007476807,
+              1.4290014505386353,
+              -0.2982538640499115,
+              0.0015530800446867943,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -0.01837369054555893,
+              -1.3532589673995972,
+              1.4287985563278198,
+              -0.29823437333106995,
+              0.0015246178954839706,
+              0.0005078315734863281
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.018380433320999146,
+              -1.3532589673995972,
+              1.4287962913513184,
+              -0.29823437333106995,
+              0.0015148809179663658,
+              0.0005078315734863281
+            ],
+            "actual": [
+              -0.004876081831753254,
+              -1.3532406091690063,
+              1.4285565614700317,
+              -0.2981770634651184,
+              0.0015246178954839706,
+              0.00046963183558546007
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004834885708987713,
+              -1.3532406091690063,
+              1.4285565614700317,
+              -0.2981770634651184,
+              0.0015246178954839706,
+              0.00046963183558546007
+            ],
+            "actual": [
+              -0.004830393008887768,
+              -1.33672297000885,
+              1.4279630184173584,
+              -0.2980811893939972,
+              0.0014381064102053642,
+              0.0004984688712283969
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 28
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004620294086635113,
+              -1.3367207050323486,
+              1.4279630184173584,
+              -0.2981002926826477,
+              0.0014381064102053642,
+              0.0004984688712283969
+            ],
+            "actual": [
+              -0.003942436538636684,
+              -1.3433176279067993,
+              1.4278236627578735,
+              -0.29836881160736084,
+              0.001495780423283577,
+              0.00046963183558546007
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0006325431168079376,
+              -1.3433176279067993,
+              1.4278236627578735,
+              -0.29836881160736084,
+              0.0014860434457659721,
+              0.00046963183558546007
+            ],
+            "actual": [
+              -0.000370013527572155,
+              -1.3432517051696777,
+              1.4136778116226196,
+              -0.2982538640499115,
+              0.0013901693746447563,
+              0.0005078315734863281
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00030597299337387085,
+              -1.3432517051696777,
+              1.4136755466461182,
+              -0.2982538640499115,
+              0.0013901693746447563,
+              0.0005078315734863281
+            ],
+            "actual": [
+              -0.0001805126667022705,
+              -1.3432310819625854,
+              1.4211034774780273,
+              -0.2980714738368988,
+              0.0015051430091261864,
+              0.0004887316608801484
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.315,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0001805126667022705,
+              -1.3432310819625854,
+              1.4211034774780273,
+              -0.2980811893939972,
+              0.0015051430091261864,
+              0.0004887316608801484
+            ],
+            "actual": [
+              -0.00014381110668182373,
+              -1.343226671218872,
+              1.4210121631622314,
+              -0.3130468726158142,
+              0.0013901693746447563,
+              0.00047936898772604764
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00014381110668182373,
+              -1.343226671218872,
+              1.4210121631622314,
+              -0.3130468726158142,
+              0.0013901693746447563,
+              0.00046963183558546007
+            ],
+            "actual": [
+              -0.00011871941387653351,
+              -1.343219518661499,
+              1.4209915399551392,
+              -0.29965338110923767,
+              0.001447843387722969,
+              0.00046963183558546007
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              -0.02,
+              0.0
+            ],
+            "initial": [
+              -0.00011871941387653351,
+              -1.343219518661499,
+              1.4209915399551392,
+              -0.2993178367614746,
+              0.001447843387722969,
+              0.0004598946252372116
+            ],
+            "actual": [
+              -0.00011647213250398636,
+              -1.3432104587554932,
+              1.4209184646606445,
+              -0.2991549074649811,
+              -0.01863771677017212,
+              0.00047936898772604764
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 31
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00011647213250398636,
+              -1.3432104587554932,
+              1.4209184646606445,
+              -0.2991549074649811,
+              -0.01863771677017212,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -0.00010973121970891953,
+              -1.3432127237319946,
+              1.4208840131759644,
+              -0.29901111125946045,
+              0.00032619480043649673,
+              0.0004407947708386928
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.015
+            ],
+            "initial": [
+              -0.00010299030691385269,
+              -1.3432127237319946,
+              1.4208840131759644,
+              -0.29910698533058167,
+              0.00033555738627910614,
+              0.0004407947708386928
+            ],
+            "actual": [
+              -9.812135249376297e-05,
+              -1.343214988708496,
+              1.4208661317825317,
+              -0.29901111125946045,
+              0.0005179429426789284,
+              0.015282134525477886
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00010036863386631012,
+              -1.343214988708496,
+              1.4208661317825317,
+              -0.299365758895874,
+              0.0005179429426789284,
+              0.015282134525477886
+            ],
+            "actual": [
+              -9.138043969869614e-05,
+              -1.343214988708496,
+              1.420843243598938,
+              -0.29918375611305237,
+              0.0006231795996427536,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          }
+        ],
+        "hold_position_tolerance_rad": 0.01,
+        "ready_hold": {
+          "max_error_rad": [
+            9.138043969869614e-05,
+            0.006785011291503995,
+            0.00915675640106195,
+            0.0008162438869476207,
+            0.0006138170138001442,
+            0.00045053198118694127
+          ],
+          "max_velocity_rad_s": 0.014418520964682102
+        },
+        "error": "fixed startup FJT failed: {'step': 'return_startup_j2', 'started_at': 118119.250966218, 'duration_sec': 16.0, 'initial': [-8.913315832614899e-05, -1.343214988708496, 1.5572304725646973, 0.001821789424866438, 0.0006422791630029678, 0.00043143212678842247], 'target': [-5.505327135324478e-05, -1.5675506591796875, 1.5651288032531738, 0.002138247713446617, 0.0017163651064038277, 0.0005273058777675033], 'actual': [-8.46395269036293e-05, -1.555812954902649, 1.5572304725646973, 0.00282846437767148, 0.0020519234240055084, 0.000546405790373683], 'status': 6, 'error_code': -5, 'message': 'Aborted due to goal_time_tolerance exceeding by 1.010000 seconds', 'max_tracking_error_rad': [8.91331497569248e-05, 0.011705875396728516, 0.008783697944160007, 0.0018217890920410932, 0.0006422788958450493, 0.0004314320447115146]}",
+        "failure_feedback_age_s": {
+          "joint": 0.0003113190032308921,
+          "driver": 0.010236885995254852
+        },
+        "deactivated": true,
+        "steps": [
+          {
+            "step": "return_startup_j3",
+            "started_at": 118086.530997627,
+            "duration_sec": 12.0,
+            "initial": [
+              -8.913315832614899e-05,
+              -1.343214988708496,
+              1.420843243598938,
+              -0.2992987334728241,
+              0.0006138170138001442,
+              0.00043143212678842247
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660141706466675,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -8.688587695360184e-05,
+              -1.343214988708496,
+              1.5571367740631104,
+              -0.2992889881134033,
+              0.0006040791049599648,
+              0.00043143212678842247
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              9.138043969869614e-05,
+              0.006785011291503995,
+              0.009834781703243367,
+              0.0007110118865966686,
+              0.0006138170138001442,
+              0.00043143212678842247
+            ]
+          },
+          {
+            "step": "return_startup_j4",
+            "started_at": 118098.890400859,
+            "duration_sec": 20.0,
+            "initial": [
+              -8.688587695360184e-05,
+              -1.343214988708496,
+              1.5571367740631104,
+              -0.2992889881134033,
+              0.0006040791049599648,
+              0.00043143212678842247
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5660141706466675,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -8.913315832614899e-05,
+              -1.343214988708496,
+              1.5572304725646973,
+              0.001821789424866438,
+              0.0006422791630029678,
+              0.00043143212678842247
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              8.913315832614899e-05,
+              0.006785011291503995,
+              0.008877396583557129,
+              0.003457866348451688,
+              0.0006422791630029678,
+              0.00043143212678842247
+            ]
+          },
+          {
+            "step": "return_startup_j2",
+            "started_at": 118119.250966218,
+            "duration_sec": 16.0,
+            "initial": [
+              -8.913315832614899e-05,
+              -1.343214988708496,
+              1.5572304725646973,
+              0.001821789424866438,
+              0.0006422791630029678,
+              0.00043143212678842247
+            ],
+            "target": [
+              -5.505327135324478e-05,
+              -1.5675506591796875,
+              1.5651288032531738,
+              0.002138247713446617,
+              0.0017163651064038277,
+              0.0005273058777675033
+            ],
+            "actual": [
+              -8.46395269036293e-05,
+              -1.555812954902649,
+              1.5572304725646973,
+              0.00282846437767148,
+              0.0020519234240055084,
+              0.000546405790373683
+            ],
+            "status": 6,
+            "error_code": -5,
+            "message": "Aborted due to goal_time_tolerance exceeding by 1.010000 seconds",
+            "max_tracking_error_rad": [
+              8.91331497569248e-05,
+              0.011705875396728516,
+              0.008783697944160007,
+              0.0018217890920410932,
+              0.0006422788958450493,
+              0.0004314320447115146
+            ]
+          }
+        ],
+        "fixed_return_path_samples": 243
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": false
+    },
+    {
+      "trial": 15,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-15-audit",
+      "startup": {
+        "time": "2026-09-29T11:41:09.956162+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 118235.510158803,
+            "duration_sec": 3,
+            "initial": [
+              -5.730055272579193e-05,
+              -1.5679409503936768,
+              1.565763235092163,
+              0.004160960204899311,
+              0.004745752550661564,
+              0.0006231797160580754
+            ],
+            "target": [
+              0.0,
+              -1.5679409503936768,
+              1.565763235092163,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.243159830570221e-05,
+              -1.567552924156189,
+              1.5651261806488037,
+              0.002138247713446617,
+              0.0016395915299654007,
+              0.00047936898772604764
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.2431577170849336e-05,
+              0.00038802623748779297,
+              0.0006344318389892578,
+              0.002327255885619991,
+              0.0017176056836670506,
+              0.0004965496954942943
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 118238.869764146,
+            "duration_sec": 8.0,
+            "initial": [
+              -5.243159830570221e-05,
+              -1.567552924156189,
+              1.5651261806488037,
+              0.002138247713446617,
+              0.0016395915299654007,
+              0.00047936898772604764
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565763235092163,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -5.243159830570221e-05,
+              -1.3534529209136963,
+              1.5642019510269165,
+              0.001754752709530294,
+              0.0015530800446867943,
+              0.0004598946252372116
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.243159830570221e-05,
+              0.004258419055546581,
+              0.001561284065246582,
+              0.0022052847780287266,
+              0.0016298545524477959,
+              0.00047936898772604764
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 118247.179609344,
+            "duration_sec": 10.0,
+            "initial": [
+              -5.243159830570221e-05,
+              -1.3534529209136963,
+              1.5642019510269165,
+              0.001754752709530294,
+              0.0015530800446867943,
+              0.0004598946252372116
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565763235092163,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -4.5690685510635376e-05,
+              -1.3533775806427002,
+              1.5642019510269165,
+              -0.29778385162353516,
+              0.0014287438243627548,
+              0.0004598946252372116
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              5.243159830570221e-05,
+              0.0034461259841918057,
+              0.001561284065246582,
+              0.00346353393450749,
+              0.0015530800446867943,
+              0.0004598946252372116
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 118257.539552545,
+            "duration_sec": 6.0,
+            "initial": [
+              -4.5690685510635376e-05,
+              -1.3533775806427002,
+              1.5642019510269165,
+              -0.29778385162353516,
+              0.0014287438243627548,
+              0.0004598946252372116
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -4.793703556060791e-05,
+              -1.3533686399459839,
+              1.4295995235443115,
+              -0.2981961667537689,
+              0.0014287438243627548,
+              0.0004598946252372116
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              4.793703556060791e-05,
+              0.0033775806427001065,
+              0.015291701323453477,
+              0.0022161483764648326,
+              0.0014287438243627548,
+              0.0004598946252372116
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 118230.799524915,
+          "seconds": 3.0,
+          "reference_q": [
+            -6.179418414831161e-05,
+            -1.5699542760849,
+            1.5696254968643188,
+            0.004707366228103638,
+            0.00483226403594017,
+            0.0006231797160580754
+          ],
+          "q": [
+            -5.730055272579193e-05,
+            -1.5680005550384521,
+            1.5657861232757568,
+            0.004151223227381706,
+            0.004745752550661564,
+            0.0006231797160580754
+          ],
+          "samples": 317,
+          "max_error_rad": [
+            4.493631422519684e-06,
+            0.001953721046447754,
+            0.0038393735885620117,
+            0.0008917013183236122,
+            8.651148527860641e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.06558440625667572,
+          "settled_max_error_rad": [
+            4.493631422519684e-06,
+            0.00200653076171875,
+            0.003855586051940918,
+            0.0005561430007219315,
+            8.651148527860641e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0011235211277380586,
+          "post_controller_max_error_rad": 0.0038622617721557617,
+          "post_controller_max_velocity_rad_s": 0.0
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            -4.3443404138088226e-05,
+            -1.3533663749694824,
+            1.4295676946640015,
+            -0.2981961667537689,
+            0.0014287438243627548,
+            0.0004598946252372116
+          ],
+          "max_error_rad": [
+            4.793703556060791e-05,
+            0.003368639945983798,
+            0.000432305335998473,
+            0.001803833246231068,
+            0.0014287438243627548,
+            0.0004598946252372116
+          ],
+          "max_velocity_rad_s": 0.0011235211277380586
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.003370563266798854,
+        0.07527591288089752,
+        0.0741523951292038,
+        0.09587380290031433,
+        0.009794799610972404,
+        0.004868591669946909
+      ],
+      "driver_shutdown": [
+        {
+          "error": null,
+          "pid": 61850,
+          "schema_version": 1,
+          "state": "disabled_confirmed",
+          "unix_time_ms": 1790682468267
+        }
+      ],
+      "independent_read_path": ".tmp-meow-upgrade/after-startup-15.json",
+      "independent_read": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.001861572265625,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -4.5689857451671964e-05
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.2513275146484375,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5699816491556138
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.25352227687835693,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.569707884517932
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.00025331974029541016,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.004860913973721113
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": -0.001708984375,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.004141673225885573
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.00015413761138916016,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0006902164531428801
+        }
+      ],
+      "disabled_and_fault_free": true,
+      "moveit_trial": {
+        "passed": true,
+        "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.2wUEOb/hex-arm-exit-ranig0g5/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -4.5690685510635376e-05,
+              -1.350460171699524,
+              1.4265656471252441,
+              -0.2986852824687958,
+              0.0013999072834849358,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.018344104290008545,
+              -1.3504902124404907,
+              1.4260796308517456,
+              -0.29829204082489014,
+              0.0015051430091261864,
+              0.00047936898772604764
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.018346350640058517,
+              -1.3504902124404907,
+              1.4260796308517456,
+              -0.29829204082489014,
+              0.001495780423283577,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -0.004980945028364658,
+              -1.3504902124404907,
+              1.4259631633758545,
+              -0.29818645119667053,
+              0.0013999072834849358,
+              0.0004984688712283969
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004978696815669537,
+              -1.3504902124404907,
+              1.4259631633758545,
+              -0.29818645119667053,
+              0.0013999072834849358,
+              0.0004984688712283969
+            ],
+            "actual": [
+              -0.004939748905599117,
+              -1.3366820812225342,
+              1.4259016513824463,
+              -0.2980714738368988,
+              0.0013133957982063293,
+              0.0004887316608801484
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004910162650048733,
+              -1.3366820812225342,
+              1.4259016513824463,
+              -0.2980811893939972,
+              0.0013133957982063293,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -0.004862225614488125,
+              -1.3484880924224854,
+              1.4258720874786377,
+              -0.29813849925994873,
+              0.0013422323390841484,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 25
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004818783141672611,
+              -1.3484858274459839,
+              1.4258720874786377,
+              -0.29813849925994873,
+              0.0013422323390841484,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.00404729787260294,
+              -1.3485108613967896,
+              1.4140039682388306,
+              -0.2982250154018402,
+              0.0013422323390841484,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 22
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0039034876972436905,
+              -1.3485041856765747,
+              1.4139927625656128,
+              -0.2982250154018402,
+              0.0013422323390841484,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.0006621293723583221,
+              -1.3484835624694824,
+              1.4212563037872314,
+              -0.2980905771255493,
+              0.00130403321236372,
+              0.0004407947708386928
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.315,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0005890997126698494,
+              -1.3484790325164795,
+              1.4212563037872314,
+              -0.2981193959712982,
+              0.0012942962348461151,
+              0.0004407947708386928
+            ],
+            "actual": [
+              -0.00046364031732082367,
+              -1.348467469215393,
+              1.4212791919708252,
+              -0.3130757212638855,
+              0.0013901693746447563,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00042469147592782974,
+              -1.348467469215393,
+              1.4212791919708252,
+              -0.3130757212638855,
+              0.0013901693746447563,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.00014156382530927658,
+              -1.3485019207000732,
+              1.4211900234222412,
+              -0.2997013330459595,
+              0.001371069811284542,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              -0.02,
+              0.0
+            ],
+            "initial": [
+              -0.00014156382530927658,
+              -1.3484996557235718,
+              1.4211900234222412,
+              -0.2997013330459595,
+              0.0013613328337669373,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.00010973121970891953,
+              -1.3484585285186768,
+              1.4210985898971558,
+              -0.2995481491088867,
+              -0.018685653805732727,
+              0.00046963183558546007
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 31
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00010973121970891953,
+              -1.3484585285186768,
+              1.4210985898971558,
+              -0.2995481491088867,
+              -0.018685653805732727,
+              0.00046963183558546007
+            ],
+            "actual": [
+              -0.00010973121970891953,
+              -1.3484539985656738,
+              1.4211286306381226,
+              -0.2993946075439453,
+              0.0001344475895166397,
+              0.0004887316608801484
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.015
+            ],
+            "initial": [
+              -0.00010973121970891953,
+              -1.3484539985656738,
+              1.4211286306381226,
+              -0.2993946075439453,
+              0.0001344475895166397,
+              0.0004887316608801484
+            ],
+            "actual": [
+              -0.00010299030691385269,
+              -1.3484973907470703,
+              1.4210394620895386,
+              -0.2992796301841736,
+              0.0003067208454012871,
+              0.015032712370157242
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00010299030691385269,
+              -1.3484947681427002,
+              1.4210394620895386,
+              -0.2992796301841736,
+              0.0003067208454012871,
+              0.015042449347674847
+            ],
+            "actual": [
+              -0.00010299030691385269,
+              -1.3484835624694824,
+              1.4209825992584229,
+              -0.2991931140422821,
+              0.0004123318940401077,
+              0.0005943427095189691
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          }
+        ],
+        "hold_position_tolerance_rad": 0.01,
+        "ready_hold": {
+          "max_error_rad": [
+            0.00010036863386631012,
+            0.001516437530517667,
+            0.009017400741577086,
+            0.0008068859577178844,
+            0.0004123318940401077,
+            0.0005943427095189691
+          ],
+          "max_velocity_rad_s": 0.002247042255476117
+        },
+        "folded_q": [
+          -7.302965968847275e-05,
+          -1.561435341835022,
+          1.557132363319397,
+          0.0027228533290326595,
+          0.0018695387989282608,
+          0.0005655055865645409
+        ],
+        "deactivated": true,
+        "steps": [
+          {
+            "step": "return_startup_j3",
+            "started_at": 118565.041355106,
+            "duration_sec": 12.0,
+            "initial": [
+              -8.239224553108215e-05,
+              -1.3484835624694824,
+              1.4209825992584229,
+              -0.2991931140422821,
+              0.0004123318940401077,
+              0.0005655055865645409
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565763235092163,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -8.239224553108215e-05,
+              -1.3484835624694824,
+              1.557132363319397,
+              -0.2991931140422821,
+              0.0004123318940401077,
+              0.0004984688712283969
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              8.688587695360184e-05,
+              0.001516437530517667,
+              0.009532030150736892,
+              0.0008068859577178844,
+              0.0004123318940401077,
+              0.0005655055865645409
+            ]
+          },
+          {
+            "step": "return_startup_j4",
+            "started_at": 118577.35048521,
+            "duration_sec": 20.0,
+            "initial": [
+              -8.239224553108215e-05,
+              -1.3484835624694824,
+              1.557132363319397,
+              -0.2991931140422821,
+              0.0004123318940401077,
+              0.0004984688712283969
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.565763235092163,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -8.0144964158535e-05,
+              -1.34843111038208,
+              1.557132363319397,
+              0.0004986559506505728,
+              0.0004505319520831108,
+              0.00047936898772604764
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              8.239224553108215e-05,
+              0.0015688896179200107,
+              0.008630871772766113,
+              0.0011363654846933968,
+              0.0004505319520831108,
+              0.0004984688712283969
+            ]
+          },
+          {
+            "step": "return_startup_j2",
+            "started_at": 118597.710711527,
+            "duration_sec": 16.0,
+            "initial": [
+              -8.0144964158535e-05,
+              -1.34843111038208,
+              1.557132363319397,
+              0.0004986559506505728,
+              0.0004505319520831108,
+              0.00047936898772604764
+            ],
+            "target": [
+              -5.243159830570221e-05,
+              -1.567552924156189,
+              1.5651261806488037,
+              0.002138247713446617,
+              0.0016395915299654007,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -7.07823783159256e-05,
+              -1.561439871788025,
+              1.557132363319397,
+              0.00271349074319005,
+              0.0018695387989282608,
+              0.0005655055865645409
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              8.014495600247e-05,
+              0.006108521883001705,
+              0.008630871673668272,
+              0.0008531988489858947,
+              0.0004505316970343325,
+              0.00047936891315718554
+            ]
+          }
+        ],
+        "fixed_return_path_samples": 243
+      },
+      "complete_bounded_cycle_passed": true,
+      "matches_current_profile": true
+    },
+    {
+      "trial": 16,
+      "startup_passed": true,
+      "evidence_directory": ".tmp-meow-upgrade/startup-16-audit",
+      "startup": {
+        "time": "2026-09-29T11:48:58.761352+00:00",
+        "profile": "/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+        "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+        "steps": [
+          {
+            "step": "align_folded",
+            "started_at": 118704.293916018,
+            "duration_sec": 3,
+            "initial": [
+              -3.2207928597927094e-05,
+              -1.5680596828460693,
+              1.5658478736877441,
+              0.004237734246999025,
+              0.004065273329615593,
+              0.0006902164313942194
+            ],
+            "target": [
+              0.0,
+              -1.5680596828460693,
+              1.5658478736877441,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -3.2207928597927094e-05,
+              -1.567557454109192,
+              1.5651606321334839,
+              0.00214761053211987,
+              0.0014860434457659721,
+              0.0005078315734863281
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.220543595176318e-05,
+              0.0005022287368774414,
+              0.0006849765777587891,
+              0.002372453057985803,
+              0.0015692838612518132,
+              0.0005208228772289798
+            ]
+          },
+          {
+            "step": "startup_j2",
+            "started_at": 118707.603266144,
+            "duration_sec": 8.0,
+            "initial": [
+              -3.2207928597927094e-05,
+              -1.567557454109192,
+              1.5651606321334839,
+              0.00214761053211987,
+              0.0014860434457659721,
+              0.0005078315734863281
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5658478736877441,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -3.670249134302139e-05,
+              -1.3535102605819702,
+              1.5650782585144043,
+              0.0020037998910993338,
+              0.00141900684684515,
+              0.0004887316608801484
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.670249134302139e-05,
+              0.013384750748640872,
+              0.0007696151733398438,
+              0.00214761053211987,
+              0.0014860434457659721,
+              0.0005078315734863281
+            ]
+          },
+          {
+            "step": "startup_j4",
+            "started_at": 118715.913476163,
+            "duration_sec": 10.0,
+            "initial": [
+              -3.670249134302139e-05,
+              -1.3535102605819702,
+              1.5650782585144043,
+              0.0020037998910993338,
+              0.00141900684684515,
+              0.0004887316608801484
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5658478736877441,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -2.958625555038452e-05,
+              -1.3534644842147827,
+              1.565069317817688,
+              -0.29781267046928406,
+              0.0012942962348461151,
+              0.0004887316608801484
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.670249134302139e-05,
+              0.003507995605468661,
+              0.0007785558700561523,
+              0.006029387833869313,
+              0.00141900684684515,
+              0.0004887316608801484
+            ]
+          },
+          {
+            "step": "startup_j3",
+            "started_at": 118726.273334812,
+            "duration_sec": 6.0,
+            "initial": [
+              -2.958625555038452e-05,
+              -1.3534644842147827,
+              1.565069317817688,
+              -0.29781267046928406,
+              0.0012942962348461151,
+              0.0004887316608801484
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -3.2207928597927094e-05,
+              -1.3534551858901978,
+              1.4295883178710938,
+              -0.2982059121131897,
+              0.0012942962348461151,
+              0.0004887316608801484
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              3.2207928597927094e-05,
+              0.003464484214782626,
+              0.0023503651897343047,
+              0.0021873295307159313,
+              0.0012942962348461151,
+              0.0004887316608801484
+            ]
+          }
+        ],
+        "measured_hold": {
+          "enable_transient_allowed": true,
+          "enable_started_at": 118699.604337513,
+          "seconds": 3.0,
+          "reference_q": [
+            -4.5690685510635376e-05,
+            -1.5699816942214966,
+            1.5697078704833984,
+            0.004860914312303066,
+            0.0041416725143790245,
+            0.0006902164313942194
+          ],
+          "q": [
+            -2.958625555038452e-05,
+            -1.5680642127990723,
+            1.565859079360962,
+            0.004237734246999025,
+            0.004065273329615593,
+            0.0006902164313942194
+          ],
+          "samples": 316,
+          "max_error_rad": [
+            1.6104429960250854e-05,
+            0.0019174814224243164,
+            0.0038487911224365234,
+            0.0008819643408060074,
+            7.639918476343155e-05,
+            0.0
+          ],
+          "max_velocity_rad_s": 0.03782521188259125,
+          "settled_max_error_rad": [
+            1.6104429960250854e-05,
+            0.0019174814224243164,
+            0.003855466842651367,
+            0.0006231800653040409,
+            7.639918476343155e-05,
+            0.0
+          ],
+          "settled_max_velocity_rad_s": 0.0011235211277380586,
+          "post_controller_max_error_rad": 0.003859996795654297,
+          "post_controller_max_velocity_rad_s": 0.0011523293796926737
+        },
+        "ready_hold": {
+          "seconds": 10.0,
+          "samples": 1001,
+          "last_q": [
+            -3.2207928597927094e-05,
+            -1.3534506559371948,
+            1.4295449256896973,
+            -0.29821527004241943,
+            0.0012942962348461151,
+            0.0004887316608801484
+          ],
+          "max_error_rad": [
+            3.2207928597927094e-05,
+            0.003455185890197665,
+            0.0004550743103026722,
+            0.0017940878868102916,
+            0.0012942962348461151,
+            0.0004887316608801484
+          ],
+          "max_velocity_rad_s": 0.001310774590820074
+        },
+        "passed": true,
+        "service_timeouts": []
+      },
+      "startup_peak_recorded_velocity_rad_s": [
+        0.0036028523463755846,
+        0.07752295583486557,
+        0.059736184775829315,
+        0.09469017386436462,
+        0.00954992976039648,
+        0.004808485507965088
+      ],
+      "driver_shutdown": [
+        {
+          "error": "Meow disable not confirmed; heartbeat backstop armed, restart required: joint_1: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105); joint_2: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105); joint_3: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105); joint_4: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105); joint_5: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105); joint_6: SDO: CAN transport error: No buffer space available (os error 105): CAN transport error: No buffer space available (os error 105): No buffer space available (os error 105)",
+          "pid": 62755,
+          "schema_version": 1,
+          "state": "disable_unconfirmed",
+          "unix_time_ms": 1790682711492
+        }
+      ],
+      "moveit_trial": {
+        "passed": false,
+        "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+        "startup_report": "/tmp/hex-arm-real-launch.can2.vyC0wU/hex-arm-exit-w0ym2s0t/startup-ready.json",
+        "moveit": [
+          {
+            "target": [
+              -0.02,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -2.7339905500411987e-05,
+              -1.3534506559371948,
+              1.4295332431793213,
+              -0.29821527004241943,
+              0.0012942962348461151,
+              0.0004887316608801484
+            ],
+            "actual": [
+              -0.018344104290008545,
+              -1.35347580909729,
+              1.4295332431793213,
+              -0.2980426251888275,
+              0.0013519702479243279,
+              0.0004887316608801484
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 30
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.01834859699010849,
+              -1.353471279144287,
+              1.4295332431793213,
+              -0.2980426251888275,
+              0.0013422323390841484,
+              0.0004887316608801484
+            ],
+            "actual": [
+              -0.004889563657343388,
+              -1.353489637374878,
+              1.4295332431793213,
+              -0.2979947030544281,
+              0.001284932717680931,
+              0.0004984688712283969
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.3350000000000002,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004846121184527874,
+              -1.3534873723983765,
+              1.4295332431793213,
+              -0.2980044186115265,
+              0.001284932717680931,
+              0.0004984688712283969
+            ],
+            "actual": [
+              -0.004924018867313862,
+              -1.3366570472717285,
+              1.4295332431793213,
+              -0.29798534512519836,
+              0.0012175217270851135,
+              0.0005078315734863281
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004901173524558544,
+              -1.3366570472717285,
+              1.4295332431793213,
+              -0.2979947030544281,
+              0.0012175217270851135,
+              0.0005078315734863281
+            ],
+            "actual": [
+              -0.004339412786066532,
+              -1.3483738899230957,
+              1.4295310974121094,
+              -0.2980426251888275,
+              0.0012369966134428978,
+              0.0004984688712283969
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 25
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.415,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.004099729470908642,
+              -1.3483716249465942,
+              1.4295310974121094,
+              -0.2980426251888275,
+              0.0012272587046027184,
+              0.0004984688712283969
+            ],
+            "actual": [
+              -0.003992619924247265,
+              -1.3483625650405884,
+              1.4139130115509033,
+              -0.2981002926826477,
+              0.0012463591992855072,
+              0.0004598946252372116
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0039012404158711433,
+              -1.3483625650405884,
+              1.4139013290405273,
+              -0.2981002926826477,
+              0.0012463591992855072,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.0038577979430556297,
+              -1.3483558893203735,
+              1.4214413166046143,
+              -0.2982538640499115,
+              0.0012272587046027184,
+              0.00046963183558546007
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.315,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0029859449714422226,
+              -1.3482438325881958,
+              1.4214413166046143,
+              -0.2987332344055176,
+              0.0011890595778822899,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.000440794974565506,
+              -1.3483442068099976,
+              1.4214593172073364,
+              -0.3129989504814148,
+              0.0012463591992855072,
+              0.00045053198118694127
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 27
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.0004314323887228966,
+              -1.3483397960662842,
+              1.4214593172073364,
+              -0.31301841139793396,
+              0.0012463591992855072,
+              0.00045053198118694127
+            ],
+            "actual": [
+              -0.00018275994807481766,
+              -1.3483765125274658,
+              1.4217172861099243,
+              -0.2997781038284302,
+              0.0012272587046027184,
+              0.0004598946252372116
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 24
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              -0.02,
+              0.0
+            ],
+            "initial": [
+              -0.00015991553664207458,
+              -1.3483738899230957,
+              1.4217172861099243,
+              -0.2997683584690094,
+              0.0012272587046027184,
+              0.0004598946252372116
+            ],
+            "actual": [
+              -0.00010748393833637238,
+              -1.3483420610427856,
+              1.4216649532318115,
+              -0.29955750703811646,
+              -0.018656816333532333,
+              0.00047936898772604764
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 31
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -0.00010748393833637238,
+              -1.3483420610427856,
+              1.4216649532318115,
+              -0.29955750703811646,
+              -0.018676292151212692,
+              0.00047936898772604764
+            ],
+            "actual": [
+              -0.00010748393833637238,
+              -1.3483397960662842,
+              1.4217607975006104,
+              -0.29938486218452454,
+              0.00012471061199903488,
+              0.0004984688712283969
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 29
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.015
+            ],
+            "initial": [
+              -0.00010523665696382523,
+              -1.3483375310897827,
+              1.4217607975006104,
+              -0.29938486218452454,
+              0.00012471061199903488,
+              0.0004984688712283969
+            ],
+            "actual": [
+              -9.138043969869614e-05,
+              -1.3483670949935913,
+              1.421744704246521,
+              -0.2992316782474518,
+              0.000268520787358284,
+              0.015128586441278458
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          },
+          {
+            "target": [
+              0.0,
+              -1.35,
+              1.43,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "initial": [
+              -9.138043969869614e-05,
+              -1.3483625650405884,
+              1.421744704246521,
+              -0.2992316782474518,
+              0.000268520787358284,
+              0.015148060396313667
+            ],
+            "actual": [
+              -9.138043969869614e-05,
+              -1.3483693599700928,
+              1.421785831451416,
+              -0.29913580417633057,
+              0.00037413183599710464,
+              0.0005078315734863281
+            ],
+            "moveit_error_code": 1,
+            "plan_points": 26
+          }
+        ],
+        "hold_position_tolerance_rad": 0.01,
+        "ready_hold": {
+          "max_error_rad": [
+            9.138043969869614e-05,
+            0.0016441106796265537,
+            0.008214168548583922,
+            0.0008641958236694225,
+            0.000354657880961895,
+            0.0005078315734863281
+          ],
+          "max_velocity_rad_s": 0.0011377428891137242
+        },
+        "error": "shutdown requires healthy active driver",
+        "failure_feedback_age_s": {
+          "joint": 0.01038706699910108,
+          "driver": 4.6747998567298055e-05
+        },
+        "deactivated": true,
+        "steps": [
+          {
+            "step": "return_startup_j3",
+            "started_at": 118826.575519564,
+            "duration_sec": 12.0,
+            "initial": [
+              -8.46395269036293e-05,
+              -1.3483558893203735,
+              1.421785831451416,
+              -0.29913580417633057,
+              0.000354657880961895,
+              0.0004887316608801484
+            ],
+            "target": [
+              0.0,
+              -1.35,
+              1.5658478736877441,
+              -0.3,
+              0.0,
+              0.0
+            ],
+            "actual": [
+              -7.07823783159256e-05,
+              -1.3483558893203735,
+              1.557159662246704,
+              -0.29913580417633057,
+              0.000354657880961895,
+              0.0004887316608801484
+            ],
+            "status": 4,
+            "error_code": 0,
+            "message": "Goal successfully reached!",
+            "max_tracking_error_rad": [
+              8.46395269036293e-05,
+              0.0016441106796265537,
+              0.009266706854885731,
+              0.0008641958236694225,
+              0.000354657880961895,
+              0.0004887316608801484
+            ]
+          }
+        ],
+        "fixed_return_path_samples": 243
+      },
+      "complete_bounded_cycle_passed": false,
+      "matches_current_profile": true
+    }
+  ],
+  "last_completed_trial": 16,
+  "status": "paused_by_user",
+  "last_cycle_passed": false,
+  "pause_reason": "User requested orderly pause; trial 16 failed during J4 return with CAN transport fault 4100.",
+  "current_profile_complete_bounded_cycle_trials": [
+    15
+  ],
+  "full_deployment_qualified": false,
+  "remaining_scope": [
+    "CAN fault diagnosis and repeated complete cycles",
+    "expanded workspace",
+    "higher speed and acceleration",
+    "payload qualification",
+    "automatic controlled return on supervisor exit"
+  ],
+  "final_disabled_read": null,
+  "final_motor_disable_confirmed": false,
+  "final_independent_read_error": "Traceback (most recent call last):\n  File \"/workspaces/hex_arm_ros2/scripts/read-meow-state.py\", line 83, in <module>\n    main()\n  File \"/workspaces/hex_arm_ros2/scripts/read-meow-state.py\", line 60, in main\n    identity = [uint(0x1018, i) for i in range(1, 5)]\n                ^^^^^^^^^^^^^^^\n  File \"/workspaces/hex_arm_ros2/scripts/read-meow-state.py\", line 59, in <lambda>\n    uint = lambda index, sub=0: int.from_bytes(upload(bus, node, index, sub), 'little')\n                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspaces/hex_arm_ros2/scripts/read-meow-state.py\", line 21, in upload\n    bus.send(struct.pack('=IB3x8s', 0x600 + node, 8, request))\nOSError: [Errno 105] No buffer space available\n",
+  "final_can_state": "11: can2: <NOARP,UP,LOWER_UP,ECHO> mtu 72 qdisc pfifo_fast state UP mode DEFAULT group default qlen 10\n    link/can  promiscuity 0  allmulti 0 minmtu 72 maxmtu 72 \n    can <FD> state ERROR-PASSIVE (berr-counter tx 128 rx 2) restart-ms 0 \n\t  bitrate 1000000 sample-point 0.800\n\t  tq 12 prop-seg 31 phase-seg1 32 phase-seg2 16 sjw 5 brp 1\n\t  gs_usb: tseg1 2..256 tseg2 1..128 sjw 1..128 brp 1..512 brp_inc 1\n\t  dbitrate 4000000 dsample-point 0.800\n\t  dtq 12 dprop-seg 7 dphase-seg1 8 dphase-seg2 4 dsjw 3 dbrp 1\n\t  gs_usb: dtseg1 1..32 dtseg2 1..16 dsjw 1..16 dbrp 1..32 dbrp_inc 1\n\t  clock 80000000 \n\t  re-started bus-errors arbit-lost error-warn error-pass bus-off\n\t  0          0          0          1          1          0         numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 parentbus usb parentdev 3-2.1:1.0 \n    RX:  bytes   packets errors dropped  missed   mcast           \n    1811689400 147995161      0       0       0       0 \n    TX:  bytes   packets errors dropped carrier collsns           \n     217768526   7060530      0       0       0       0 \n",
+  "final_container_processes": "PID                 COMMAND             COMMAND\n3460613             sleep               sleep infinity\n",
+  "motor_power_off_user_confirmation": "pending",
+  "last_successful_independent_read_path": ".tmp-meow-upgrade/after-startup-15.json",
+  "factory_friction_available": false,
+  "factory_read_evidence": ".tmp-meow-upgrade/factory-calibration.json",
+  "software_tests": {
+    "python_selected_passed": 117,
+    "python_evidence": ".tmp-meow-upgrade/final-python-tests.log",
+    "previous_rust_passed": 302,
+    "previous_rust_ignored": 1,
+    "previous_hardware_ctest_suites_passed": 2
+  }
+}

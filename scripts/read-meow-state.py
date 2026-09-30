@@ -43,6 +43,8 @@ def main():
     parser.add_argument('--interface', required=True)
     parser.add_argument('--profile', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument("--factory-calibration", action="store_true",
+                        help="Also save raw 0x4001 factory words; validity remains the driver decoder's responsibility")
     args = parser.parse_args()
     profile = yaml.safe_load(args.profile.read_text())
     if profile['bus']['protocol'] != 'meow' or args.interface != profile['bus']['interface']:
@@ -62,6 +64,9 @@ def main():
             record = {'node': node, 'identity': identity, 'mode': uint(0x4402),
                       'error': uint(0x453f), 'heartbeat_consumer': uint(0x1016, 1),
                       'samples_rev': []}
+            if args.factory_calibration:
+                record['factory_highest_subindex'] = uint(0x4001, 0)
+                record['factory_words_u32'] = [uint(0x4001, sub) for sub in range(1, 8)]
             for i in range(7):
                 record['samples_rev'].append(int.from_bytes(upload(bus,node,0x4564), 'little', signed=True) / 2**24)
                 if i < 6:

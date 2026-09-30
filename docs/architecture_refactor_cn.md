@@ -3,21 +3,22 @@
 ## 本次已实现的范围
 
 本次是可独立验证的第一阶段结构重构，不是整条控制链路重写。
-目标是同机 Docker、六轴 Meow / SocketCAN、MoveIt 真机执行。
+目标是同机 Docker、六轴 Meow 或 CiA402 / SocketCAN、MoveIt 真机执行。
 保持既有增益、重力补偿、反馈超时、限位、插值与电机寄存器操作不变。
 
 - 默认生产入口为 `hex_arm_controller`，只保留 profile、通信、
   mock、离线校验、模型路径和停机回执参数。
 - 电机边界移入 `src/hex_arm_controller/src/motor/`；
   核心运行逻辑仍通过 `MotorBackend` 依赖接口，可注入 MockBackend。
-- 历史单轴诊断迁入 `src/tools/`，仅启用 `legacy` feature 后才编译
-  `hex_arm_commission`。旧 CiA402 vendor 与 gs_usb 不再进入默认依赖树。
-- 默认 Zenoh 仅显式启用 TCP / UDP；生产 launch 使用本机 TCP 直连，
-  UDP 保留给已有 mock 发现测试。历史 feature 保留原完整传输能力。
+- 历史单轴诊断迁入 `src/tools/`。默认生产构建包含 CiA402 后端，但不安装
+  `hex_arm_commission`；后者仍需显式启用 `HEX_ARM_BUILD_COMMISSIONING`。
+- 生产 launch 使用本机 TCP 直连；当前默认构建也包含 CiA402 所需的
+  `legacy` Rust feature，保留完整传输能力。UDP 仍用于已有 mock 发现测试。
 - `robot_api.proto` 只保留控制器包的一份；Rust 与 Python 都由它生成，
   不手工修改生成文件。没有改变既有消息字段或协议语义。
-- 每次真机执行启动必须自动运行 J2 → J4 → J3；生产入口不能用
-  `startup_ready:=false` 绕过。仅观察模式仍可保持全程失能。
+- Meow 真机执行自动运行 J2 → J4 → J3；CiA402 真机执行从经过标定的当前姿态
+  使能并检查保持误差。生产入口不能用 `startup_ready:=false` 绕过协议启动流程。
+  仅观察模式仍可保持全程失能。
 - 增加原子 JSON 停机回执与独立 Docker 安装产物。
 
 当前生产链路仍是 MoveIt → JTC / ros2_control → C++ 硬件插件 →
@@ -33,7 +34,7 @@ hex_arm_controller/
     mod.rs                 六轴接口、反馈、身份数据
     meow.rs                新固件 Meow / SocketCAN 电机实现
     mock.rs                无真实输出的测试后端
-    legacy.rs              可选旧 CiA402 / USB 实现
+    legacy.rs              旧 CiA402 / USB 实现
   src/runtime.rs           会话、重力补偿、控制周期、故障协调
   src/protocol.rs          Zenoh / Protobuf 边界
   src/startup_recipe.rs    共享启动配置的类型和校验
@@ -72,7 +73,8 @@ Rust 在构建产物内嵌配置；ROS 从该包安装的配置读取。修改�
 
 ## 构建与旧命令迁移
 
-开发环境仍可用原有 `scripts/build.sh`，默认不安装 commissioning 二进制。
+开发环境仍可用原有 `scripts/build.sh`，默认包含 Meow 和 CiA402 后端，
+但不安装 commissioning 二进制。`HEX_ARM_ENABLE_CIA402=OFF` 可构建仅 Meow 驱动。
 
 ```bash
 # 容器内，无硬件测试

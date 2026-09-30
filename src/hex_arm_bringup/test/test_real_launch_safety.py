@@ -235,11 +235,11 @@ def test_real_execution_cannot_skip_ordered_startup(tmp_path: Path) -> None:
     module = _load_launch_module()
     context = _context(_profile(tmp_path), "true")
     context.launch_configurations["startup_ready"] = "false"
-    with pytest.raises(RuntimeError, match="automatic J2"):
+    with pytest.raises(RuntimeError, match="protocol startup procedure"):
         module._real_nodes(context)
 
 
-def test_real_execution_automatically_launches_startup_without_hold_override(tmp_path: Path) -> None:
+def test_real_execution_selects_protocol_startup(tmp_path: Path) -> None:
     module = _load_launch_module()
     context = _context(_profile(tmp_path), "true")
     # The startup process is nested in an event handler; inspect the source
@@ -247,7 +247,7 @@ def test_real_execution_automatically_launches_startup_without_hold_override(tmp
     module._real_nodes(context)
     source = LAUNCH_FILE.read_text()
     assert '"--allow-motion", "--activate-controllers"' in source
-    assert '"--hold-current"' not in source
+    assert '"--hold-current"' in source
 
 
 def test_real_launch_rejects_v1_and_missing_gravity_installation_data(
@@ -335,3 +335,32 @@ def test_startup_failure_stops_owner_but_success_keeps_holding():
     handler = module._shutdown_after_failure("ordered startup_ready")
     assert handler(SimpleNamespace(returncode=0), context) == []
     assert any(isinstance(a, EmitEvent) for a in handler(SimpleNamespace(returncode=1), context))
+
+
+def test_startup_event_requires_a_successful_profile_bound_report(tmp_path):
+    import hashlib
+    import json
+    module = _load_launch_module()
+    context = LaunchContext()
+    profile = _profile(tmp_path)
+    report_path = tmp_path / "startup.json"
+    report = {"passed": True, "profile_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+              "moveit_execution_unlocked": True}
+    token = "a" * 32
+    handler = module._after_startup(report_path, profile, token)
+    report_path.write_text(json.dumps(report))
+    success = handler(SimpleNamespace(returncode=0), context)
+    assert len(success) == 1 and isinstance(success[0].event, module.StartupVerified)
+    assert success[0].event.profile == str(profile) and success[0].event.readiness_token == token
+    for changes in ({"passed": False}, {"profile_sha256": "stale"}, {"moveit_execution_unlocked": False}):
+        report_path.write_text(json.dumps({**report, **changes}))
+        failed = handler(SimpleNamespace(returncode=0), context)
+        assert any(isinstance(action, EmitEvent) and isinstance(action.event, module.Shutdown)
+                   for action in failed)
+    report_path.write_text(json.dumps({**report, "deactivated": True}))
+    assert not any(isinstance(action, EmitEvent) for action in handler(SimpleNamespace(returncode=0), context))
+    report_path.unlink()
+    assert any(isinstance(action, EmitEvent) and isinstance(action.event, module.Shutdown)
+               for action in handler(SimpleNamespace(returncode=0), context))
+    assert any(isinstance(action, EmitEvent) and isinstance(action.event, module.Shutdown)
+               for action in handler(SimpleNamespace(returncode=1), context))
