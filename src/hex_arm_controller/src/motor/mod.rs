@@ -86,6 +86,12 @@ pub trait MotorBackend: Send + Sync {
     fn validate_targets(&self, _targets: [MotorTarget; DOF]) -> Result<()> {
         Ok(())
     }
+    /// Optional total feedback torque envelope in joint-side Nm. Meow's
+    /// profile torque_nm bounds host feed-forward only, so its total PD + Tff
+    /// envelope comes from the drive limit and read-back factory calibration.
+    fn measured_torque_limit_nm(&self, _index: usize) -> Option<f32> {
+        None
+    }
     async fn enable_compressed_mit(&self, initial_targets: [MotorTarget; DOF]) -> Result<()>;
     async fn set_targets(&self, targets: [MotorTarget; DOF]) -> Result<()>;
     async fn disable_all(&self) -> Result<()>;

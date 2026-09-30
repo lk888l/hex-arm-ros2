@@ -34,11 +34,12 @@ def test_joint_two_undertracking_cannot_pass_the_goal_phase() -> None:
     assert observed_goal_error_rad > constraints["joint_2"]["goal"]
 
 
-def test_real_stream_keeps_velocity_without_relaxing_tolerances() -> None:
+def test_real_stream_keeps_velocity_with_explicit_position_tolerances() -> None:
     override = yaml.safe_load((PACKAGE_ROOT / "config" / "controllers_real.yaml").read_text())
     real = override["firefly_arm_controller"]["ros__parameters"]
     assert real["command_interfaces"] == ["position", "velocity"]
     assert real["interpolate_from_desired_state"] is True
     assert not real.get("open_loop_control", False)
-    assert "constraints" not in real
+    for joint in [f"joint_{i}" for i in range(1, 7)]:
+        assert real["constraints"][joint] == {"trajectory": 0.04, "goal": 0.015}
     assert _constraints()["joint_3"]["goal"] == 0.005

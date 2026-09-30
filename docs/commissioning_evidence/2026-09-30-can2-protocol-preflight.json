@@ -1,0 +1,521 @@
+{
+  "recorded_utc": "2026-09-30T02:44:09.043155+00:00",
+  "scope": "Read-only protocol discovery before expanded real-arm deployment",
+  "motion_attempted": false,
+  "deployment_complete": false,
+  "requires_clarification": "User described legacy CiA402; all six live identities and objects match current Meow firmware instead. No firmware writes or drive enables performed.",
+  "profile": "config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+  "profile_sha256": "b54e7ca527ed98f672da91d9481b1da207c8a450d6533c0a0c07c313a8a27817",
+  "observations": {
+    "cia402-20260930-initial.json": {
+      "time": "2026-09-30T02:41:30.712032+00:00",
+      "interface": "can2",
+      "nodes": [],
+      "errors": [
+        "node 1 SDO 2003:07 abort 0x06020000",
+        "node 2 SDO 2003:07 abort 0x06020000",
+        "node 3 SDO 2003:07 abort 0x06020000",
+        "node 4 SDO 2003:07 abort 0x06020000",
+        "node 5 SDO 2003:07 abort 0x06020000",
+        "node 6 SDO 2003:07 abort 0x06020000"
+      ],
+      "passed": false,
+      "profile": "config/hardware/firefly_y6.cia402.can2.six-axis-j3kd12.local.yaml",
+      "profile_sha256": "74a5dcc55ccc56fc46408e5c52e89c71648d26491e474112752f5063045b2bcc"
+    },
+    "cia402-20260930-protocol-probe.json": {
+      "time": "2026-09-30T02:42:08.815434+00:00",
+      "interface": "can2",
+      "read_only": true,
+      "nodes": [
+        {
+          "node": 1,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541226,
+            "revision": 1702363137,
+            "serial_number": 621871117
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 1 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "d5f70000"
+          }
+        },
+        {
+          "node": 2,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541226,
+            "revision": 1702363137,
+            "serial_number": 622266383
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 2 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "bd684000"
+          }
+        },
+        {
+          "node": 3,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541226,
+            "revision": 1702363137,
+            "serial_number": 610481161
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 3 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "49ec4000"
+          }
+        },
+        {
+          "node": 4,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541176,
+            "revision": 1702363137,
+            "serial_number": 644751887
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 4 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "33030000"
+          }
+        },
+        {
+          "node": 5,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541176,
+            "revision": 1702363137,
+            "serial_number": 656806155
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 5 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "3490ffff"
+          }
+        },
+        {
+          "node": 6,
+          "identity": {
+            "vendor_id": 6841720,
+            "product_code": 1818541176,
+            "revision": 1702363137,
+            "serial_number": 623776780
+          },
+          "objects": {
+            "6041:00": "5002",
+            "6061:00": "00",
+            "603f:00": "0000",
+            "1016:01": "00000000",
+            "2003:07": {
+              "error": "node 6 SDO 2003:07 abort 0x06020000"
+            },
+            "4402:00": "00",
+            "453f:00": "0000",
+            "4564:00": "e70a0000"
+          }
+        }
+      ]
+    },
+    "arm-20260930-meow-initial.json": {
+      "time": "2026-09-30T02:42:34.966458+00:00",
+      "interface": "can2",
+      "profile": "config/hardware/firefly_y6.meow.can2.replacement.local.yaml",
+      "nodes": [
+        {
+          "node": 1,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            621871117
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            0.003781616687774658,
+            0.003781616687774658,
+            0.003781616687774658,
+            0.003781616687774658,
+            0.003781616687774658,
+            0.003781616687774658,
+            0.003781616687774658
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.003781616687774658,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -0.012109684759834524
+        },
+        {
+          "node": 2,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            622266383
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            0.25159817934036255,
+            0.25159817934036255,
+            0.25159817934036255,
+            0.25159817934036255,
+            0.25159817934036255,
+            0.25159817934036255,
+            0.25159817934036255
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.25159817934036255,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": -1.5716822855710897
+        },
+        {
+          "node": 3,
+          "identity": [
+            6841720,
+            1818541226,
+            1702363137,
+            610481161
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            0.2536054253578186,
+            0.2536054253578186,
+            0.2536054253578186,
+            0.2536054253578186,
+            0.2536054253578186,
+            0.2536054253578186,
+            0.2536054253578186
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.2536054253578186,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 1.5702303218223999
+        },
+        {
+          "node": 4,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            644751887
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            4.881620407104492e-05,
+            4.881620407104492e-05,
+            4.881620407104492e-05,
+            4.881620407104492e-05,
+            4.881620407104492e-05,
+            4.881620407104492e-05,
+            4.881620407104492e-05
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 4.881620407104492e-05,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.003575980359649913
+        },
+        {
+          "node": 5,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            656806155
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            -0.0017058849334716797,
+            -0.0017058849334716797,
+            -0.0017058849334716797,
+            -0.0017058849334716797,
+            -0.0017058849334716797,
+            -0.0017058849334716797,
+            -0.0017058849334716797
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": -0.0017058849334716797,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0041611475913567765
+        },
+        {
+          "node": 6,
+          "identity": [
+            6841720,
+            1818541176,
+            1702363137,
+            623776780
+          ],
+          "mode": 0,
+          "error": 0,
+          "heartbeat_consumer": 0,
+          "samples_rev": [
+            0.00016635656356811523,
+            0.00016635656356811523,
+            0.00016635656356811523,
+            0.00016635656356811523,
+            0.00016635656356811523,
+            0.00016635656356811523,
+            0.00016635656356811523
+          ],
+          "factory_highest_subindex": 7,
+          "factory_words_u32": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "position_rev": 0.00016635656356811523,
+          "span_rad": 0.0,
+          "q_using_previous_zero_rad": 0.0007669903939428206
+        }
+      ]
+    }
+  },
+  "build": {
+    "container": "hex-arm-cia402-test",
+    "packages": [
+      "hex_arm_controller",
+      "hex_arm_hardware",
+      "hex_arm_bringup",
+      "hex_arm_moveit_config"
+    ],
+    "exit_code": 0
+  },
+  "can_link": [
+    {
+      "ifindex": 11,
+      "ifname": "can2",
+      "flags": [
+        "NOARP",
+        "UP",
+        "LOWER_UP",
+        "ECHO"
+      ],
+      "mtu": 72,
+      "qdisc": "pfifo_fast",
+      "operstate": "UP",
+      "linkmode": "DEFAULT",
+      "group": "default",
+      "txqlen": 10,
+      "link_type": "can",
+      "promiscuity": 0,
+      "allmulti": 0,
+      "min_mtu": 72,
+      "max_mtu": 72,
+      "linkinfo": {
+        "info_kind": "can",
+        "info_data": {
+          "ctrlmode": [
+            "FD"
+          ],
+          "ctrlmode_supported": [
+            "LOOPBACK",
+            "LISTEN-ONLY",
+            "BERR-REPORTING",
+            "FD",
+            "CC-LEN8-DLC"
+          ],
+          "state": "ERROR-ACTIVE",
+          "berr_counter": {
+            "tx": 0,
+            "rx": 0
+          },
+          "restart_ms": 0,
+          "bittiming": {
+            "bitrate": 1000000,
+            "sample_point": "0.800",
+            "tq": 12,
+            "prop_seg": 31,
+            "phase_seg1": 32,
+            "phase_seg2": 16,
+            "sjw": 5,
+            "brp": 1
+          },
+          "bittiming_const": {
+            "name": "gs_usb",
+            "tseg1": {
+              "min": 2,
+              "max": 256
+            },
+            "tseg2": {
+              "min": 1,
+              "max": 128
+            },
+            "sjw": {
+              "min": 1,
+              "max": 128
+            },
+            "brp": {
+              "min": 1,
+              "max": 512
+            },
+            "brp_inc": 1
+          },
+          "data_bittiming": {
+            "bitrate": 4000000,
+            "sample_point": "0.800",
+            "tq": 12,
+            "prop_seg": 7,
+            "phase_seg1": 8,
+            "phase_seg2": 4,
+            "sjw": 3,
+            "brp": 1
+          },
+          "data_bittiming_const": {
+            "name": "gs_usb",
+            "tseg1": {
+              "min": 1,
+              "max": 32
+            },
+            "tseg2": {
+              "min": 1,
+              "max": 16
+            },
+            "sjw": {
+              "min": 1,
+              "max": 16
+            },
+            "brp": {
+              "min": 1,
+              "max": 32
+            },
+            "brp_inc": 1
+          },
+          "clock": 80000000
+        },
+        "info_xstats": {
+          "restarts": 0,
+          "bus_error": 0,
+          "arbitration_lost": 0,
+          "error_warning": 0,
+          "error_passive": 0,
+          "bus_off": 0
+        }
+      },
+      "num_tx_queues": 1,
+      "num_rx_queues": 1,
+      "gso_max_size": 65536,
+      "gso_max_segs": 65535,
+      "tso_max_size": 65536,
+      "tso_max_segs": 65535,
+      "gro_max_size": 65536,
+      "parentbus": "usb",
+      "parentdev": "3-2.1:1.0",
+      "stats64": {
+        "rx": {
+          "bytes": 7512,
+          "packets": 3816,
+          "errors": 0,
+          "dropped": 2334,
+          "over_errors": 0,
+          "multicast": 0
+        },
+        "tx": {
+          "bytes": 2112,
+          "packets": 264,
+          "errors": 0,
+          "dropped": 0,
+          "carrier_errors": 0,
+          "collisions": 0
+        }
+      }
+    }
+  ]
+}

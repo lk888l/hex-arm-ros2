@@ -1,0 +1,22 @@
+services:
+  ros2-jazzy-arm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: hex-arm-jazzy:local
+    container_name: ros2-jazzy-arm
+    hostname: hex-arm-dev
+    network_mode: host
+    ipc: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      XDG_RUNTIME_DIR: /tmp/hex-arm-runtime
+    volumes:
+      - .:/workspaces/hex_arm_ros2
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - bash
+      - -lc
+      - install -d -m 0700 /tmp/hex-arm-runtime && exec sleep infinity

@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "time": "2026-09-29T05:34:21.950280+00:00",
+  "mode": "calibrate",
+  "interface": "can2",
+  "adapter": {
+    "driver": "gs_usb",
+    "vendor_id": 4617,
+    "product_id": 8995,
+    "serial": "1DF0C226F664BC9C49329C2BFF28E370",
+    "channel": 2
+  },
+  "profile": "config/hardware/firefly_y6.cia402.can2.survey.local.yaml",
+  "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+  "reference_source": "/home/kk/kk_data/ros2_project/hex-arm-ros2/src/hex_arm_controller/config/startup.yaml",
+  "reference_sha256": "38a9908521d9c5a07133dd8da1dd35f700621d8af0028e2f79abeccf2b616022",
+  "reference_position_rad": [
+    0.0,
+    -1.57,
+    1.57,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "pose_confirmed": true,
+  "replace_arm": true,
+  "direction_override": null,
+  "samples": 21,
+  "interval_sec": 0.05,
+  "max_span_rad": 0.001,
+  "tolerance_rad": 0.005,
+  "nodes": [
+    {
+      "node": 1,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    },
+    {
+      "node": 2,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    },
+    {
+      "node": 3,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    },
+    {
+      "node": 4,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    },
+    {
+      "node": 5,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    },
+    {
+      "node": 6,
+      "identity": {},
+      "samples_rev": [],
+      "status_words": [],
+      "error_codes": [],
+      "errors": [
+        "timed out"
+      ]
+    }
+  ],
+  "joints": [],
+  "errors": [
+    "joint_1: timed out",
+    "joint_1: disabled state not confirmed throughout sampling",
+    "joint_1: drive error or incomplete fault checks",
+    "joint_1: missing/incomplete live identity",
+    "joint_1: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)",
+    "joint_2: timed out",
+    "joint_2: disabled state not confirmed throughout sampling",
+    "joint_2: drive error or incomplete fault checks",
+    "joint_2: missing/incomplete live identity",
+    "joint_2: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)",
+    "joint_3: timed out",
+    "joint_3: disabled state not confirmed throughout sampling",
+    "joint_3: drive error or incomplete fault checks",
+    "joint_3: missing/incomplete live identity",
+    "joint_3: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)",
+    "joint_4: timed out",
+    "joint_4: disabled state not confirmed throughout sampling",
+    "joint_4: drive error or incomplete fault checks",
+    "joint_4: missing/incomplete live identity",
+    "joint_4: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)",
+    "joint_5: timed out",
+    "joint_5: disabled state not confirmed throughout sampling",
+    "joint_5: drive error or incomplete fault checks",
+    "joint_5: missing/incomplete live identity",
+    "joint_5: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)",
+    "joint_6: timed out",
+    "joint_6: disabled state not confirmed throughout sampling",
+    "joint_6: drive error or incomplete fault checks",
+    "joint_6: missing/incomplete live identity",
+    "joint_6: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)"
+  ],
+  "warnings": [
+    "joint_1: identity differs from input profile; binding candidate to observed identity",
+    "joint_2: identity differs from input profile; binding candidate to observed identity",
+    "joint_3: identity differs from input profile; binding candidate to observed identity",
+    "joint_4: identity differs from input profile; binding candidate to observed identity",
+    "joint_5: identity differs from input profile; binding candidate to observed identity",
+    "joint_6: identity differs from input profile; binding candidate to observed identity"
+  ],
+  "passed": false,
+  "deployment_validated": false
+}

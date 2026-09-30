@@ -19,7 +19,7 @@ from rclpy.node import Node
 
 JOINTS = [f"joint_{index}" for index in range(1, 7)]
 SURVEYED_START = [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
-SURVEYED_TARGET = [0.0, -1.560, 3.120, 0.0, 0.0, 0.05]
+SURVEYED_TARGET = [0.0, -1.560, 1.550, 0.0, 0.0, 0.05]
 ACTIVE_COLLISION_GUARD = [0.0, 1.570, 1.570, 0.0, 0.0, 0.0]
 LAUNCH_FIXTURE = Path(__file__).with_name("plan_only_move_group.launch.py")
 
@@ -47,14 +47,14 @@ class PlanOnlyProbe(Node):
         request.robot_state.joint_state.position = positions
         return _spin_until(self, self.validity.call_async(request), 10.0)
 
-    def plan(self, start: list[float], target: list[float]):
+    def plan(self, start: list[float], target: list[float], velocity_scaling=0.1, acceleration_scaling=0.1):
         goal = MoveGroup.Goal()
         goal.request.group_name = "arm"
         goal.request.pipeline_id = "ompl"
         goal.request.num_planning_attempts = 3
         goal.request.allowed_planning_time = 5.0
-        goal.request.max_velocity_scaling_factor = 0.1
-        goal.request.max_acceleration_scaling_factor = 0.1
+        goal.request.max_velocity_scaling_factor = velocity_scaling
+        goal.request.max_acceleration_scaling_factor = acceleration_scaling
         goal.request.start_state.is_diff = False
         goal.request.start_state.joint_state.name = JOINTS
         goal.request.start_state.joint_state.position = start
@@ -90,6 +90,12 @@ class PlanOnlyProbe(Node):
             )
         if not result.planned_trajectory.joint_trajectory.points:
             raise RuntimeError("offline plan-only MoveIt returned an empty trajectory")
+        trajectory = result.planned_trajectory.joint_trajectory
+        final = dict(zip(trajectory.joint_names, trajectory.points[-1].positions, strict=True))
+        if set(final) != set(JOINTS) or any(
+            abs(final[name] - value) > 0.0011 for name, value in zip(JOINTS, target, strict=True)
+        ):
+            raise RuntimeError("offline plan-only trajectory did not reach the requested joint target")
         return result
 
 

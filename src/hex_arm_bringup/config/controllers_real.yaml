@@ -8,3 +8,12 @@ firefly_arm_controller:
     # measured holding error. Hardware activation seeds commands from feedback.
     # Measured feedback still drives the normal path/goal tolerance checks.
     interpolate_from_desired_state: true
+    # User-authorized settled acceptance of 0.015 rad, 2026-09-30.
+    # Transient path tolerance remains 0.04 rad.
+    constraints:
+      joint_1: {trajectory: 0.04, goal: 0.015}
+      joint_2: {trajectory: 0.04, goal: 0.015}
+      joint_3: {trajectory: 0.04, goal: 0.015}
+      joint_4: {trajectory: 0.04, goal: 0.015}
+      joint_5: {trajectory: 0.04, goal: 0.015}
+      joint_6: {trajectory: 0.04, goal: 0.015}

@@ -69,18 +69,39 @@ mod tests {
             torque_scale: 0.8,
             gravity_compensation_scale: 1.0,
             gravity_compensation_limit_nm: None,
+            motion_feedforward: None,
             torque_permille: 250,
             kp_kd_torque_permille: 250,
+            meow_torque_budget: Default::default(),
             limits: JointLimits {
                 position_lower_rad: -2.0,
                 position_upper_rad: 2.0,
                 measured_position_margin_rad: 0.0,
+                measured_velocity_margin_rad_s: 0.0,
                 velocity_rad_s: 3.0,
                 acceleration_rad_s2: 4.0,
                 torque_nm: 4.0,
             },
             default_kp: 10.0,
             default_kd: 1.5,
+        }
+    }
+
+    #[test]
+    fn one_motor_revolution_per_second_is_tau_joint_radians_per_second() {
+        for direction in [-1, 1] {
+            let joint = joint(direction);
+            assert_eq!(motor_velocity_to_ros(1.0, &joint), direction as f32 * TAU);
+            let motor = ros_target_to_motor(
+                RosTarget {
+                    velocity_rad_s: direction as f32 * TAU,
+                    ..RosTarget::default()
+                },
+                &joint,
+            );
+            assert!((motor.velocity_rev_s - 1.0).abs() < 1.0e-6);
+            // An angular offset belongs to position, never to velocity.
+            assert_eq!(motor_velocity_to_ros(0.0, &joint), 0.0);
         }
     }
 

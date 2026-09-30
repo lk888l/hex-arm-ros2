@@ -27,12 +27,26 @@ const FAULT_COMMAND: u32 = 0x1005;
 const FAULT_MEASURED_POSITION_LIMIT: u32 = 0x1006;
 const FAULT_MEASURED_OVERSPEED: u32 = 0x1007;
 const FAULT_MODE_TRANSITION: u32 = 0x1008;
+const FAULT_MEASURED_TORQUE_LIMIT: u32 = 0x1009;
+const FAULT_MEASURED_TEMPERATURE: u32 = 0x100a;
+const DEFAULT_MAX_MEASURED_TEMPERATURE_C: f32 = 70.0;
 // Allow only enough margin to absorb f32 unit-conversion roundoff at an exact
 // configured limit. These are not operating margins and do not relax commands.
 const MEASURED_POSITION_EPSILON_RAD: f32 = 1.0e-4;
 const MEASURED_VELOCITY_EPSILON_RAD_S: f32 = 1.0e-4;
+const MEASURED_TORQUE_EPSILON_NM: f32 = 1.0e-4;
 const EVENT_CAPACITY: usize = 100;
 const FAULT_DISABLE_RETRY_PERIOD: Duration = Duration::from_millis(50);
+pub const GRAVITY_COMP_LEASE: Duration = Duration::from_millis(500);
+const GRAVITY_COMP_DEFAULT_SLEW_NM_S: f32 = 5.0;
+
+#[derive(Debug)]
+struct GravityCompLease {
+    damping: [f32; DOF],
+    renewed_at: Instant,
+    sequence: u64,
+    ramp: Option<GravityStartupRamp>,
+}
 
 #[derive(Debug, Clone)]
 struct SessionLease {
@@ -150,6 +164,7 @@ struct RuntimeData {
     initialized: bool,
     gravity: [f32; 3],
     gravity_startup_ramp: Option<GravityStartupRamp>,
+    gravity_comp: Option<GravityCompLease>,
     events: VecDeque<pb::Event>,
     next_event_seq: u64,
 }
@@ -191,6 +206,7 @@ impl ArmRuntime {
                 initialized: false,
                 gravity,
                 gravity_startup_ramp: None,
+                gravity_comp: None,
                 events: VecDeque::with_capacity(EVENT_CAPACITY),
                 next_event_seq: 1,
             }),
@@ -268,6 +284,7 @@ impl ArmRuntime {
         data.safety.disable_preserving_fault();
         data.session = None;
         data.command = None;
+        data.gravity_comp = None;
         data.gravity = self.profile.gravity_vector_base_m_s2;
         data.disable_pending = false;
         data.next_disable_retry_at = None;
@@ -283,8 +300,81 @@ impl ArmRuntime {
 
     pub async fn set_mode(&self, session_id: u32, requested: OperatingMode) -> Result<()> {
         let _gate = self.mode_gate.lock().await;
+        anyhow::ensure!(
+            requested != OperatingMode::GravityComp,
+            "GRAVITY_COMP is unavailable through set_mode; use start_gravity_comp with damping and a session deadman"
+        );
+        self.set_mode_locked(session_id, requested, None).await
+    }
+
+    pub async fn start_gravity_comp(&self, session_id: u32, damping: &[f32]) -> Result<()> {
+        let _gate = self.mode_gate.lock().await;
+        anyhow::ensure!(
+            damping.len() == DOF && damping.iter().all(|d| d.is_finite() && *d > 0.0),
+            "hand-guiding damping must contain six finite positive joint-side gains"
+        );
+        anyhow::ensure!(
+            self.mode() == OperatingMode::Disabled,
+            "hand guiding must start from DISABLED; stop the current owner first"
+        );
+        self.set_mode_locked(
+            session_id,
+            OperatingMode::GravityComp,
+            Some(damping.try_into().expect("six gains checked")),
+        )
+        .await
+    }
+
+    pub fn gravity_comp_heartbeat(&self, session_id: u32, sequence: u64) -> Result<()> {
+        let mut data = self.data.write();
+        anyhow::ensure!(
+            !data.closing && !data.damped_stopping,
+            "controller is shutting down"
+        );
+        anyhow::ensure!(
+            session_id != 0 && data.session.as_ref().is_some_and(|s| s.id == session_id),
+            "request does not hold the exclusive session"
+        );
+        anyhow::ensure!(
+            data.safety.mode != OperatingMode::Fault,
+            "hand guiding stopped: fault 0x{:04x}: {}",
+            data.safety.fault_code,
+            data.safety.fault_reason
+        );
+        anyhow::ensure!(
+            data.safety.mode == OperatingMode::GravityComp,
+            "hand guiding is not active"
+        );
+        let lease = data
+            .gravity_comp
+            .as_mut()
+            .context("hand guiding has no lease")?;
+        anyhow::ensure!(
+            lease.renewed_at.elapsed() < GRAVITY_COMP_LEASE,
+            "hand-guiding lease expired"
+        );
+        anyhow::ensure!(
+            sequence > lease.sequence,
+            "heartbeat sequence must increase"
+        );
+        lease.sequence = sequence;
+        lease.renewed_at = Instant::now();
+        Ok(())
+    }
+
+    // The caller holds mode_gate through enable, commit and rollback.
+    async fn set_mode_locked(
+        &self,
+        session_id: u32,
+        requested: OperatingMode,
+        damping: Option<[f32; DOF]>,
+    ) -> Result<()> {
         self.ensure_accepting_requests()?;
         self.require_session(session_id)?;
+        anyhow::ensure!(
+            self.mode() != OperatingMode::GravityComp || requested == OperatingMode::Disabled,
+            "disable hand guiding before switching to another operating mode"
+        );
         anyhow::ensure!(
             !matches!(requested, OperatingMode::Fault | OperatingMode::Calibrating),
             "mode is controller-owned and cannot be requested"
@@ -292,6 +382,19 @@ impl ArmRuntime {
 
         let feedback = self.backend.feedback();
         let all_fresh = feedback.all_online_and_fresh();
+        if requested == OperatingMode::GravityComp {
+            anyhow::ensure!(
+                feedback
+                    .joints
+                    .iter()
+                    .zip(&self.profile.joints)
+                    .all(
+                        |(state, joint)| motor_velocity_to_ros(state.velocity_rev_s, joint).abs()
+                            <= 0.02
+                    ),
+                "support and stop the arm before hand guiding (entry speed must be <= 0.02 rad/s)"
+            );
+        }
         let next_safety = {
             let mut data = self.data.write();
             data.feedback = feedback.clone();
@@ -307,35 +410,45 @@ impl ArmRuntime {
             candidate
         };
 
-        if requested == OperatingMode::Active {
-            if let Some((_, reason)) = self.measured_feedback_fault(&feedback) {
+        if matches!(
+            requested,
+            OperatingMode::Active | OperatingMode::GravityComp
+        ) {
+            if let Some((_, reason)) = self.measured_feedback_fault_in_mode(&feedback, requested) {
                 anyhow::bail!("unsafe measured state blocks mode transition: {reason}");
             }
         }
 
-        let hold_targets = (requested == OperatingMode::Active)
-            .then(|| {
-                let mut targets = self.hold_targets(&feedback);
-                // Validate the eventual gravity target before enabling, even when
-                // the startup frame itself contains zero feed-forward.
-                // Include firmware gain quantization and the Tff + PD budget
-                // before zeroing Tff for a startup ramp and enabling any axis.
-                self.motor_targets(&targets)?;
-                if self
+        let hold_targets = matches!(
+            requested,
+            OperatingMode::Active | OperatingMode::GravityComp
+        )
+        .then(|| {
+            let mut targets = match damping {
+                Some(gains) => self.gravity_comp_targets(&feedback, gains),
+                None => self.hold_targets(&feedback),
+            };
+            // Validate the eventual gravity target before enabling, even when
+            // the startup frame itself contains zero feed-forward.
+            // Include firmware gain quantization and the Tff + PD budget
+            // before zeroing Tff for a startup ramp and enabling any axis.
+            self.motor_targets(&targets)?;
+            if requested == OperatingMode::GravityComp
+                || self
                     .profile
                     .controller
                     .gravity_startup_slew_rate_nm_s
                     .is_some()
-                {
-                    // Keep feedback-derived position and PD support during drive
-                    // activation; gravity ramps only after the ACTIVE commit.
-                    for target in &mut targets {
-                        target.torque_nm = 0.0;
-                    }
+            {
+                // ACTIVE keeps PD support; hand guiding has damping only and
+                // requires external support. Ramp after the mode commit.
+                for target in &mut targets {
+                    target.torque_nm = 0.0;
                 }
-                Ok::<_, anyhow::Error>(targets)
-            })
-            .transpose()?;
+            }
+            Ok::<_, anyhow::Error>(targets)
+        })
+        .transpose()?;
         let initial_motor_targets = hold_targets
             .as_ref()
             .map(|targets| self.motor_targets(targets))
@@ -345,8 +458,8 @@ impl ArmRuntime {
 
         let hardware_result = match requested {
             OperatingMode::Disabled => self.backend.disable_all().await,
-            OperatingMode::Active => {
-                let motor_targets = initial_motor_targets.expect("ACTIVE motor targets prepared");
+            OperatingMode::Active | OperatingMode::GravityComp => {
+                let motor_targets = initial_motor_targets.expect("enabled motor targets prepared");
                 match self.backend.enable_compressed_mit(motor_targets).await {
                     Ok(()) => self.backend.set_targets(motor_targets).await,
                     Err(error) => Err(error),
@@ -358,12 +471,6 @@ impl ArmRuntime {
             // torque-free behaviour has not been commissioned on this arm.
             OperatingMode::Passive => Err(anyhow::anyhow!(
                 "PASSIVE hardware operation is not commissioned"
-            )),
-            // GRAVITY_COMP has no session-liveliness/deadman contract yet.
-            // SafetyState rejects it before dispatch; this branch prevents an
-            // accidental future bypass from leaving the arm enabled forever.
-            OperatingMode::GravityComp => Err(anyhow::anyhow!(
-                "GRAVITY_COMP hardware operation requires a session deadman"
             )),
             OperatingMode::Fault | OperatingMode::Calibrating => unreachable!(),
         };
@@ -411,6 +518,12 @@ impl ArmRuntime {
                 false
             } else {
                 data.safety = next_safety;
+                data.gravity_comp = damping.map(|damping| GravityCompLease {
+                    damping,
+                    renewed_at: Instant::now(),
+                    sequence: 0,
+                    ramp: Some(GravityStartupRamp::new(self.monotonic_ns(), Vec::new())),
+                });
                 data.gravity_startup_ramp = (requested == OperatingMode::Active
                     && self
                         .profile
@@ -564,6 +677,7 @@ impl ArmRuntime {
         data.feedback = feedback;
         data.safety.clear_fault();
         data.command = None;
+        data.gravity_comp = None;
         data.disable_pending = false;
         data.next_disable_retry_at = None;
         self.push_event_locked(
@@ -597,6 +711,10 @@ impl ArmRuntime {
                     .is_some_and(|session| session.id == session_id),
             "request does not hold the exclusive session"
         );
+        anyhow::ensure!(
+            data.safety.mode != OperatingMode::GravityComp,
+            "disable hand guiding before changing the gravity vector"
+        );
         data.gravity = gravity;
         Ok(())
     }
@@ -612,6 +730,7 @@ impl ArmRuntime {
             } else {
                 data.closing = true;
                 data.command = None;
+                data.gravity_comp = None;
                 data.session = None;
                 data.gravity = self.profile.gravity_vector_base_m_s2;
                 self.push_event_locked(
@@ -701,7 +820,8 @@ impl ArmRuntime {
                     .await;
                     continue;
                 }
-                if let Some((code, reason)) = self.measured_feedback_fault(&feedback) {
+                if let Some((code, reason)) = self.measured_feedback_fault_in_mode(&feedback, mode)
+                {
                     self.fault_and_disable(code, reason).await;
                     continue;
                 }
@@ -815,11 +935,23 @@ impl ArmRuntime {
                     }
                 }
                 OperatingMode::GravityComp => {
-                    self.fault_and_disable(
-                        FAULT_COMMAND,
-                        "GRAVITY_COMP mode is unsupported without a session deadman",
-                    )
-                    .await;
+                    match self.gravity_comp_tick(&feedback, now_ns).await {
+                        Ok(true) => (),
+                        Ok(false) => {
+                            self.fault_and_disable(
+                                FAULT_COMMAND_WATCHDOG,
+                                "hand-guiding session heartbeat timeout",
+                            )
+                            .await
+                        }
+                        Err(error) => {
+                            self.fault_and_disable(
+                                FAULT_COMMAND,
+                                format!("hand guiding stopped: {error:#}"),
+                            )
+                            .await
+                        }
+                    }
                 }
                 OperatingMode::Passive => {
                     self.fault_and_disable(
@@ -881,9 +1013,15 @@ impl ArmRuntime {
     pub fn driver_state_proto(&self) -> pb::DriverState {
         let data = self.data.read();
         let feedback_fresh = data.feedback.all_online_and_fresh();
-        let command_age_s = data.command.as_ref().map_or(f32::INFINITY, |command| {
-            command.received_at.elapsed().as_secs_f32()
-        });
+        let command_age_s = data
+            .gravity_comp
+            .as_ref()
+            .map(|lease| lease.renewed_at.elapsed().as_secs_f32())
+            .unwrap_or_else(|| {
+                data.command.as_ref().map_or(f32::INFINITY, |command| {
+                    command.received_at.elapsed().as_secs_f32()
+                })
+            });
         pb::DriverState {
             header: Some(self.header()),
             mode: data.safety.mode as i32,
@@ -1116,6 +1254,95 @@ impl ArmRuntime {
         }
     }
 
+    // false denotes lease expiry; other output/validation failures are errors.
+    async fn gravity_comp_tick(&self, feedback: &FeedbackSnapshot, now_ns: u64) -> Result<bool> {
+        let _gate = self.mode_gate.lock().await;
+        if self.is_closing() || self.mode() != OperatingMode::GravityComp {
+            return Ok(true);
+        }
+        let damping = {
+            let data = self.data.read();
+            anyhow::ensure!(
+                data.session.is_some(),
+                "unsupported hand guiding without session"
+            );
+            let lease = data
+                .gravity_comp
+                .as_ref()
+                .context("unsupported hand guiding without lease")?;
+            if lease.renewed_at.elapsed() >= GRAVITY_COMP_LEASE {
+                return Ok(false);
+            }
+            lease.damping
+        };
+        let mut targets = self.gravity_comp_targets(feedback, damping);
+        // Validate full gravity before ramping: a finite intermediate output
+        // must never hide an invalid eventual motor target.
+        self.motor_targets(&targets)?;
+        {
+            let mut data = self.data.write();
+            // begin_shutdown may clear the lease without waiting for mode_gate.
+            if data.closing {
+                return Ok(true);
+            }
+            let lease = data
+                .gravity_comp
+                .as_mut()
+                .context("missing hand-guiding lease")?;
+            if let Some(ramp) = &mut lease.ramp {
+                let rate = self
+                    .profile
+                    .controller
+                    .gravity_startup_slew_rate_nm_s
+                    .unwrap_or(GRAVITY_COMP_DEFAULT_SLEW_NM_S);
+                if ramp.apply(&mut targets, rate, now_ns) {
+                    lease.ramp = None;
+                    tracing::info!(
+                        "hand_guiding_ready: gravity ramp complete; hand guiding is ready"
+                    );
+                    self.push_event_locked(
+                        &mut data,
+                        pb::EventSeverity::Info,
+                        "hand_guiding_ready",
+                        "gravity ramp complete; hand guiding is ready".into(),
+                        &[],
+                    );
+                }
+            }
+        }
+        let motors = self.motor_targets(&targets)?;
+        if !self.is_closing() {
+            self.backend.set_targets(motors).await?;
+        }
+        Ok(true)
+    }
+
+    fn gravity_comp_targets(
+        &self,
+        feedback: &FeedbackSnapshot,
+        damping: [f32; DOF],
+    ) -> Vec<RosTarget> {
+        let mut targets: Vec<_> = feedback
+            .joints
+            .iter()
+            .zip(&self.profile.joints)
+            .zip(damping)
+            .map(|((state, joint), kd)| RosTarget {
+                position_rad: hand_guiding_position_target(
+                    motor_position_to_ros(state.position_rev, joint),
+                    joint,
+                    self.profile.controller.hand_guiding_position_margin_rad,
+                ),
+                velocity_rad_s: 0.0,
+                torque_nm: 0.0,
+                kp_nm_rad: 0.0,
+                kd_nm_s_rad: kd,
+            })
+            .collect();
+        self.apply_gravity_only(&mut targets, feedback);
+        targets
+    }
+
     fn hold_targets(&self, feedback: &FeedbackSnapshot) -> Vec<RosTarget> {
         let mut targets: Vec<_> = feedback
             .joints
@@ -1138,6 +1365,13 @@ impl ArmRuntime {
     }
 
     fn apply_gravity_feedforward(&self, targets: &mut [RosTarget], feedback: &FeedbackSnapshot) {
+        self.apply_gravity_only(targets, feedback);
+        for (target, joint) in targets.iter_mut().zip(&self.profile.joints) {
+            target.torque_nm += joint.motion_feedforward_nm(target.velocity_rad_s);
+        }
+    }
+
+    fn apply_gravity_only(&self, targets: &mut [RosTarget], feedback: &FeedbackSnapshot) {
         let measured_q = self.ros_joint_state(feedback).0;
         let gravity = self.data.read().gravity;
         let tau = self.dynamics.gravity_torque_with(&measured_q, gravity);
@@ -1258,10 +1492,31 @@ impl ArmRuntime {
     }
 
     fn measured_feedback_fault(&self, feedback: &FeedbackSnapshot) -> Option<(u32, String)> {
-        for (state, joint) in feedback.joints.iter().zip(&self.profile.joints) {
+        // Ordinary position-control checks retain the configured joint limits.
+        self.measured_feedback_fault_in_mode(feedback, OperatingMode::Active)
+    }
+
+    fn measured_feedback_fault_in_mode(
+        &self,
+        feedback: &FeedbackSnapshot,
+        mode: OperatingMode,
+    ) -> Option<(u32, String)> {
+        let hand_guiding_limits = if mode == OperatingMode::GravityComp {
+            self.profile.controller.hand_guiding_velocity_limits_rad_s
+        } else {
+            None
+        };
+        for (index, (state, joint)) in feedback.joints.iter().zip(&self.profile.joints).enumerate()
+        {
             let position_rad = motor_position_to_ros(state.position_rev, joint);
-            let measured_lower = joint.limits.measured_position_lower_rad();
-            let measured_upper = joint.limits.measured_position_upper_rad();
+            let margin = if mode == OperatingMode::GravityComp {
+                self.profile.controller.hand_guiding_position_margin_rad
+            } else {
+                None
+            }
+            .unwrap_or(joint.limits.measured_position_margin_rad);
+            let measured_lower = joint.limits.position_lower_rad - margin;
+            let measured_upper = joint.limits.position_upper_rad + margin;
             if !position_rad.is_finite()
                 || position_rad < measured_lower - MEASURED_POSITION_EPSILON_RAD
                 || position_rad > measured_upper + MEASURED_POSITION_EPSILON_RAD
@@ -1281,17 +1536,55 @@ impl ArmRuntime {
             }
 
             let velocity_rad_s = motor_velocity_to_ros(state.velocity_rev_s, joint);
+            let measured_speed_limit = hand_guiding_limits.map_or(
+                joint.limits.velocity_rad_s + joint.limits.measured_velocity_margin_rad_s,
+                |limits| limits[index],
+            );
             if !velocity_rad_s.is_finite()
-                || velocity_rad_s.abs()
-                    > joint.limits.velocity_rad_s + MEASURED_VELOCITY_EPSILON_RAD_S
+                || velocity_rad_s.abs() > measured_speed_limit + MEASURED_VELOCITY_EPSILON_RAD_S
             {
                 return Some((
                     FAULT_MEASURED_OVERSPEED,
                     format!(
                         "{} measured velocity {:.6} rad/s exceeds {:.6} rad/s",
-                        joint.name, velocity_rad_s, joint.limits.velocity_rad_s
+                        joint.name, velocity_rad_s, measured_speed_limit
                     ),
                 ));
+            }
+            let torque_nm = motor_torque_to_ros(state.torque_nm, joint);
+            let torque_limit_nm = self
+                .backend
+                .measured_torque_limit_nm(index)
+                .unwrap_or(joint.limits.torque_nm);
+            if !torque_nm.is_finite()
+                || !torque_limit_nm.is_finite()
+                || torque_limit_nm <= 0.0
+                || torque_nm.abs() > torque_limit_nm + MEASURED_TORQUE_EPSILON_NM
+            {
+                return Some((
+                    FAULT_MEASURED_TORQUE_LIMIT,
+                    format!(
+                        "{} measured torque {:.6} Nm exceeds {:.6} Nm",
+                        joint.name, torque_nm, torque_limit_nm
+                    ),
+                ));
+            }
+            let temperature_limit = self
+                .profile
+                .controller
+                .max_measured_temperature_c
+                .unwrap_or(DEFAULT_MAX_MEASURED_TEMPERATURE_C);
+            for temperature in [
+                state.temperature_c,
+                state.motor_temperature_c,
+                state.driver_temperature_c,
+            ] {
+                if !temperature.is_finite() || temperature > temperature_limit {
+                    return Some((
+                        FAULT_MEASURED_TEMPERATURE,
+                        format!("{} measured temperature {temperature} C exceeds {temperature_limit} C or is invalid", joint.name),
+                    ));
+                }
             }
         }
         None
@@ -1360,6 +1653,7 @@ impl ArmRuntime {
             if data.safety.mode != OperatingMode::Fault {
                 data.safety.latch_fault(code, reason.clone());
                 data.command = None;
+                data.gravity_comp = None;
                 data.disable_pending = true;
                 data.next_disable_retry_at = None;
                 self.push_event_locked(
@@ -1475,6 +1769,27 @@ fn canonical_feedback_position(measured: f32, joint: &crate::profile::JointProfi
     } else if measured > upper && measured - upper <= MEASURED_POSITION_EPSILON_RAD {
         upper
     } else {
+        measured
+    }
+}
+
+fn hand_guiding_position_target(
+    measured: f32,
+    joint: &crate::profile::JointProfile,
+    margin: Option<f32>,
+) -> f32 {
+    let margin = margin.unwrap_or(joint.limits.measured_position_margin_rad);
+    let lower = joint.limits.position_lower_rad;
+    let upper = joint.limits.position_upper_rad;
+    if measured.is_finite()
+        && measured >= lower - margin - MEASURED_POSITION_EPSILON_RAD
+        && measured <= upper + margin + MEASURED_POSITION_EPSILON_RAD
+    {
+        // Only the zero-Kp MIT position field is bounded. Gravity, damping and
+        // measured-state publication continue to use the actual feedback.
+        measured.clamp(lower, upper)
+    } else {
+        // Never hide feedback outside the accepted envelope or non-finite data.
         measured
     }
 }
@@ -1863,7 +2178,10 @@ mod tests {
                 discovery_timeout_ms: 1000,
                 feedback_timeout_ms: 100,
                 command_watchdog_ms: 100,
+                max_measured_temperature_c: None,
                 gravity_startup_slew_rate_nm_s: None,
+                hand_guiding_velocity_limits_rad_s: None,
+                hand_guiding_position_margin_rad: None,
                 shutdown_damping: None,
             },
             joints: JOINT_NAMES
@@ -1878,12 +2196,15 @@ mod tests {
                     torque_scale: 1.0,
                     gravity_compensation_scale: 1.0,
                     gravity_compensation_limit_nm: None,
+                    motion_feedforward: None,
                     torque_permille: 100,
                     kp_kd_torque_permille: 100,
+                    meow_torque_budget: Default::default(),
                     limits: JointLimits {
                         position_lower_rad: -2.0,
                         position_upper_rad: 2.0,
                         measured_position_margin_rad: 0.0,
+                        measured_velocity_margin_rad_s: 0.0,
                         velocity_rad_s: 0.2,
                         acceleration_rad_s2: 0.1,
                         torque_nm: 1.0,
@@ -2119,6 +2440,30 @@ mod tests {
     }
 
     #[test]
+    fn measured_velocity_margin_never_widens_command_validation() {
+        let mut runtime = runtime_for_safety_test();
+        Arc::make_mut(&mut runtime.profile).joints[3]
+            .limits
+            .measured_velocity_margin_rad_s = 0.02;
+        let mut velocity = [0.0; DOF];
+        velocity[3] = 0.21;
+        assert!(runtime
+            .measured_feedback_fault(&feedback_from_ros(&runtime, [0.0; DOF], velocity))
+            .is_none());
+        velocity[3] = 0.221;
+        assert_eq!(
+            runtime
+                .measured_feedback_fault(&feedback_from_ros(&runtime, [0.0; DOF], velocity))
+                .unwrap()
+                .0,
+            FAULT_MEASURED_OVERSPEED
+        );
+        let mut commands = targets([0.0; DOF]);
+        commands[3].velocity_rad_s = 0.21;
+        assert!(runtime.validate_targets(&commands).is_err());
+    }
+
+    #[test]
     fn measured_overspeed_reports_joint_and_velocity_fault_code() {
         let runtime = runtime_for_safety_test();
         let mut velocities = [0.0; DOF];
@@ -2147,6 +2492,659 @@ mod tests {
             runtime.measured_feedback_fault(&feedback).unwrap().0,
             FAULT_MEASURED_OVERSPEED
         );
+    }
+
+    #[test]
+    fn measured_torque_limit_uses_joint_units_and_checks_both_signs() {
+        let mut runtime = runtime_for_safety_test();
+        let joint = &mut Arc::make_mut(&mut runtime.profile).joints[2];
+        joint.direction = -1;
+        joint.torque_scale = 0.85;
+        joint.limits.torque_nm = 7.5;
+        let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        for sign in [-1.0, 1.0] {
+            feedback.joints[2].torque_nm = sign * 7.5 * 0.85;
+            assert!(runtime.measured_feedback_fault(&feedback).is_none());
+            feedback.joints[2].torque_nm = sign * 7.51 * 0.85;
+            assert_eq!(
+                runtime.measured_feedback_fault(&feedback).unwrap().0,
+                FAULT_MEASURED_TORQUE_LIMIT
+            );
+        }
+        feedback.joints[2].torque_nm = f32::NAN;
+        assert_eq!(
+            runtime.measured_feedback_fault(&feedback).unwrap().0,
+            FAULT_MEASURED_TORQUE_LIMIT
+        );
+    }
+
+    #[test]
+    fn measured_temperature_checks_motor_and_driver_independently() {
+        let runtime = runtime_for_safety_test();
+        for field in 0..3 {
+            for value in [70.1, f32::NAN, f32::INFINITY] {
+                let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+                let state = &mut feedback.joints[3];
+                match field {
+                    0 => state.temperature_c = value,
+                    1 => state.motor_temperature_c = value,
+                    _ => state.driver_temperature_c = value,
+                }
+                assert_eq!(
+                    runtime.measured_feedback_fault(&feedback).unwrap().0,
+                    FAULT_MEASURED_TEMPERATURE
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arm_temperature_override_preserves_finite_feedback_checks() {
+        let mut runtime = runtime_for_safety_test();
+        Arc::make_mut(&mut runtime.profile)
+            .controller
+            .max_measured_temperature_c = Some(85.0);
+        for field in 0..3 {
+            for value in [80.0, 85.0, 85.1, f32::NAN] {
+                let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+                let state = &mut feedback.joints[3];
+                match field {
+                    0 => state.temperature_c = value,
+                    1 => state.motor_temperature_c = value,
+                    _ => state.driver_temperature_c = value,
+                }
+                let fault = runtime.measured_feedback_fault(&feedback);
+                if value.is_finite() && value <= 85.0 {
+                    assert!(fault.is_none());
+                } else {
+                    assert_eq!(fault.unwrap().0, FAULT_MEASURED_TEMPERATURE);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_accepts_position_margin_at_startup() {
+        for margin in [None, Some(0.012)] {
+            let backend = Arc::new(DampingBackend::new(false));
+            let mut runtime = runtime_with_backend(backend.clone());
+            let profile = Arc::make_mut(&mut runtime.profile);
+            profile.controller.hand_guiding_position_margin_rad = margin;
+            profile.joints[2].limits.position_lower_rad = -1.57;
+            profile.joints[2].limits.position_upper_rad = 1.57;
+            profile.joints[2].limits.measured_position_margin_rad = 0.01;
+            let measured = if margin.is_some() { 1.581 } else { 1.570901 };
+            backend.state.write().joints[2].position_rev = measured / std::f32::consts::TAU;
+            runtime.initialize().await.unwrap();
+            let (session, _, _) = runtime.acquire("hand-guiding-boundary".into()).unwrap();
+            assert!(runtime
+                .set_mode(session, OperatingMode::Active)
+                .await
+                .is_err());
+            assert_eq!(backend.inner.enable_calls.load(Ordering::Acquire), 0);
+            runtime
+                .start_gravity_comp(session, &[0.5; DOF])
+                .await
+                .unwrap();
+            let sent = backend.last.read().unwrap()[2];
+            assert!(
+                (motor_position_to_ros(sent.position_rev, &runtime.profile.joints[2]) - 1.57).abs()
+                    < 1.0e-6
+            );
+            assert!(sent.kp_nm_rev == 0.0 && sent.velocity_rev_s == 0.0);
+            assert!(
+                (sent.position_rev - backend.state.read().joints[2].position_rev).abs() <= 0.002
+            );
+            assert!((runtime.joint_state_proto().q[2] - measured).abs() < 1.0e-6);
+            runtime.shutdown().await.unwrap();
+        }
+    }
+
+    #[test]
+    fn hand_guiding_position_margin_does_not_expand_other_modes_or_commands() {
+        let mut runtime = runtime_for_safety_test();
+        let profile = Arc::make_mut(&mut runtime.profile);
+        profile.controller.hand_guiding_position_margin_rad = Some(0.012);
+        for joint in &mut profile.joints {
+            joint.limits.measured_position_margin_rad = 0.01;
+        }
+        for index in 0..DOF {
+            for sign in [-1.0, 1.0] {
+                let mut position = [0.0; DOF];
+                position[index] = sign * 2.011;
+                let feedback = feedback_from_ros(&runtime, position, [0.0; DOF]);
+                assert!(runtime
+                    .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                    .is_none());
+                for mode in [
+                    OperatingMode::Active,
+                    OperatingMode::Disabled,
+                    OperatingMode::Passive,
+                ] {
+                    assert_eq!(
+                        runtime
+                            .measured_feedback_fault_in_mode(&feedback, mode)
+                            .unwrap()
+                            .0,
+                        FAULT_MEASURED_POSITION_LIMIT
+                    );
+                }
+                let targets = runtime.gravity_comp_targets(&feedback, [0.5; DOF]);
+                runtime.validate_targets(&targets).unwrap();
+                assert_eq!(targets[index].position_rad, sign * 2.0);
+                assert!(runtime
+                    .validate_targets(&runtime.hold_targets(&feedback))
+                    .is_err());
+                let mut external = targets.clone();
+                external[index].position_rad = position[index];
+                assert!(runtime.validate_targets(&external).is_err());
+
+                position[index] = sign * 2.013;
+                let feedback = feedback_from_ros(&runtime, position, [0.0; DOF]);
+                assert_eq!(
+                    runtime
+                        .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                        .unwrap()
+                        .0,
+                    FAULT_MEASURED_POSITION_LIMIT
+                );
+                assert!(runtime
+                    .validate_targets(&runtime.gravity_comp_targets(&feedback, [0.5; DOF]))
+                    .is_err());
+            }
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+            feedback.joints[2].position_rev = invalid;
+            assert_eq!(
+                runtime
+                    .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                    .unwrap()
+                    .0,
+                FAULT_MEASURED_POSITION_LIMIT
+            );
+            assert!(runtime
+                .validate_targets(&runtime.gravity_comp_targets(&feedback, [0.5; DOF]))
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn hand_guiding_boundary_target_keeps_actual_pose_for_gravity() {
+        let (mut runtime, _) = runtime_with_startup_gravity();
+        let profile = Arc::make_mut(&mut runtime.profile);
+        profile.controller.hand_guiding_position_margin_rad = Some(0.012);
+        profile.joints[0].limits.position_upper_rad = 1.57;
+        let feedback = feedback_from_ros(&runtime, [1.578, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0; DOF]);
+        let actual_q = runtime.ros_joint_state(&feedback).0;
+        let targets = runtime.gravity_comp_targets(&feedback, [0.5; DOF]);
+        assert_eq!(targets[0].position_rad, 1.57);
+        let gravity = runtime.data.read().gravity;
+        let actual_torque = runtime.dynamics.gravity_torque_with(&actual_q, gravity)[0];
+        let mut clamped_q = actual_q.clone();
+        clamped_q[0] = 1.57;
+        let clamped_torque = runtime.dynamics.gravity_torque_with(&clamped_q, gravity)[0];
+        let joint = &runtime.profile.joints[0];
+        let expected =
+            joint.clamp_gravity_feedforward(actual_torque * joint.gravity_compensation_scale);
+        assert!((targets[0].torque_nm - expected).abs() < 1.0e-6);
+        assert!((actual_torque - clamped_torque).abs() > 1.0e-4);
+        runtime.data.write().feedback = feedback;
+        assert_eq!(runtime.joint_state_proto().q[0], actual_q[0]);
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_configured_speed_is_used_by_the_control_loop() {
+        let backend = Arc::new(DampingBackend::new(false));
+        let mut runtime = runtime_with_backend(backend.clone());
+        Arc::make_mut(&mut runtime.profile)
+            .controller
+            .hand_guiding_velocity_limits_rad_s = Some([2.0; DOF]);
+        let runtime = Arc::new(runtime);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-speed".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        // Independent feedback models hand motion without following zero
+        // velocity targets, so the loop must really accept speeds above 0.2.
+        for state in &mut backend.state.write().joints {
+            state.velocity_rev_s = 0.8 / std::f32::consts::TAU;
+        }
+        *backend.last.write() = None;
+        let loop_task = tokio::spawn(runtime.clone().run_control_loop());
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while backend.last.read().is_none() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("hand guiding did not output at the relaxed speed");
+        assert_eq!(runtime.mode(), OperatingMode::GravityComp);
+        assert!(backend.inner.enabled.load(Ordering::Acquire));
+        assert!(backend
+            .last
+            .read()
+            .unwrap()
+            .iter()
+            .all(|t| t.kp_nm_rev == 0.0 && t.velocity_rev_s == 0.0));
+        runtime.gravity_comp_heartbeat(session, 1).unwrap();
+
+        backend.state.write().joints[1].velocity_rev_s = 2.01 / std::f32::consts::TAU;
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while runtime.mode() != OperatingMode::Fault
+                || backend.inner.enabled.load(Ordering::Acquire)
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("configured hand-guiding overspeed must disable");
+        let error = runtime
+            .gravity_comp_heartbeat(session, 2)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("joint_2 measured velocity"));
+        assert!(error.contains("exceeds 2.000000 rad/s"));
+        runtime.shutdown().await.unwrap();
+        loop_task.await.unwrap();
+    }
+
+    #[test]
+    fn hand_guiding_speed_limits_do_not_change_other_modes_or_commands() {
+        let mut runtime = runtime_for_safety_test();
+        let limits = [0.8, 1.0, 1.2, 1.4, 1.6, 2.0];
+        Arc::make_mut(&mut runtime.profile)
+            .controller
+            .hand_guiding_velocity_limits_rad_s = Some(limits);
+        for index in 0..DOF {
+            for sign in [-1.0, 1.0] {
+                let mut velocity = [0.0; DOF];
+                velocity[index] = sign * limits[index];
+                let feedback = feedback_from_ros(&runtime, [0.0; DOF], velocity);
+                assert!(runtime
+                    .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                    .is_none());
+                for mode in [
+                    OperatingMode::Active,
+                    OperatingMode::Disabled,
+                    OperatingMode::Passive,
+                ] {
+                    assert_eq!(
+                        runtime
+                            .measured_feedback_fault_in_mode(&feedback, mode)
+                            .unwrap()
+                            .0,
+                        FAULT_MEASURED_OVERSPEED
+                    );
+                }
+                let mut commands = targets([0.0; DOF]);
+                commands[index].velocity_rad_s = velocity[index];
+                assert!(runtime.validate_targets(&commands).is_err());
+
+                velocity[index] = sign * (limits[index] + 0.001);
+                let feedback = feedback_from_ros(&runtime, [0.0; DOF], velocity);
+                let (code, reason) = runtime
+                    .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                    .unwrap();
+                assert_eq!(code, FAULT_MEASURED_OVERSPEED);
+                assert!(reason.contains(&runtime.profile.joints[index].name));
+            }
+            for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut velocity = [0.0; DOF];
+                velocity[index] = invalid;
+                let feedback = feedback_from_ros(&runtime, [0.0; DOF], velocity);
+                assert_eq!(
+                    runtime
+                        .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                        .unwrap()
+                        .0,
+                    FAULT_MEASURED_OVERSPEED
+                );
+            }
+        }
+        let mut feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.8; DOF]);
+        feedback.joints[0].position_rev = 3.0 / std::f32::consts::TAU;
+        assert_eq!(
+            runtime
+                .measured_feedback_fault_in_mode(&feedback, OperatingMode::GravityComp)
+                .unwrap()
+                .0,
+            FAULT_MEASURED_POSITION_LIMIT
+        );
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_rejects_moving_entry_and_retains_overspeed_protection() {
+        let mut backend = ShutdownOrderBackend::new();
+        backend.feedback.joints[0].velocity_rev_s = 0.03 / std::f32::consts::TAU;
+        let backend = Arc::new(backend);
+        let mut runtime = runtime_with_backend(backend.clone());
+        Arc::make_mut(&mut runtime.profile)
+            .controller
+            .hand_guiding_velocity_limits_rad_s = Some([2.0; DOF]);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("moving-entry".into()).unwrap();
+        assert!(runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("entry speed"));
+        assert_eq!(backend.enable_calls.load(Ordering::Acquire), 0);
+
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        let runtime = Arc::new(runtime);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("guiding-overspeed".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        let mut moved = backend.targets();
+        moved[0].velocity_rev_s = 1.0;
+        backend.set_targets(moved).await.unwrap();
+        let loop_task = tokio::spawn(runtime.clone().run_control_loop());
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while backend.is_enabled() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime.driver_state_proto().fault_code,
+            FAULT_MEASURED_OVERSPEED
+        );
+        runtime.shutdown().await.unwrap();
+        loop_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_rejects_invalid_gains_and_nonowners_before_enable() {
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-test".into()).unwrap();
+        for invalid in [
+            vec![],
+            vec![1.0; 5],
+            vec![0.0; DOF],
+            vec![-1.0; DOF],
+            vec![f32::NAN; DOF],
+            vec![f32::INFINITY; DOF],
+        ] {
+            assert!(runtime.start_gravity_comp(session, &invalid).await.is_err());
+            assert!(!backend.is_enabled());
+        }
+        assert!(runtime
+            .start_gravity_comp(session + 1, &[1.0; DOF])
+            .await
+            .is_err());
+        assert!(!backend.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_ramps_gravity_without_any_position_stiffness() {
+        let (runtime, backend) = runtime_with_startup_gravity();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-ramp".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        let initial = backend.targets();
+        assert!(initial
+            .iter()
+            .all(|t| t.kp_nm_rev == 0.0 && t.torque_nm == 0.0 && t.velocity_rev_s == 0.0));
+        assert!((initial[0].kd_nm_s_rev - std::f32::consts::TAU * 0.5).abs() < 1.0e-5);
+        let t0 = runtime
+            .data
+            .read()
+            .gravity_comp
+            .as_ref()
+            .unwrap()
+            .ramp
+            .as_ref()
+            .unwrap()
+            .last_tick_ns;
+        runtime
+            .gravity_comp_tick(&backend.feedback(), t0 + 20_000_000)
+            .await
+            .unwrap();
+        assert!((backend.targets()[0].torque_nm - 0.1).abs() < 1.0e-5);
+        runtime
+            .gravity_comp_tick(&backend.feedback(), t0 + 100_000_000)
+            .await
+            .unwrap();
+        assert!((backend.targets()[0].torque_nm - 0.3).abs() < 1.0e-5);
+        assert!(runtime
+            .data
+            .read()
+            .gravity_comp
+            .as_ref()
+            .unwrap()
+            .ramp
+            .is_none());
+        assert!(runtime
+            .event_log_proto()
+            .events
+            .iter()
+            .any(|e| e.code == "hand_guiding_ready"));
+
+        // After the ramp, gravity follows the actual hand-moved pose directly.
+        let feedback = feedback_from_ros(
+            &runtime,
+            [std::f32::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.1; DOF],
+        );
+        runtime
+            .gravity_comp_tick(&feedback, t0 + 102_000_000)
+            .await
+            .unwrap();
+        let targets = backend.targets();
+        assert!(targets[0].torque_nm.abs() < 1.0e-5);
+        assert!(targets
+            .iter()
+            .all(|t| t.kp_nm_rev == 0.0 && t.velocity_rev_s == 0.0));
+        assert!((targets[0].position_rev - 0.25).abs() < 1.0e-5);
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_validates_eventual_gravity_before_zero_ramp_enable() {
+        let (template, _) = runtime_with_startup_gravity();
+        let backend = Arc::new(ShutdownOrderBackend::new());
+        // This backend rejects the full target even though the zero ramp frame
+        // alone would fit. No enable call may escape this preflight failure.
+        backend
+            .reject_nonzero_feedforward
+            .store(true, Ordering::Release);
+        let runtime = ArmRuntime::new(template.profile, backend.clone(), template.dynamics);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-budget".into()).unwrap();
+        assert!(runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .is_err());
+        assert_eq!(backend.enable_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_is_exclusive_and_cannot_become_a_trajectory() {
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-owner".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        assert_eq!(runtime.acquire("competitor".into()).unwrap().0, 0);
+        assert!(runtime
+            .submit_trajectory(streaming_command(session, vec![]))
+            .is_err());
+        assert!(runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .is_err());
+        assert!(runtime
+            .start_gravity_comp(session, &[1.0; DOF])
+            .await
+            .is_err());
+        assert!(runtime.set_gravity(session, [0.0, 0.0, 9.81]).is_err());
+        assert!(runtime.release(session + 1).await.is_err());
+        assert!(backend.is_enabled());
+        runtime.release(session).await.unwrap();
+        assert!(!backend.is_enabled());
+        assert!(runtime.data.read().gravity_comp.is_none());
+        assert!(runtime.gravity_comp_heartbeat(session, 1).is_err());
+        let (new_session, _, _) = runtime.acquire("next-owner".into()).unwrap();
+        assert_ne!(new_session, session);
+        runtime
+            .set_mode(new_session, OperatingMode::Active)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_heartbeat_cannot_replay_or_revive_an_expired_lease() {
+        let (runtime, _) = runtime_and_backend_for_safety_test();
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-heartbeat".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        assert!(runtime.gravity_comp_heartbeat(session + 1, 1).is_err());
+        runtime.gravity_comp_heartbeat(session, 1).unwrap();
+        let renewed = runtime
+            .data
+            .read()
+            .gravity_comp
+            .as_ref()
+            .unwrap()
+            .renewed_at;
+        assert!(runtime.gravity_comp_heartbeat(session, 1).is_err());
+        assert!(runtime.gravity_comp_heartbeat(session, 0).is_err());
+        assert_eq!(
+            runtime
+                .data
+                .read()
+                .gravity_comp
+                .as_ref()
+                .unwrap()
+                .renewed_at,
+            renewed
+        );
+        runtime
+            .data
+            .write()
+            .gravity_comp
+            .as_mut()
+            .unwrap()
+            .renewed_at = Instant::now() - GRAVITY_COMP_LEASE;
+        assert!(runtime
+            .gravity_comp_heartbeat(session, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("expired"));
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_heartbeat_reports_the_original_joint_fault() {
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        let runtime = Arc::new(runtime);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-fault-report".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        let mut overspeed = [crate::conversion::MotorTarget::default(); DOF];
+        overspeed[1].velocity_rev_s = 1.0;
+        backend.set_targets(overspeed).await.unwrap();
+        let loop_task = tokio::spawn(runtime.clone().run_control_loop());
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while runtime.mode() != OperatingMode::Fault || backend.is_enabled() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("hand-guiding overspeed must fault and disable");
+        let state = runtime.driver_state_proto();
+        assert_eq!(state.fault_code, FAULT_MEASURED_OVERSPEED);
+        let error = runtime
+            .gravity_comp_heartbeat(session, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("0x1007"));
+        assert!(error.contains("joint_2 measured velocity"));
+        assert!(error.contains(&state.fault_reason));
+        assert!(runtime.data.read().gravity_comp.is_none());
+        runtime.shutdown().await.unwrap();
+        loop_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_deadman_fault_retries_disable_without_position_hold() {
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        let runtime = Arc::new(runtime);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-deadman".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        runtime
+            .data
+            .write()
+            .gravity_comp
+            .as_mut()
+            .unwrap()
+            .renewed_at = Instant::now() - GRAVITY_COMP_LEASE;
+        backend.fail_next_disables(1);
+        let loop_task = tokio::spawn(runtime.clone().run_control_loop());
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while backend.is_enabled() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(runtime.mode(), OperatingMode::Fault);
+        assert_eq!(
+            runtime.driver_state_proto().fault_code,
+            FAULT_COMMAND_WATCHDOG
+        );
+        assert!(backend.disable_attempts() >= 2);
+        assert!(backend.targets().iter().all(|t| t.kp_nm_rev == 0.0));
+        assert!(runtime.gravity_comp_heartbeat(session, 1).is_err());
+        runtime.shutdown().await.unwrap();
+        loop_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hand_guiding_runs_with_heartbeats_and_stops_on_shutdown() {
+        let (runtime, backend) = runtime_and_backend_for_safety_test();
+        let runtime = Arc::new(runtime);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("hand-guiding-live".into()).unwrap();
+        runtime
+            .start_gravity_comp(session, &[0.5; DOF])
+            .await
+            .unwrap();
+        let loop_task = tokio::spawn(runtime.clone().run_control_loop());
+        // Survive both the ordinary 100 ms command watchdog and the 500 ms
+        // guiding lease without sending any trajectory/position command.
+        for sequence in 1..=14 {
+            runtime.gravity_comp_heartbeat(session, sequence).unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(runtime.mode(), OperatingMode::GravityComp);
+        assert!(runtime.driver_state_proto().command_age_s < 0.2);
+        runtime.shutdown().await.unwrap();
+        loop_task.await.unwrap();
+        assert!(!backend.is_enabled());
+        assert!(runtime.gravity_comp_heartbeat(session, 15).is_err());
     }
 
     #[tokio::test]
@@ -2467,6 +3465,43 @@ mod tests {
         assert!(targets[1..]
             .iter()
             .all(|target| target.torque_nm.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn automatic_motion_feedforward_is_not_added_to_explicit_client_torque() {
+        let template = runtime_for_safety_test();
+        let mut profile = (*template.profile).clone();
+        for j in &mut profile.joints {
+            j.gravity_compensation_scale = 0.0;
+        }
+        profile.joints[0].motion_feedforward = Some(crate::profile::MotionFeedforward {
+            positive_nm: 0.2,
+            negative_nm: 0.4,
+            velocity_scale_rad_s: 0.001,
+        });
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let dynamics = ArmDynamics::from_parts(
+            vec![([0.0; 3], identity, [0.0, 1.0, 0.0]); DOF],
+            vec![(0.0, [0.0; 3]); DOF],
+            [0.0, 0.0, -9.81],
+        );
+        let runtime = ArmRuntime::new(Arc::new(profile), Arc::new(MockBackend::new()), dynamics);
+        let feedback = feedback_from_ros(&runtime, [0.0; DOF], [0.0; DOF]);
+        let mut output = targets([0.0; DOF]);
+        output[0].velocity_rad_s = -0.01;
+        runtime.apply_command_gravity_feedforward(&mut output, &feedback, true, 0);
+        assert!((output[0].torque_nm + 0.4).abs() < 1e-6);
+        runtime.apply_command_gravity_feedforward(&mut output, &feedback, true, 1);
+        assert!(
+            (output[0].torque_nm + 0.4).abs() < 1e-6,
+            "must replace, not accumulate"
+        );
+        output[0].torque_nm = 0.125;
+        runtime.apply_command_gravity_feedforward(&mut output, &feedback, false, 2);
+        assert_eq!(output[0].torque_nm, 0.125);
+        output[0].velocity_rad_s = 0.0;
+        runtime.apply_command_gravity_feedforward(&mut output, &feedback, true, 3);
+        assert_eq!(output[0].torque_nm, 0.0);
     }
 
     fn runtime_with_startup_gravity() -> (ArmRuntime, Arc<MockBackend>) {

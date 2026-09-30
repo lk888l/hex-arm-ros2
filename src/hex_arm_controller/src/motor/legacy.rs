@@ -801,6 +801,72 @@ impl RealBackend {
         Ok(())
     }
 
+    /// Explicit supported commissioning only. Configure and read back all
+    /// requested caps while disabled; install holds before any enable. The
+    /// caller monitors feedback throughout this future and always shuts down.
+    pub async fn enable_supported_commissioning_axes(
+        &self,
+        order: &[usize],
+        initial_targets: [MotorTarget; DOF],
+    ) -> Result<()> {
+        let mask = supported_axis_mask(order)?;
+        anyhow::ensure!(
+            !self.used_historical_can_xstats_acknowledgement,
+            "supported commissioning requires strict-zero CAN preflight"
+        );
+        self.prepare_single_axis_operation(order[0], initial_targets)?;
+        for &index in order {
+            self.configure_commissioning_axis(index, initial_targets[index])
+                .await?;
+            let joint = &self.profile.joints[index];
+            self.confirm_fixed_position_drive_caps(
+                index,
+                "supported commissioning",
+                joint.torque_permille,
+                joint.kp_kd_torque_permille,
+            )
+            .await?;
+        }
+        let mut expected = [false; DOF];
+        for &index in order {
+            self.ensure_supported_commissioning_state(expected)?;
+            anyhow::ensure!(
+                !self.transport_failed(),
+                "CAN failed during group activation"
+            );
+            let node = self.profile.joints[index].node_id;
+            self.manager.set_mode(node, MotorMode::Mit).await?;
+            self.confirm_compressed_mit_enabled(node, Instant::now())
+                .await?;
+            self.expect_mit_operation_on_axis(index);
+            expected[index] = true;
+            self.ensure_supported_commissioning_state(expected)?;
+        }
+        self.ensure_supported_commissioning_state(mask)
+    }
+
+    pub fn ensure_supported_commissioning_state(&self, active: [bool; DOF]) -> Result<()> {
+        anyhow::ensure!(
+            *self.mit_operation_expected.read() == active,
+            "supported commissioning enable mask changed"
+        );
+        self.ensure_no_unexpected_nodes()?;
+        let now = Instant::now();
+        let statuses: [_; DOF] =
+            array::from_fn(|i| self.manager.status(self.profile.joints[i].node_id));
+        for (joint, status) in self.profile.joints.iter().zip(&statuses) {
+            anyhow::ensure!(
+                status
+                    .connection
+                    .required_tpdos_fresh(now, self.profile.feedback_timeout())
+                    && !matches!(status.logic, Some(Logic::Error { .. })),
+                "{} has stale or faulted group feedback",
+                joint.name
+            );
+        }
+        validate_supported_status_words(active, statuses.map(|s| s.measurements.status_word))
+    }
+
     /// Diagnostic activation deliberately leaves every error/cancellation to
     /// the outer selected-first guard. Calling the ordinary rollback here
     /// would issue J1's Shutdown before J2 and violate the high-tier contract.
@@ -2073,6 +2139,67 @@ fn first_expected_mit_axis_not_operation_enabled(
         })
 }
 
+fn supported_axis_mask(order: &[usize]) -> Result<[bool; DOF]> {
+    anyhow::ensure!(
+        (2..=DOF).contains(&order.len()),
+        "supported operation requires 2..6 distinct axes"
+    );
+    let mut mask = [false; DOF];
+    for &index in order {
+        anyhow::ensure!(
+            index < DOF && !mask[index],
+            "invalid/duplicate supported axis {index}"
+        );
+        mask[index] = true;
+    }
+    Ok(mask)
+}
+
+fn validate_supported_status_words(active: [bool; DOF], words: [Option<u16>; DOF]) -> Result<()> {
+    for i in 0..DOF {
+        let valid = if active[i] {
+            words[i].is_some_and(cia402::codec::status_word_is_operation_enabled)
+        } else {
+            words[i].is_some_and(cia402::codec::status_word_is_confirmed_non_torque)
+        };
+        anyhow::ensure!(
+            valid && words[i].is_some_and(|word| !cia402::codec::status_word_has_fault(word)),
+            "joint {} group state mismatch: active={} status={:?}",
+            i + 1,
+            active[i],
+            words[i]
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod supported_activation_tests {
+    use super::*;
+    #[test]
+    fn mask_and_status_contract_rejects_missing_unexpected_and_quickstop_axes() {
+        let mask = supported_axis_mask(&[3, 2]).unwrap();
+        for order in [vec![], vec![2], vec![2, 2], vec![2, 6]] {
+            assert!(supported_axis_mask(&order).is_err());
+        }
+        let mut words = [Some(0x0231); DOF];
+        words[2] = Some(0x0027);
+        words[3] = Some(0x0027);
+        validate_supported_status_words(mask, words).unwrap();
+        for (i, word) in [
+            (0, Some(0x0027)),
+            (2, Some(0x0231)),
+            (3, None),
+            (3, Some(0x0007)),
+            (5, Some(0x0008)),
+        ] {
+            let mut bad = words;
+            bad[i] = word;
+            assert!(validate_supported_status_words(mask, bad).is_err());
+        }
+    }
+}
+
 fn validate_single_axis_commissioning_status_words(
     profile: &HardwareProfile,
     selected_index: usize,
@@ -2863,7 +2990,10 @@ mod tests {
                 expected_link: None,
             },
             controller: crate::profile::ControllerProfile {
+                max_measured_temperature_c: None,
                 gravity_startup_slew_rate_nm_s: None,
+                hand_guiding_velocity_limits_rad_s: None,
+                hand_guiding_position_margin_rad: None,
                 shutdown_damping: None,
                 loop_hz: 1000,
                 state_publish_hz: 100,
@@ -2893,12 +3023,15 @@ mod tests {
                 torque_scale: 1.0,
                 gravity_compensation_scale: 1.0,
                 gravity_compensation_limit_nm: None,
+                motion_feedforward: None,
                 torque_permille: 200,
                 kp_kd_torque_permille: 100,
+                meow_torque_budget: Default::default(),
                 limits: crate::profile::JointLimits {
                     position_lower_rad: -1.0,
                     position_upper_rad: 1.0,
                     measured_position_margin_rad: 0.0,
+                    measured_velocity_margin_rad_s: 0.0,
                     velocity_rad_s: 0.1,
                     acceleration_rad_s2: 0.1,
                     torque_nm: 1.0,

@@ -76,6 +76,15 @@ message AcquireSessionResponse {
 }
 message ReleaseSessionRequest { uint32 session_id = 1; }
 message SetModeRequest { uint32 session_id = 1; OperatingMode mode = 2; }
+// GRAVITY_COMP enters only via this RPC, from DISABLED. Positive joint-side
+// damping, no position stiffness. Support the arm during the gravity ramp.
+message StartGravityCompRequest {
+  uint32 session_id = 1;
+  repeated float damping_nm_s_rad = 2;
+}
+// A strictly increasing sequence renews the 500 ms hand-guiding lease.
+// Expired leases cannot be revived, even before the next control tick.
+message GravityCompHeartbeatRequest { uint32 session_id = 1; uint64 sequence = 2; }
 message ClearFaultRequest { uint32 session_id = 1; }
 
 message JointState {

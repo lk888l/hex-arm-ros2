@@ -1,0 +1,16 @@
+# Joint-side SI planning limits for this arm's full-range deployment.
+# Hardware profile remains authoritative. Acceleration headroom accommodates
+# the 100 Hz ROS command stream and the bounded 500 Hz Rust interpolation.
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 1.0
+joint_limits:
+  joint_1: &deployment_limit
+    has_velocity_limits: true
+    max_velocity: 1.2566370614359172
+    has_acceleration_limits: true
+    max_acceleration: 0.6
+  joint_2: *deployment_limit
+  joint_3: *deployment_limit
+  joint_4: *deployment_limit
+  joint_5: *deployment_limit
+  joint_6: *deployment_limit

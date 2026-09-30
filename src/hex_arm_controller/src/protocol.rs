@@ -72,6 +72,11 @@ pub async fn serve(
     handles.push(spawn_acquire(session.clone(), runtime.clone()));
     handles.push(spawn_release(session.clone(), runtime.clone()));
     handles.push(spawn_set_mode(session.clone(), runtime.clone()));
+    handles.push(spawn_start_gravity_comp(session.clone(), runtime.clone()));
+    handles.push(spawn_gravity_comp_heartbeat(
+        session.clone(),
+        runtime.clone(),
+    ));
     handles.push(spawn_damped_stop(session.clone(), runtime.clone()));
     handles.push(spawn_clear_fault(session.clone(), runtime.clone()));
     handles.push(spawn_event_log(session.clone(), runtime.clone()));
@@ -157,13 +162,14 @@ fn spawn_description(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<(
                 model: "firefly_y6".into(),
                 api_version: Some(pb::ApiVersion {
                     major: 0,
-                    minor: 3,
+                    minor: 4,
                     patch: 0,
                 }),
                 device_keys: vec![format!("{}/arm", runtime.profile.robot_prefix)],
                 supported_modes: vec![
                     pb::OperatingMode::Disabled as i32,
                     pb::OperatingMode::Active as i32,
+                    pb::OperatingMode::GravityComp as i32,
                 ],
                 urdf_key: Some(format!("{}/urdf", runtime.profile.robot_prefix)),
             };
@@ -340,6 +346,53 @@ fn spawn_set_mode(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> 
                     Ok(mode) => runtime.set_mode(request.session_id, mode).await,
                     Err(error) => Err(error),
                 },
+                Err(error) => Err(error),
+            };
+            reply(query, generic(result)).await;
+        }
+    })
+}
+
+fn spawn_start_gravity_comp(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
+    tokio::spawn(async move {
+        let key = format!("{}/rpc/start_gravity_comp", runtime.profile.robot_prefix);
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare hand-guiding queryable");
+        while let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await {
+            let result = match decode::<pb::StartGravityCompRequest>(&query) {
+                Ok(request) => {
+                    runtime
+                        .start_gravity_comp(request.session_id, &request.damping_nm_s_rad)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            reply(query, generic(result)).await;
+        }
+    })
+}
+
+fn spawn_gravity_comp_heartbeat(session: Session, runtime: Arc<ArmRuntime>) -> JoinHandle<()> {
+    let mut closing = runtime.closing_receiver();
+    tokio::spawn(async move {
+        let key = format!(
+            "{}/rpc/gravity_comp_heartbeat",
+            runtime.profile.robot_prefix
+        );
+        let Some(queryable) =
+            next_while_running(&mut closing, session.declare_queryable(&key)).await
+        else {
+            return;
+        };
+        let queryable = queryable.expect("declare hand-guiding heartbeat queryable");
+        while let Some(Ok(query)) = next_while_running(&mut closing, queryable.recv_async()).await {
+            let result = match decode::<pb::GravityCompHeartbeatRequest>(&query) {
+                Ok(request) => runtime.gravity_comp_heartbeat(request.session_id, request.sequence),
                 Err(error) => Err(error),
             };
             reply(query, generic(result)).await;

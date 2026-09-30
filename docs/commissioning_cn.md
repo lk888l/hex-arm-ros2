@@ -2,6 +2,10 @@
 
 [English](commissioning.md) | **中文**
 
+> **替换臂更新（2026-09-29）：** 本页参数及历史成绩对应上一条机械臂。当前臂已升级 Meow，
+> 使用 `firefly_y6.meow.can2.replacement.local.yaml` 并保留其已有软件零偏；
+> 当前验收进度见[升级记录](commissioning_evidence/2026-09-29-can2-meow-upgrade.md)。
+
 适用于本机 Firefly Y6、Meow 固件、无夹爪及附加载荷。整理于 2026-09-09，实机验证结果截至 2026-09-08。
 现用配置为 `config/hardware/firefly_y6.meow.can2.local.yaml`；电机身份、方向和零偏以该文件为准。
 本机配置不提交 Git，更换机械臂时需重新核对身份与标定。

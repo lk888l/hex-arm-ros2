@@ -67,6 +67,10 @@ def test_controller_configuration_completes_before_any_enable():
         switch=Endpoint("activate_group", NS(ok=True)),
         fjt=NS(wait_for_server=lambda **_: True),
         positions=dict(zip(client.JOINTS, client.FOLDED)),
+        velocity=dict.fromkeys(client.JOINTS, 0.0),
+        q=lambda: client.FOLDED.copy(),
+        check_point=lambda q: None,
+        samples=[],
         wait=lambda future, _: future,
         spin=lambda _: events.append(("warm", None)),
         hardware_activation_requested=False,
@@ -96,6 +100,71 @@ def test_controller_configuration_completes_before_any_enable():
         client.Probe.activate_controllers(fake, startup_ready=True)
     assert all(event[0] not in ("enable", "activate_group") for event in events)
     assert not fake.hardware_activation_requested
+
+
+@pytest.mark.parametrize("field,value", [("q", math.nan), ("q", math.inf), ("dq", math.nan),
+                                        ("q", 0.016), ("dq", 0.021)])
+def test_measured_hold_rejects_bad_sample_even_after_valid_samples(field, value):
+    samples = [{"q": [0.0] * 6, "dq": [0.0] * 6} for _ in range(2)]
+    samples[1][field][4] = value
+    with pytest.raises(RuntimeError):
+        client.measured_hold_metrics([0.0] * 6, samples)
+
+
+def test_measured_hold_checks_reference_empty_samples_and_missing_axes():
+    sample = {"q": [0.001] * 6, "dq": [0.002] * 6}
+    assert client.measured_hold_metrics([0.0] * 6, [sample]) == ([0.001] * 6, 0.002)
+    for reference, samples in [([math.nan] * 6, [sample]), ([0.0] * 6, []),
+                               ([0.0] * 6, [{"q": [0.0] * 5, "dq": [0.0] * 6}])]:
+        with pytest.raises(RuntimeError):
+            client.measured_hold_metrics(reference, samples)
+
+
+def test_execution_handoff_requires_both_moveit_action_servers_and_preserves_plan_only():
+    from types import SimpleNamespace as NS
+    published = []
+    calls = []
+    fake = NS(
+        create_publisher=lambda *args: NS(publish=lambda message: published.append(message.data)),
+        move_group=NS(wait_for_server=lambda **_: calls.append("move_group") or True),
+        trajectory_executor=NS(wait_for_server=lambda **_: calls.append("execute_trajectory") or True),
+    )
+    assert client.Probe.unlock_moveit_after_hold(fake, "") is False
+    assert not published and not calls
+    assert client.Probe.unlock_moveit_after_hold(fake, "a" * 32) is True
+    assert published == ["a" * 32] and calls == ["move_group", "execute_trajectory"]
+    fake.trajectory_executor.wait_for_server = lambda **_: False
+    with pytest.raises(RuntimeError, match="did not acknowledge"):
+        client.Probe.unlock_moveit_after_hold(fake, "a" * 32)
+
+
+def test_measured_hold_waits_for_full_gravity_ramp_before_trajectory_activation():
+    config = profile()
+    config["controller"].pop("gravity_startup_slew_rate_nm_s", None)
+    assert client.measured_hold_duration(config) == 3.0
+    config["controller"]["gravity_startup_slew_rate_nm_s"] = 1.0
+    for joint in config["joints"]:
+        joint["limits"]["torque_nm"] = 6.0
+    config["joints"][2]["limits"]["torque_nm"] = 7.5
+    assert client.measured_hold_duration(config) == 8.5
+    for rate in (0, -1, math.nan, math.inf, .01):
+        config["controller"]["gravity_startup_slew_rate_nm_s"] = rate
+        with pytest.raises(RuntimeError):
+            client.measured_hold_duration(config)
+
+
+@pytest.mark.parametrize("fault", ["partial", "duplicate", "missing_velocity", "nan"])
+def test_invalid_state_cannot_refresh_feedback_freshness(fault):
+    from types import SimpleNamespace as NS
+    message = NS(name=client.JOINTS.copy(), position=[0.0] * 6, velocity=[0.0] * 6)
+    if fault == "partial": message.name.pop(); message.position.pop(); message.velocity.pop()
+    if fault == "duplicate": message.name[5] = message.name[0]
+    if fault == "missing_velocity": message.velocity = []
+    if fault == "nan": message.position[2] = math.nan
+    fake = NS(positions={}, velocity={}, received_at=0.0, samples=[])
+    with pytest.raises(RuntimeError, match="complete finite"):
+        client.Probe.state(fake, message)
+    assert fake.received_at == 0.0 and not fake.samples
 
 
 @pytest.mark.parametrize("recover", [True, False])
@@ -159,3 +228,157 @@ def test_ordered_startup_without_j6_preparation_holds_untouched_axes():
     assert steps[0][1][2:4] == q[2:4]
     assert steps[1][1][2] == q[2]
     assert steps[2][1] == client.READY
+
+
+def cia402_fixture():
+    config = profile()
+    config['bus']['protocol'] = 'cia402'
+    recipe = dict(schema_version=1, profile_sha256='bound-profile',
+                  entry_position_rad=client.FOLDED.copy(), steps=[
+                      dict(joint='joint_3', delta_rad=-.06, duration_sec=20),
+                      dict(joint='joint_4', delta_rad=-.06, duration_sec=20),
+                      dict(joint='joint_2', delta_rad=.06, duration_sec=20)])
+    return config, recipe
+
+
+def test_cia402_sequence_preserves_other_axes_and_checks_arm_binding():
+    config, recipe = cia402_fixture()
+    q = client.FOLDED.copy(); q[0] = -.006; q[4] = -.007
+    steps = client.cia402_steps(recipe, config, q, 'bound-profile')
+    assert [s[0] for s in steps] == ['cia402_joint_3', 'cia402_joint_4', 'cia402_joint_2']
+    assert steps[-1][1] == [q[0], q[1]+.06, q[2]-.06, q[3]-.06, q[4], q[5]]
+    assert steps[0][1][1] == q[1] and steps[0][1][3] == q[3]
+    with pytest.raises(RuntimeError, match='exact qualified'):
+        client.cia402_steps(recipe, config, q, 'another-arm')
+
+
+@pytest.mark.parametrize('fault', ['posture', 'nan', 'order', 'direction', 'travel', 'duration', 'limit', 'rate'])
+def test_cia402_sequence_rejects_unqualified_paths_before_enable(fault):
+    config, recipe = cia402_fixture()
+    q = client.FOLDED.copy()
+    if fault == 'posture': q[2] -= .02
+    if fault == 'nan': q[5] = math.nan
+    if fault == 'order': recipe['steps'].reverse()
+    if fault == 'direction': recipe['steps'][0]['delta_rad'] = .06
+    if fault == 'travel': recipe['steps'][0]['delta_rad'] = -.061
+    if fault == 'duration': recipe['steps'][0]['duration_sec'] = 19
+    if fault == 'limit': config['joints'][2]['limits']['position_lower_rad'] = 1.55
+    if fault == 'rate': config['joints'][2]['limits']['velocity_rad_s'] = .001
+    with pytest.raises(RuntimeError):
+        client.cia402_steps(recipe, config, q, 'bound-profile')
+
+
+def test_folded_exit_permission_does_not_accept_new_or_contactless_invalid_states():
+    from types import SimpleNamespace as NS
+    def contact(a,b): return NS(contact_body_1=a, contact_body_2=b)
+    response = NS(valid=False, contacts=[contact('link_1','link_5')])
+    fake = NS(validity=NS(call_async=lambda _: response), wait=lambda x,_: x)
+    assert not client.Probe.is_valid(fake, client.FOLDED, client.FOLDED_CONTACTS)
+    with pytest.raises(RuntimeError, match='strict MoveIt'):
+        client.Probe.is_valid(fake, client.FOLDED)
+    for contacts in [[], [contact('link_2','link_5')]]:
+        response.contacts = contacts
+        with pytest.raises(RuntimeError, match='strict MoveIt'):
+            client.Probe.is_valid(fake, client.FOLDED, client.FOLDED_CONTACTS)
+
+
+def test_sequence_collision_check_only_allows_fold_contacts_during_first_exit():
+    from types import SimpleNamespace as NS
+    config, recipe = cia402_fixture()
+    steps = client.cia402_steps(recipe, config, client.FOLDED, 'bound-profile')
+    permissions = []
+    fake = NS(validity=NS(wait_for_service=lambda **_: True), check_point=lambda _: None,
+              sequence_path_checks=[], is_valid=lambda q,allowed: permissions.append(allowed) or True)
+    client.Probe.check_sequence_path(fake, client.FOLDED, steps)
+    assert len(permissions) == 123
+    assert all(p == client.FOLDED_CONTACTS for p in permissions[:40])
+    assert all(not p for p in permissions[40:])
+
+
+def test_explicit_meow_placement_alignment_preserves_fold_and_motion_rates():
+    config = profile()
+    q = [-.105, -1.57, 1.57, .0114, .008, -.418]
+    with pytest.raises(RuntimeError, match='folded reference'):
+        client.startup_steps(config, q, [0.0]*6)
+    steps = client.startup_steps(config, q, [0.0]*6, align_folded=True)
+    assert [s[0] for s in steps] == ['align_folded','startup_j2','startup_j4','startup_j3']
+    assert steps[0][1] == client.FOLDED
+    assert steps[-1][1] == client.READY
+    for actual, target in zip(q, steps[0][1]):
+        assert 1.875*abs(target-actual)/steps[0][2] <= .05
+        assert 5.774*abs(target-actual)/steps[0][2]**2 <= .05
+    for axis, value in [(0, -.151), (1,-1.54), (2,1.54), (3,.031), (4,.051)]:
+        bad = q.copy(); bad[axis]=value
+        with pytest.raises(RuntimeError): client.startup_steps(config,bad,[0.0]*6,align_folded=True)
+    config['bus']['protocol']='cia402'
+    with pytest.raises(RuntimeError): client.startup_steps(config,q,[0.0]*6,align_folded=True)
+
+
+def test_explicit_enable_transient_is_time_and_displacement_bounded():
+    sample = {"t": 10.1, "q": [.0004] * 6, "dq": [.125] * 6}
+    client.measured_hold_metrics([0.] * 6, [sample], enable_started_at=10.)
+    with pytest.raises(RuntimeError):
+        client.measured_hold_metrics([0.] * 6, [sample])
+    for replacement in ({"t": 10.26}, {"t": 9.99}, {"dq": [.151] * 6}, {"q": [.0151] * 6}):
+        with pytest.raises(RuntimeError):
+            client.measured_hold_metrics([0.] * 6, [dict(sample, **replacement)], enable_started_at=10.)
+    ramp = dict(sample, t=11., dq=[.04] * 6)
+    client.measured_hold_metrics([0.] * 6, [ramp], enable_started_at=10.)
+    with pytest.raises(RuntimeError):
+        client.measured_hold_metrics([0.] * 6, [ramp])
+    with pytest.raises(RuntimeError):
+        client.measured_hold_metrics([0.] * 6, [dict(ramp, dq=[.051] * 6)], enable_started_at=10.)
+
+
+@pytest.mark.parametrize("seconds", [8.0, 10.0, 6.0, 2, 2.125])
+def test_yaml_trajectory_durations_serialize_as_ros_integers(seconds):
+    from rclpy.serialization import serialize_message, deserialize_message
+    duration = client.trajectory_duration(seconds)
+    decoded = deserialize_message(serialize_message(duration), client.Duration)
+    assert decoded.sec + decoded.nanosec / 1e9 == seconds
+
+
+@pytest.mark.parametrize("seconds", [math.nan, math.inf, -1., 0., 121., True])
+def test_invalid_trajectory_durations_are_rejected(seconds):
+    with pytest.raises(RuntimeError):
+        client.trajectory_duration(seconds)
+
+
+def test_real_hold_acceptance_matches_real_controller_goal_override():
+    base = yaml.safe_load((WORKSPACE/'src/hex_arm_bringup/config/controllers.yaml').read_text())
+    real = yaml.safe_load((WORKSPACE/'src/hex_arm_bringup/config/controllers_real.yaml').read_text())
+    for joint in client.JOINTS:
+        assert real['firefly_arm_controller']['ros__parameters']['constraints'][joint]['goal'] == client.HOLD_POSITION_TOLERANCE_RAD
+        assert real['firefly_arm_controller']['ros__parameters']['constraints'][joint]['trajectory'] == 2 * base['firefly_arm_controller']['ros__parameters']['constraints'][joint]['trajectory']
+    client.measured_hold_metrics([0.]*6, [{'q':[.0149]*6,'dq':[0.]*6}])
+    with pytest.raises(RuntimeError):
+        client.measured_hold_metrics([0.]*6, [{'q':[.0151]*6,'dq':[0.]*6}])
+
+
+def test_direct_trajectory_pins_start_derivatives_after_moveit():
+    from rclpy.serialization import serialize_message, deserialize_message
+    initial = client.READY.copy()
+    target = initial.copy(); target[2] += .13
+    points = client.rest_to_rest_points(initial, target, 12.)
+    assert len(points) == 2
+    for point in points:
+        decoded = deserialize_message(serialize_message(point), client.JointTrajectoryPoint)
+        assert list(decoded.velocities) == [0.] * 6
+        assert list(decoded.accelerations) == [0.] * 6
+    assert points[0].time_from_start.sec == points[0].time_from_start.nanosec == 0
+    assert list(points[0].positions) == initial
+    assert list(points[1].positions) == target
+    assert points[0].positions[5] == points[1].positions[5]  # Held J6 cannot inherit acceleration.
+
+
+def test_expanded_trajectory_deadline_tracks_duration_and_rejects_bad_timing():
+    points = client.rest_to_rest_points(client.READY, client.READY, 45.)
+    assert client.planned_execution_timeout(points) == 55.
+    points[1].time_from_start.sec = 5
+    assert client.planned_execution_timeout(points) == 30.
+    for seconds in (0, -1, 121):
+        points[1].time_from_start.sec = seconds
+        with pytest.raises(RuntimeError):
+            client.planned_execution_timeout(points)
+    with pytest.raises(RuntimeError):
+        client.planned_execution_timeout([])

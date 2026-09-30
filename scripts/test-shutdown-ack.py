@@ -46,8 +46,18 @@ class ShutdownAcknowledgement(unittest.TestCase):
                 self.assertNotEqual(self.verify(**kwargs).returncode, 0)
 
     def test_drive_confirmation_never_hides_a_ros_child_crash(self):
-        self.assertNotEqual(
-            self.verify(log=LOG + "[move_group] process has died [exit code -11]\n").returncode, 0)
+        result = self.verify(log=LOG + "[move_group] process has died [pid 4567, exit code -11]\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("VERIFIED structured disabled_confirmed", result.stdout)
+        self.assertIn("a supervised ROS child failed", result.stderr)
+
+    def test_startup_failure_and_successful_disable_are_reported_independently(self):
+        result = self.verify(log=LOG + "[python3-8] process has died [pid 4567, exit code 1]\n"
+                             "[launch.user] ERROR: controller startup failed with exit code 1\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("VERIFIED structured disabled_confirmed", result.stdout)
+        self.assertIn("startup verification failed; final drive disable was verified", result.stderr)
+        self.assertNotIn("crashed during shutdown", result.stderr)
 
 
 if __name__ == "__main__":

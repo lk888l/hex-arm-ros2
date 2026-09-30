@@ -122,6 +122,7 @@ def test_velocity_profiles_match_the_staged_policy() -> None:
         "joint_limits_sim.yaml": (6.0, 10.0),
         "joint_limits_commissioning.yaml": (0.1, 0.1),
         "joint_limits_verified.yaml": (6.0, 0.2),
+        "joint_limits_deployment.yaml": (1.2566370614359172, 0.6),
     }
     for filename, (maximum, acceleration) in expected.items():
         limits = _yaml(filename)["joint_limits"]

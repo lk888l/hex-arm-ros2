@@ -3,7 +3,20 @@
 [English](README.md) | **中文**
 
 框架重构与独立 Docker 部署见 [运行架构与迁移说明](docs/architecture_refactor_cn.md)。
-默认构建已排除历史 CiA402/USB 调试工具；真机执行每次自动完成 J2 → J4 → J3。
+默认构建包含 Meow 与 CiA402 驱动；历史 CiA402/USB 调试工具不默认安装。
+当前 Meow 真机执行每次自动完成 J2 → J4 → J3。
+
+旧版 CiA402 固件、无界面 Docker 和分阶段扩大规划窗口见
+[CiA402 真机部署与验收](docs/cia402_deployment_cn.md)。2026-09-29 的 can2 测试在软件零偏
+校准后使用重力补偿，通过 J2 +0.24 rad、J6 ±0.24 rad、J4 −0.12 rad 独立往返；
+详见[扩大行程记录](docs/commissioning_evidence/2026-09-29-can2-expanded.md)。完整六轴 MoveIt 执行尚未验收。
+
+当前替换臂已升级为 Meow 固件，保留本臂软件零偏；操作见[替换臂 Meow 部署入口](docs/meow_replacement_deployment_cn.md)。新版适配、参数与实测结果见
+[Meow 升级验收记录](docs/commissioning_evidence/2026-09-29-can2-meow-upgrade.md)。
+上述 CiA402 结果属于升级前记录，不能直接作为新版固件验收依据。
+
+更换机械臂或重新校准后，使用[折叠姿态软件零点校准工具](docs/zero_calibration_cn.md)
+读取六轴编码器、计算 `zero_offset_rad`、生成本机配置并独立复查。
 
 面向六轴 Firefly Y6 机械臂的 ROS 2 Jazzy 驱动、MoveIt 2 运动规划与 Gazebo 仿真工作区。
 **只想打开 MoveIt 2 窗口，直接按下面的快速启动操作即可，无需连接机械臂。**
@@ -363,13 +376,14 @@ Jazzy），因此无需再复制维护一份内容相同的 Ubuntu Dockerfile。
 ## 当前真机部署
 
 当前使用 **Firefly Y6、Meow 固件、can2，无夹爪及附加载荷**。六轴通信、重力补偿、
-J2→J4→J3 顺序启动和 MoveIt 小范围执行已验证；完整行程、较高速度和负载工况仍待验收。
-完整参数、已知待回归问题与下一阶段任务统一维护在
+J2→J4→J3 顺序启动和 MoveIt 小范围执行已验证。操作者已确认 GUI 大范围 MIT 和全范围
+重力补偿正常；正式 MoveIt 范围、动态配置及本次验收见[替换臂部署入口](docs/meow_replacement_deployment_cn.md)。
+此前窄窗口调试参数、记录与历史待回归问题保留在
 [当前实机状态与后续优化](docs/commissioning_cn.md)。
 
 ### 启动与停止
 
-本机配置为 `config/hardware/firefly_y6.meow.can2.local.yaml`，包含已采用的电机身份、
+本机部署配置为 `config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml`，包含已采用的电机身份、
 方向、零偏和运动窗口。该文件不提交 Git；换机时从 `firefly_y6.meow_mit.example.yaml`
 建立新配置并重新核对标定，不能直接套用本机配置。
 
@@ -386,8 +400,10 @@ J2→J4→J3 顺序启动和 MoveIt 小范围执行已验证；完整行程、�
 ```bash
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh up
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
-  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.local.yaml \
-  enable_execution:=true
+  /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml \
+  enable_execution:=true position_limits:=hardware dynamics_limits:=custom \
+  planning_limits_file:=/workspaces/hex_arm_ros2/src/hex_arm_moveit_config/config/joint_limits_deployment.yaml \
+  align_folded:=true allow_enable_transient:=true
 ```
 
 入口核对反馈和位置后使能，默认依次移动 **J2→−1.350（8 s）、J4→−0.300（10 s）、
@@ -399,16 +415,33 @@ J3→1.430（6 s）**，其余关节最终为 0。权威数值位于
 在 RViz 选择 `arm`，以当前状态为起点进行 `Plan` / `Plan & Execute`。
 后续 MoveIt 执行使用严格碰撞检查，并受当前本机运动窗口约束。
 
-当前 Kp 为 `[80,80,120,110,80,80]`，Kd 均为 15；J2/J3/J4 重力比例为 `1.0/1.05/0.7`。
-速度和加速度上限分别为 0.1 rad/s、0.1 rad/s²；具体限位见部署进度文档。
-真机执行每次必须完成自动启动顺序，不能用 `startup_ready:=false` 绕过；
+当前 Kp 为 `[100,100,150,110,80,80]`，Kd 均为 15，重力比例均为 1.0。
+部署 profile 的速度、加速度均为约 1.257 SI 单位，等于 GUI 的 0.2 Rev/s、0.2 Rev/s² 乘 `2π`。
+正式规划 YAML 的加速度为 0.6 rad/s²，给 Rust 连续插值保留余量。
+`dynamics_limits:=hardware` 直接采用硬件上限；`custom` 再与所选规划 YAML 取交集。
+两者均解除 commissioning 的隐藏 0.1 限速；RViz 的规划比例另行设置。
+常规真机轨迹执行每次必须完成自动启动顺序，不能用 `startup_ready:=false` 绕过；
 省略 `enable_execution:=true` 为保持失能的观察和规划。
 
-当前本机 profile 已配置退出阻尼：在拥有 real-launch 的终端第一次按 Ctrl-C，
-会先经 MoveIt **回安全启动位**，再阻尼下落、确认失能；不要提前断电。
-再次 Ctrl-C 或故障走立即停机路径。等待柔和阶段结果及 `VERIFIED structured disabled_confirmed`。
-该阻尼参数尚待实机验收，入口限制、失败行为和参数见[退出阻尼说明](docs/shutdown_damping_cn.md)。
+在拥有 real-launch 的终端第一次按 Ctrl-C，会先经 MoveIt **回安全启动位**，再按
+J3→J4→J2 受控回折并确认失能。再次 Ctrl-C 或故障走立即停机路径。
+等待受控回折结果及 `VERIFIED structured disabled_confirmed` 后再断电；本部署 profile 使用回折停机。
 切换上位机、修改配置或重新编译前，先停止当前控制端。
+
+### 旧版 CiA402 电机
+
+默认构建的 `hex_arm_controller` 同时包含 Meow 和 CiA402 后端，运行时由硬件 profile
+中的 `bus.protocol` 选择。旧电机从 `config/hardware/firefly_y6.example.yaml` 新建
+`*.local.yaml`，明确使用 `protocol: cia402`、`loop_hz: 1000`，并按旧电机实物重新核对
+身份、方向、零位、力矩比例和运动窗口。配置仍须为 schema v3 / 关节坐标 v2，
+且通过标定后才能设置 `calibrated: true`。仓库内旧版
+`firefly_y6.discovered.local.yaml` 是 schema v2、未标定记录，不能直接使能。
+
+使用 `./scripts/build.sh` 构建后，CiA402 真机 MoveIt 入口沿用 `real-launch moveit`，
+并传入 CiA402 本机 profile。`enable_execution:=true` 时，启动客户端先检查六轴静止、
+当前姿态在该 profile 的限位内；使能后验证当前位置保持误差和速度，再允许轨迹执行。
+CiA402 不执行 Meow 的折叠退出序列。Docker `real-launch` 仅接受已绑定的 SocketCAN
+接口；旧版单轴诊断工具仍需用 `HEX_ARM_BUILD_COMMISSIONING=ON` 单独构建。
 
 ### CAN 接口与继续开发
 
@@ -421,6 +454,83 @@ CAN 名称可配置；当前使用 can2，接口速率为 1 Mbps 仲裁 / 4 Mbps
 在容器工作区执行 `./scripts/build.sh`，再 `source install/setup.bash`；编译缓存会重新生成。
 后续按重复性回归、模型与限位核对、逐步扩大运动范围、连续运行与故障恢复、部署固化的顺序推进，
 详见 [后续优化步骤](docs/commissioning_cn.md#后续优化顺序)。
+
+## 手扶拖动：重力补偿与阻尼
+
+专用 `gravity_comp.launch.py` 从当前实测姿态进入手扶拖动：`Kp=0`、目标速度为零，
+输出为经过 profile 比例及限幅处理的重力矩，加上 `−Kd × 实测速度` 阻尼。
+它不执行折叠展开、位置保持或轨迹跟踪，也不启动 MoveIt / ros2_control。
+松手后阻尼会使运动减速，但不会锁定位置；重力模型、载荷和补偿比例有误差时仍会漂移。
+
+先停止其他机械臂控制程序。在容器工作区构建并加载新入口：
+
+```bash
+./scripts/build.sh --packages-select hex_arm_controller hex_arm_bridge hex_arm_bringup
+source install/setup.bash
+ros2 launch hex_arm_bringup gravity_comp.launch.py \
+  hardware_profile:=/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.hand_guiding_full_range.local.yaml \
+  activate_hardware:=true \
+  damping:='[2.0, 2.0, 2.0, 2.0, 2.0, 2.0]'
+```
+
+当前臂使用 `replacement.local.yaml`，其适配器及六轴身份与当前 can2 实读值匹配；
+`firefly_y6.meow.can2.local.yaml` 是旧臂配置。只重绑 CAN 适配器不会迁移电机身份或零位标定。
+上面的 `hand_guiding_full_range.local.yaml` 基于本臂配置，将六轴位置限位扩大到 URDF 范围，
+并使用独立的六轴手扶速度保护门槛 2.0 rad/s：
+J1 `[-2.86, 2.86]`、J2 `[-1.57, 2.09]`、J3/J4 `[-1.57, 1.57]`、
+J5 `[-1.54, 1.54]`、J6 `[-2.79, 2.79]` rad。原 `replacement.local.yaml` 保留窄窗口。
+新配置属于用户授权的全范围拖动调试候选；继承的标定标志不代表新增范围已经实机验收。
+单轴模型限位不能保证关节组合无碰撞，也不等于已核实的机械硬限位。
+六轴重力补偿比例均为 1.0，力矩上限沿用原试调值，大幅改变姿态后可能支撑不足，
+需要持续扶稳，不能把松手悬停作为已实现的保证。配置文件直接加载，无需重新编译。
+
+`damping` 顺序为 J1～J6，单位为 N·m·s/rad，必须为六个有限正数。
+默认各轴为 2.0；增大时松手减速更强，拖动也更费力，减小时阻力和松手减速能力一起降低。
+改变参数需要先停止，再重新启动。持续漂移应核对重力模型、安装方向、末端载荷及每轴
+`gravity_compensation_scale`；原先配合位置 PD 使用的补偿比例不一定能实现零刚度悬停。
+不要通过把现有轨迹控制的 `default_kp` 改为零来启用这个功能。
+
+进入模式需要已验证、已标定的 schema v3 profile、六轴新鲜反馈、关节在限位内，
+且各轴实测速度不超过 0.02 rad/s。使能前及重力渐入期间应手扶支撑，等待日志
+`hand_guiding_ready` 后再拖动。渐入速率沿用 `gravity_startup_slew_rate_nm_s`，未配置时为
+5 N·m/s；渐入后重力补偿直接跟随实测姿态。限位、速度、力矩和温度保护保持生效，
+拖动专用 profile 设置 `controller.hand_guiding_velocity_limits_rad_s` 为六轴各 2.0 rad/s
+（约 114.6°/s），仅在 `GRAVITY_COMP` 模式中替代普通实测速度门槛；该数组是绝对门槛，
+不额外叠加 J2/J4 的速度余量。运动命令和其他模式仍使用 `joints[].limits.velocity_rad_s`。
+省略此参数时，手扶模式沿用每轴命令速度加实测余量；数组顺序为 J1～J6，必须包含六个
+有限正数且不超过 6 rad/s。阻尼不能保证速度受限，因此仍保留超速保护和非有限反馈拒绝。
+超速会故障失能；这不是位置锁定或行程不足。
+`controller.hand_guiding_position_margin_rad` 在本拖动配置中为 0.012 rad（约 0.69°），
+只在进入/运行 `GRAVITY_COMP` 时替代普通位置反馈余量，其他模式及外部位置命令保持严格限位。
+未配置时沿用各轴 `measured_position_margin_rad`；该参数接受有限的 0～0.012 rad，
+并要求反馈范围小于一整圈，以满足现有使能位置一致性检查及单圈坐标约束。
+反馈处于余量内时，仅把零刚度 MIT 位置目标字段限制到合法命令范围；`Kp` 仍为零。
+重力计算始终使用实际编码器角度，不对角度截断；超过反馈余量或非有限读数仍触发保护。
+J2 在折叠位置接近模型下限 −1.57 rad，只能向范围内拖动。
+本模式没有 MoveIt 碰撞检查，需要在有间隙的工作范围内操作。
+
+停止前先扶稳机械臂，再从另一个已 source 的终端执行：
+
+```bash
+ros2 service call /hex_arm_gravity_comp/stop std_srvs/srv/Trigger '{}'
+```
+
+服务成功表示所有轴已确认失能且会话已释放，整组 launch 随后退出。
+Ctrl-C 同样触发停止，但不会自动回位或折叠；失能后机械臂需要外部支撑。
+管理节点每 50 ms 续期，驱动在 500 ms 未收到有效续期后锁存故障并失能，
+失败时继续重试失能。管理进程崩溃、冻结以及通信中断都不会留下无限期的补偿输出。
+故障后不自动恢复；支撑机械臂并停止该 launch，查明原因后重新启动。
+驱动退出确认写在当前 ROS 日志目录的 `hand-guiding-shutdown.json` 中，
+只有 `disabled_confirmed` 表示确认失能。
+
+省略 `activate_hardware:=true` 时只观察状态；`use_rviz:=true` 可打开姿态显示。
+不接机械臂时可先验证软件链路（mock 不模拟实际重力或拖动手感）：
+
+```bash
+ros2 launch hex_arm_bringup gravity_comp.launch.py \
+  hardware_profile:=/workspaces/hex_arm_ros2/src/hex_arm_controller/test/firefly_y6.mock.yaml \
+  mock:=true activate_hardware:=true
+```
 
 ## 控制接口与架构
 

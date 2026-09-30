@@ -17,6 +17,7 @@ gravity_vector_base_m_s2: [0.0, 0.0, -9.81]
 tip_payload: null
 
 bus:
+  protocol: cia402
   # SocketCAN uses the host interface's existing bit timing. Select gs_usb for
   # legacy direct USB access at the fixed 1M/5M CAN-FD rate.
   transport: socket_can

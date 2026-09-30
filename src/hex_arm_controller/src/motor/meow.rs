@@ -4,7 +4,7 @@
 use super::{FeedbackSnapshot, JointFeedback, MotorBackend, MotorIdentitySnapshot, DOF};
 use crate::conversion::MotorTarget;
 use crate::discovery::{discover_read_only, DiscoveryOptions};
-use crate::profile::{BusTransport, HardwareProfile};
+use crate::profile::{BusTransport, HardwareProfile, MeowPdAllocation, MeowTorqueBudget};
 use crate::socketcan_preflight::{preflight_socketcan, validate_runtime_socketcan};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -498,6 +498,7 @@ impl MeowBackend {
                 calibration[index].context("Meow calibration missing")?,
                 joint.torque_permille,
                 joint.kp_kd_torque_permille,
+                joint.meow_torque_budget,
             )?;
         }
         Ok(payloads)
@@ -834,6 +835,17 @@ impl MotorBackend for MeowBackend {
         }
         Ok(())
     }
+    fn measured_torque_limit_nm(&self, index: usize) -> Option<f32> {
+        let calibration = self.calibration.read().get(index).copied().flatten()?;
+        let joint = self.profile.joints.get(index)?;
+        Some(
+            calibration.peak_nm * f32::from(joint.torque_permille)
+                / 1000.0
+                / calibration.torque_factor
+                / joint.torque_scale,
+        )
+    }
+
     fn feedback(&self) -> FeedbackSnapshot {
         let now = Instant::now();
         let telemetry = *self.telemetry.read();
@@ -947,7 +959,9 @@ fn encode_target(
     calibration: Calibration,
     max_permille: u16,
     pd_permille: u16,
+    budget: MeowTorqueBudget,
 ) -> Result<[u8; 20]> {
+    budget.validate()?;
     anyhow::ensure!(
         [
             target.position_rev,
@@ -986,21 +1000,33 @@ fn encode_target(
     let cap_nm = calibration.peak_nm * f32::from(max_permille) / 1000.0;
     anyhow::ensure!(wire_torque.abs() <= cap_nm + 1.0e-5,
         "Meow physical Tff {} Nm requires {wire_torque} raw Nm, above configured {cap_nm} raw Nm ceiling", target.torque_nm);
-    // The GUI budgets 15% headroom on feed-forward plus the complete allowed
-    // PD contribution. Reject inadequate ceilings instead of letting firmware
-    // silently clip PD and recreating the arm's inability to lift.
-    let feedforward_budget =
-        (f64::from(wire_torque.abs()) * 1.15 / f64::from(calibration.peak_nm) * 1000.0).ceil();
-    anyhow::ensure!(feedforward_budget + f64::from(pd_permille) <= f64::from(max_permille),
-        "Meow torque ceiling lacks PD/gravity headroom: need {:.0} permille (Tff with 15% reserve + PD), configured {max_permille}",
-        feedforward_budget + f64::from(pd_permille));
+    // Allocate in calibrated motor-side units. Existing profiles retain fixed
+    // 15% headroom; commissioned profiles may share the remainder with PD.
+    let feedforward_budget = (f64::from(wire_torque.abs())
+        * (1.0 + budget.feedforward_reserve_ratio)
+        / f64::from(calibration.peak_nm)
+        * 1000.0)
+        .ceil();
+    let allocated_pd = match budget.pd_allocation {
+        MeowPdAllocation::Fixed => {
+            anyhow::ensure!(feedforward_budget + f64::from(pd_permille) <= f64::from(max_permille),
+                "Meow torque ceiling lacks PD/gravity headroom: need {:.0} permille (Tff with {:.1}% reserve + PD), configured {max_permille}",
+                feedforward_budget + f64::from(pd_permille), budget.feedforward_reserve_ratio * 100.0);
+            pd_permille
+        }
+        MeowPdAllocation::Remaining => {
+            anyhow::ensure!(feedforward_budget <= f64::from(max_permille),
+                "Meow feed-forward budget needs {feedforward_budget} permille, above configured {max_permille}");
+            pd_permille.min(max_permille - feedforward_budget as u16)
+        }
+    };
     let mut payload = [0; 20];
     payload[0..4].copy_from_slice(&target.position_rev.to_le_bytes());
     payload[4..8].copy_from_slice(&target.velocity_rev_s.to_le_bytes());
     payload[8..12].copy_from_slice(&wire_torque.to_le_bytes());
     payload[12..14].copy_from_slice(&gain(target.kp_nm_rev)?.to_le_bytes());
     payload[14..16].copy_from_slice(&gain(target.kd_nm_s_rev)?.to_le_bytes());
-    payload[16..18].copy_from_slice(&pd_permille.to_le_bytes());
+    payload[16..18].copy_from_slice(&allocated_pd.to_le_bytes());
     Ok(payload)
 }
 async fn send_payloads(
@@ -1035,6 +1061,7 @@ mod tests {
             },
             1000,
             500,
+            MeowTorqueBudget::default(),
         )
         .unwrap();
         assert_eq!(f32::from_le_bytes(payload[8..12].try_into().unwrap()), 6.0);
@@ -1071,13 +1098,15 @@ mod tests {
             torque_nm: 1.0,
             ..Default::default()
         };
-        assert!(encode_target(target, calibration, 300, 300).is_err());
+        assert!(encode_target(target, calibration, 300, 300, MeowTorqueBudget::default()).is_err());
         let with_pd = MotorTarget {
             torque_nm: 0.75,
             ..Default::default()
         };
-        assert!(encode_target(with_pd, calibration, 600, 300).is_err());
-        assert!(encode_target(with_pd, calibration, 700, 300).is_ok());
+        assert!(
+            encode_target(with_pd, calibration, 600, 300, MeowTorqueBudget::default()).is_err()
+        );
+        assert!(encode_target(with_pd, calibration, 700, 300, MeowTorqueBudget::default()).is_ok());
         assert!(encode_target(
             MotorTarget {
                 kp_nm_rev: 1000.0,
@@ -1085,7 +1114,8 @@ mod tests {
             },
             calibration,
             1000,
-            1000
+            1000,
+            MeowTorqueBudget::default()
         )
         .is_err());
         assert!(encode_target(
@@ -1095,7 +1125,8 @@ mod tests {
             },
             calibration,
             1000,
-            1000
+            1000,
+            MeowTorqueBudget::default()
         )
         .is_err());
         assert!(encode_target(
@@ -1105,7 +1136,8 @@ mod tests {
                 ..calibration
             },
             1000,
-            1000
+            1000,
+            MeowTorqueBudget::default()
         )
         .is_err());
     }
@@ -1117,6 +1149,146 @@ mod tests {
         assert_eq!(dt, 1000);
         let velocity = current.wrapping_delta(previous) * 1_000_000.0 / f64::from(dt);
         assert!((velocity - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn remaining_budget_preserves_tff_and_shares_the_calibrated_total_with_pd() {
+        let calibration = Calibration {
+            peak_nm: 10.0,
+            torque_factor: 4.0,
+            gain_factor: 0.01,
+        };
+        let budget = MeowTorqueBudget {
+            feedforward_reserve_ratio: 0.0,
+            pd_allocation: MeowPdAllocation::Remaining,
+        };
+        let allocated_pd = |torque_nm, maximum, requested| {
+            let payload = encode_target(
+                MotorTarget {
+                    torque_nm,
+                    ..Default::default()
+                },
+                calibration,
+                maximum,
+                requested,
+                budget,
+            )
+            .unwrap();
+            assert_eq!(
+                f32::from_le_bytes(payload[8..12].try_into().unwrap()),
+                torque_nm * 4.0
+            );
+            u16::from_le_bytes(payload[16..18].try_into().unwrap())
+        };
+        assert_eq!(allocated_pd(0.75, 1000, 1000), 700);
+        assert_eq!(allocated_pd(-0.75, 1000, 1000), 700);
+        assert_eq!(allocated_pd(0.75, 1000, 500), 500);
+        assert_eq!(allocated_pd(0.0, 1000, 1000), 1000);
+        assert_eq!(allocated_pd(0.0, 800, 1000), 800);
+        assert_eq!(allocated_pd(2.5, 1000, 1000), 0);
+        for torque_nm in [-2.51, 2.51, f32::NAN, f32::INFINITY] {
+            assert!(encode_target(
+                MotorTarget {
+                    torque_nm,
+                    ..Default::default()
+                },
+                calibration,
+                1000,
+                1000,
+                budget
+            )
+            .is_err());
+        }
+        // Sweep both torque directions and changing drive ceilings. The wire
+        // feed-forward stays exact, and the complete granted PD always fits.
+        for maximum in [650, 800, 1000] {
+            for raw_tenths in -60..=60 {
+                let torque_nm = raw_tenths as f32 / 40.0;
+                let pd = allocated_pd(torque_nm, maximum, 1000);
+                let raw_torque = torque_nm * 4.0;
+                assert!(
+                    raw_torque.abs() + f32::from(pd) / 100.0 <= f32::from(maximum) / 100.0 + 1.0e-5
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reserve_is_configurable_without_bypassing_physical_caps_or_fixed_defaults() {
+        let calibration = Calibration {
+            peak_nm: 10.0,
+            torque_factor: 4.0,
+            gain_factor: 0.01,
+        };
+        let target = MotorTarget {
+            torque_nm: 0.75,
+            ..Default::default()
+        };
+        let budget = MeowTorqueBudget {
+            pd_allocation: MeowPdAllocation::Remaining,
+            ..Default::default()
+        };
+        let payload = encode_target(target, calibration, 1000, 1000, budget).unwrap();
+        assert_eq!(u16::from_le_bytes(payload[16..18].try_into().unwrap()), 655);
+        assert!(
+            encode_target(target, calibration, 1000, 1000, MeowTorqueBudget::default()).is_err()
+        );
+        assert!(encode_target(
+            MotorTarget {
+                torque_nm: 2.5,
+                ..Default::default()
+            },
+            calibration,
+            1000,
+            1000,
+            budget
+        )
+        .is_err());
+        for feedforward_reserve_ratio in [-0.1, 1.01, f64::NAN, f64::INFINITY] {
+            assert!(encode_target(
+                target,
+                calibration,
+                1000,
+                1000,
+                MeowTorqueBudget {
+                    feedforward_reserve_ratio,
+                    ..budget
+                }
+            )
+            .is_err());
+        }
+        // Reproduce the field failure: 151 permille reserved for gravity plus
+        // a fixed 500 PD required 651 against the former 650 drive ceiling.
+        let field_calibration = Calibration {
+            peak_nm: 30.0,
+            torque_factor: 1.0,
+            gain_factor: 0.01,
+        };
+        let field_target = MotorTarget {
+            torque_nm: 3.92,
+            ..Default::default()
+        };
+        let rejected = encode_target(
+            field_target,
+            field_calibration,
+            650,
+            500,
+            MeowTorqueBudget::default(),
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("need 651 permille"));
+        let payload = encode_target(
+            field_target,
+            field_calibration,
+            1000,
+            1000,
+            MeowTorqueBudget {
+                feedforward_reserve_ratio: 0.0,
+                ..budget
+            },
+        )
+        .unwrap();
+        assert_eq!(u16::from_le_bytes(payload[16..18].try_into().unwrap()), 869);
     }
 }
 
@@ -1173,6 +1345,15 @@ mod lifecycle_tests {
             operations: Mutex::new(()),
             tasks: Vec::new(),
         };
+        assert_eq!(backend.measured_torque_limit_nm(0), None);
+        backend.calibration.write()[0] = Some(Calibration {
+            gain_factor: 1.0,
+            peak_nm: 30.0,
+            torque_factor: 1.5,
+        });
+        assert_eq!(backend.measured_torque_limit_nm(0), Some(13.0));
+        assert_eq!(backend.profile.joints[0].limits.torque_nm, 0.5);
+        assert_eq!(backend.measured_torque_limit_nm(DOF), None);
         assert!(backend.disable_all().await.is_err());
         assert!(!backend.heartbeat_enabled.load(Ordering::Acquire));
         assert_eq!(*backend.consumers.read(), touched);

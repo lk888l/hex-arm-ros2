@@ -1,5 +1,8 @@
 import math
 import os
+import hashlib
+import json
+import re
 from pathlib import Path
 
 import yaml
@@ -20,6 +23,7 @@ from launch.substitutions import Command, FindExecutable, LaunchConfiguration, P
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from hex_arm_bringup.startup_event import StartupVerified
 
 
 DEFAULT_ZENOH_DIRECT_ENDPOINT = "tcp/127.0.0.1:7448"
@@ -83,6 +87,28 @@ def _shutdown_after_exit(step):
     return _handler
 
 
+def _after_startup(report_path, profile_path, readiness_token):
+    def _handler(event, context):
+        if context.is_shutdown:
+            return []
+        if event.returncode != 0:
+            return _shutdown_actions(f"controller startup failed with exit code {event.returncode}")
+        try:
+            report = json.loads(Path(report_path).read_text())
+            expected_hash = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
+            if (not isinstance(report, dict) or report.get("passed") is not True
+                    or report.get("profile_sha256") != expected_hash
+                    or (readiness_token and report.get("moveit_execution_unlocked") is not True)):
+                raise ValueError("startup report does not confirm this profile and execution handoff")
+        except (OSError, ValueError) as error:
+            return _shutdown_actions(f"controller startup report verification failed: {error}")
+        if report.get("deactivated") is True:
+            return [LogInfo(msg="Startup trial verified; hardware is INACTIVE")]
+        return [EmitEvent(event=StartupVerified(profile_path, readiness_token))]
+
+    return _handler
+
+
 def _shutdown_actions(reason):
     return [LogInfo(msg=f"ERROR: {reason}"), EmitEvent(event=Shutdown(reason=reason))]
 
@@ -109,10 +135,34 @@ def _real_nodes(context):
     if startup_ready not in ("true", "false"):
         raise RuntimeError("startup_ready must be 'true' or 'false'")
     if activate_hardware and startup_ready != "true":
-        raise RuntimeError("real execution requires automatic J2 -> J4 -> J3 startup; startup_ready cannot be disabled")
-    startup_ready = activate_hardware
-    if startup_ready and profile.get("bus", {}).get("protocol") != "meow":
-        raise RuntimeError("ordered startup_ready requires a Meow hardware profile")
+        raise RuntimeError("real execution requires the protocol startup procedure; startup_ready cannot be disabled")
+    motor_protocol = profile.get("bus", {}).get("protocol")
+    if motor_protocol not in ("meow", "cia402"):
+        raise RuntimeError("real bringup requires an explicit meow or cia402 motor protocol")
+    startup_sequence = LaunchConfiguration("startup_sequence", default="").perform(context)
+    if startup_sequence and (motor_protocol != "cia402" or not Path(startup_sequence).is_file()):
+        raise RuntimeError("startup_sequence requires CiA402 and an existing arm-bound recipe")
+    startup_trial = LaunchConfiguration("startup_trial", default="false").perform(context).lower()
+    if startup_trial not in ("true", "false"):
+        raise RuntimeError("startup_trial must be true or false")
+    startup_trial = startup_trial == "true"
+    readiness_token = LaunchConfiguration("moveit_ready_token", default="").perform(context)
+    if readiness_token and (not activate_hardware or not re.fullmatch(r"[0-9a-f]{32}", readiness_token)):
+        raise RuntimeError("moveit_ready_token requires activation and this launch's 32-digit token")
+    if startup_trial and (not activate_hardware or not startup_sequence):
+        raise RuntimeError("startup_trial requires explicit activation and an arm-bound sequence")
+    align_folded = LaunchConfiguration("align_folded", default="false").perform(context).lower()
+    if align_folded not in ("true", "false"):
+        raise RuntimeError("align_folded must be true or false")
+    align_folded = align_folded == "true"
+    allow_enable_transient = LaunchConfiguration("allow_enable_transient", default="false").perform(context).lower()
+    if allow_enable_transient not in ("true", "false"):
+        raise RuntimeError("allow_enable_transient must be true or false")
+    allow_enable_transient = allow_enable_transient == "true"
+    if allow_enable_transient and (motor_protocol != "meow" or not activate_hardware):
+        raise RuntimeError("enable transient allowance requires explicit Meow activation")
+    if align_folded and (motor_protocol != "meow" or not activate_hardware):
+        raise RuntimeError("align_folded requires explicit Meow activation")
     controller_zenoh_args, bridge_zenoh_connect = _zenoh_routes(
         LaunchConfiguration("zenoh_connect").perform(context)
     )
@@ -204,6 +254,12 @@ def _real_nodes(context):
             cmd=[
                 FindExecutable(name="python3"), startup_script,
                 "--profile", str(profile_path), "--allow-motion", "--activate-controllers",
+                *(["--hold-current"] if motor_protocol == "cia402" else []),
+                *(["--cia402-sequence", startup_sequence] if startup_sequence else []),
+                *(["--moveit", "--return-to-start", "--deactivate-after"] if startup_trial else []),
+                *(["--allow-enable-transient"] if allow_enable_transient else []),
+                *(["--align-folded"] if align_folded else []),
+                *(["--moveit-ready-token", readiness_token] if readiness_token else []),
                 "--output", report,
             ],
             output="screen",
@@ -253,7 +309,7 @@ def _real_nodes(context):
             )),
             RegisterEventHandler(OnProcessExit(
                 target_action=startup,
-                on_exit=_shutdown_after_failure("controller startup"),
+                on_exit=_after_startup(report, profile_path, readiness_token),
             )),
             RegisterEventHandler(OnProcessExit(
                 target_action=control,
@@ -289,6 +345,16 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument("hardware_profile", default_value=""),
         DeclareLaunchArgument("zenoh_connect", default_value=""),
+        DeclareLaunchArgument("startup_sequence", default_value="",
+                              description="Optional qualified CiA402 recipe; requires strict MoveIt services"),
+        DeclareLaunchArgument("startup_trial", default_value="false", choices=["true", "false"],
+                              description="Validate CiA402 startup and MoveIt, return to entry, then disable"),
+        DeclareLaunchArgument("moveit_ready_token", default_value="",
+                              description="Internal per-launch handoff to the gated MoveIt runtime"),
+        DeclareLaunchArgument("allow_enable_transient", default_value="false", choices=["true", "false"],
+                              description="Explicit Meow enable/ramp allowance: 0.15 rad/s for 0.25 s, then 0.05; settle before trajectories"),
+        DeclareLaunchArgument("align_folded", default_value="false", choices=["true", "false"],
+                              description="Explicit bounded Meow base/wrist alignment before unfolding"),
         DeclareLaunchArgument(
             "bridge_startup_timeout_sec",
             default_value=str(DEFAULT_BRIDGE_STARTUP_TIMEOUT_SEC),
@@ -308,7 +374,10 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "startup_ready", default_value="true", choices=["true", "false"],
-            description="Mandatory for real activation: align J6 if needed, then J2 -> J4 -> J3.",
+            description=(
+                "Mandatory for real activation: Meow runs the verified J2 -> J4 -> J3 "
+                "sequence; CiA402 verifies and holds the measured pose."
+            ),
         ),
         DeclareLaunchArgument("use_rviz", default_value="true", choices=["true", "false"]),
         OpaqueFunction(function=_real_nodes),

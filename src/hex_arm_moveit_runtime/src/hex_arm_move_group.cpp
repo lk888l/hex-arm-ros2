@@ -60,6 +60,7 @@
 #include <moveit/trajectory_execution_manager/trajectory_execution_manager.hpp>
 #include <moveit/utils/logger.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_listener.h>
 
 namespace move_group
@@ -99,11 +100,38 @@ public:
     moveit_cpp->getNode()->get_parameter_or("allow_trajectory_execution", allow_trajectory_execution, true);
     context_ =
         std::make_shared<MoveGroupContext>(moveit_cpp, default_planning_pipeline, allow_trajectory_execution, debug);
+    moveit_cpp->getNode()->get_parameter_or("startup_readiness_token", startup_readiness_token_, std::string{});
+    if (!startup_readiness_token_.empty() && !allow_trajectory_execution)
+    {
+      throw std::runtime_error("startup readiness gate requires trajectory execution to be configured");
+    }
     configureCapabilities();
+    if (!deferred_capabilities_.empty())
+    {
+      RCLCPP_INFO(getLogger(), "MoveIt execution locked: waiting for verified startup hold");
+      startup_ready_subscription_ = moveit_cpp->getNode()->create_subscription<std_msgs::msg::String>(
+          "/hex_arm/internal/moveit_startup_ready", rclcpp::QoS(1).reliable().transient_local(),
+          [this](const std_msgs::msg::String::SharedPtr message) {
+            if (message->data != startup_readiness_token_ || deferred_capabilities_.empty())
+            {
+              return;
+            }
+            for (const auto& name : deferred_capabilities_)
+            {
+              if (!loadCapability(name))
+              {
+                throw std::runtime_error("failed to unlock MoveIt execution capability: " + name);
+              }
+            }
+            deferred_capabilities_.clear();
+            RCLCPP_INFO(getLogger(), "MoveIt execution unlocked after verified startup hold");
+          });
+    }
   }
 
   ~MoveGroupExe()
   {
+    startup_ready_subscription_.reset();
     capabilities_.clear();
     context_.reset();
     capability_plugin_loader_.reset();
@@ -134,6 +162,24 @@ public:
   }
 
 private:
+  bool loadCapability(const std::string& name)
+  {
+    try
+    {
+      printf(MOVEIT_CONSOLE_COLOR_CYAN "Loading '%s'..." MOVEIT_CONSOLE_COLOR_RESET "\n", name.c_str());
+      MoveGroupCapabilityPtr cap = capability_plugin_loader_->createUniqueInstance(name);
+      cap->setContext(context_);
+      cap->initialize();
+      capabilities_.push_back(cap);
+      return true;
+    }
+    catch (pluginlib::PluginlibException& ex)
+    {
+      RCLCPP_ERROR_STREAM(getLogger(), "Exception while loading move_group capability '" << name << "': " << ex.what());
+      return false;
+    }
+  }
+
   void configureCapabilities()
   {
     try
@@ -184,19 +230,17 @@ private:
 
     for (const std::string& capability : capabilities)
     {
-      try
+      // Keep collision/scene/planning services available for startup validation,
+      // but expose neither MoveGroup plan-and-execute nor ExecuteTrajectory
+      // until the startup client acknowledges this launch's stationary hold.
+      if (!startup_readiness_token_.empty() &&
+          (capability == "move_group/MoveGroupMoveAction" ||
+           capability == "move_group/MoveGroupExecuteTrajectoryAction"))
       {
-        printf(MOVEIT_CONSOLE_COLOR_CYAN "Loading '%s'..." MOVEIT_CONSOLE_COLOR_RESET "\n", capability.c_str());
-        MoveGroupCapabilityPtr cap = capability_plugin_loader_->createUniqueInstance(capability);
-        cap->setContext(context_);
-        cap->initialize();
-        capabilities_.push_back(cap);
+        deferred_capabilities_.push_back(capability);
+        continue;
       }
-      catch (pluginlib::PluginlibException& ex)
-      {
-        RCLCPP_ERROR_STREAM(getLogger(),
-                            "Exception while loading move_group capability '" << capability << "': " << ex.what());
-      }
+      loadCapability(capability);
     }
 
     std::stringstream ss;
@@ -213,6 +257,9 @@ private:
   MoveGroupContextPtr context_;
   std::shared_ptr<pluginlib::ClassLoader<MoveGroupCapability>> capability_plugin_loader_;
   std::vector<MoveGroupCapabilityPtr> capabilities_;
+  std::string startup_readiness_token_;
+  std::vector<std::string> deferred_capabilities_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr startup_ready_subscription_;
 };
 }  // namespace move_group
 

@@ -16,13 +16,14 @@ use hex_arm_controller::commissioning::{
     run_joint3_gravity_unload_diagnostic, run_joint4_assisted_position_diagnostic,
     run_joint4_censored_torque_diagnostic, run_joint4_first_position_diagnostic,
     run_joint5_first_position_diagnostic, run_joint6_first_position_diagnostic,
-    run_single_axis_commissioning, run_single_axis_diagnostic, CommissioningRequest,
-    Joint1CensoredTorqueDiagnosticRequest, Joint1FirstPositionDiagnosticRequest,
-    Joint1NegativeCensoredTorqueDiagnosticRequest, Joint3AssistedPositionDiagnosticRequest,
-    Joint3GravityUnloadDiagnosticRequest, Joint4AssistedPositionDiagnosticRequest,
-    Joint4CensoredTorqueDiagnosticRequest, Joint4FirstPositionDiagnosticRequest,
-    Joint5FirstPositionDiagnosticRequest, Joint6FirstPositionDiagnosticRequest,
-    SingleAxisDiagnosticMode, SingleAxisDiagnosticRequest,
+    run_single_axis_commissioning, run_single_axis_diagnostic, run_supported_commissioning,
+    CommissioningRequest, Joint1CensoredTorqueDiagnosticRequest,
+    Joint1FirstPositionDiagnosticRequest, Joint1NegativeCensoredTorqueDiagnosticRequest,
+    Joint3AssistedPositionDiagnosticRequest, Joint3GravityUnloadDiagnosticRequest,
+    Joint4AssistedPositionDiagnosticRequest, Joint4CensoredTorqueDiagnosticRequest,
+    Joint4FirstPositionDiagnosticRequest, Joint5FirstPositionDiagnosticRequest,
+    Joint6FirstPositionDiagnosticRequest, SingleAxisDiagnosticMode, SingleAxisDiagnosticRequest,
+    SupportedRequest,
 };
 use hex_arm_controller::discovery::{discover_read_only, DiscoveryOptions};
 use hex_arm_controller::meow_backend::MeowBackend;
@@ -103,6 +104,24 @@ struct Arguments {
     /// physical motor and causes a small motion.
     #[arg(long, default_value_t = false, requires = "commission_axis")]
     allow_motion: bool,
+    /// Permit staged single-axis travel up to 0.25 rad after smaller tests pass.
+    /// Uses 0.02 rad tracking, 0.005 rad endpoint/passive-drift guards; does not
+    /// certify collision clearance or mark a profile calibrated.
+    /// The selected joint may be tuned up to Kp=200 Nm/rad and Kd=20 Nm*s/rad;
+    /// other joints and all ordinary/legacy diagnostics keep the original caps.
+    #[arg(long, requires_all = ["commission_axis", "allow_motion"])]
+    allow_expanded_motion: bool,
+    /// Explicitly enable these additional joints to hold their starting pose.
+    /// Requires gravity slew <=1 Nm/s; delta=0 performs a bounded hold-only test.
+    #[arg(long, num_args=1.., value_delimiter=',', requires="allow_expanded_motion")]
+    support_axes: Vec<String>,
+    /// Prepare named supports as joint_N:delta_rad, one at a time over 20 s.
+    /// At most two; return in reverse after a successful selected-axis trial.
+    #[arg(long, num_args=1.., requires="support_axes")]
+    prepare_supports: Vec<String>,
+    /// Explicit supported-test temperature rise authority, 2 to 10 C; default 2 C.
+    #[arg(long, requires = "support_axes")]
+    max_temperature_rise_c: Option<f32>,
     /// Run an explicitly selected bounded single-axis diagnostic. The fixed
     /// J1 first-position mode and the J2 modes never start ROS or Zenoh.
     #[arg(
@@ -581,7 +600,7 @@ async fn run_meow_startup_sequence(
     let operation = tokio::select! {
         biased;
         signal = termination_signals.received() => {
-            Err(anyhow::anyhow!("startup sequence interrupted: {:?}", signal))
+            Err(anyhow::anyhow!("startup sequence interrupted: {signal:?}"))
         },
         result = async {
             backend.initialize_disabled().await?;
@@ -913,18 +932,48 @@ async fn run_hardware_commissioning(
     let selected_index = parse_commission_axis(axis_name)?;
     let request = CommissioningRequest {
         selected_index,
+        expanded_motion: arguments.allow_expanded_motion,
         delta_rad: arguments.delta_rad.context("--delta-rad is required")?,
         duration_sec: arguments
             .duration_sec
             .context("--duration-sec is required")?,
     };
-    request.validate(&profile)?;
+    let supported = if arguments.support_axes.is_empty() {
+        request.validate(&profile)?;
+        None
+    } else {
+        let support = SupportedRequest {
+            motion: request,
+            max_temperature_rise_c: arguments.max_temperature_rise_c.unwrap_or(2.0),
+            supports: arguments
+                .support_axes
+                .iter()
+                .map(|name| parse_commission_axis(name))
+                .collect::<Result<Vec<_>>>()?,
+            preparation: arguments
+                .prepare_supports
+                .iter()
+                .map(|value| {
+                    let (name, delta) = value
+                        .split_once(':')
+                        .context("preparation syntax: joint_N:delta_rad")?;
+                    Ok((
+                        parse_commission_axis(name)?,
+                        delta.parse::<f32>().context("invalid preparation delta")?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
+        support.validate(&profile)?;
+        Some(support)
+    };
 
     tracing::warn!(
         joint = axis_name,
         node_id = profile.joints[selected_index].node_id,
         calibrated = profile.calibrated,
-        "entering isolated single-axis commissioning; no ROS or Zenoh session will be opened"
+        support_axes = ?arguments.support_axes,
+        "entering explicitly selected commissioning; no ROS or Zenoh session will be opened"
     );
     let backend = RealBackend::open(profile.clone())
         .await
@@ -947,7 +996,11 @@ async fn run_hardware_commissioning(
             .initialize_disabled()
             .await
             .context("verify identities and initialize all six drives disabled")?;
-        run_single_axis_commissioning(&backend, &profile, &dynamics, request).await
+        if let Some(supported) = supported {
+            run_supported_commissioning(&backend, &profile, &dynamics, supported).await
+        } else {
+            run_single_axis_commissioning(&backend, &profile, &dynamics, request).await
+        }
     };
     run_guarded_commissioning_operation(
         axis_name,

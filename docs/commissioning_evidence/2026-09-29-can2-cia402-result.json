@@ -1,0 +1,719 @@
+{
+  "date": "2026-09-29",
+  "interface": "can2",
+  "protocol": "cia402",
+  "firmware_revision": 9,
+  "payload": null,
+  "git_head": "86c197f07c0d14a49b0020d2978be9000a540c4e",
+  "workspace_dirty_before_and_after": true,
+  "controller_binary_sha256": "159eca26a493387aa36deca81441f2f384cfc8b8eeb1891d5ffa0c4475f027d3",
+  "commission_binary_sha256": "0e82e6132f2c6d3f609460308230940ae23c2dd63b644500b44197deaf87a867",
+  "full_deployment_accepted": false,
+  "calibrated": false,
+  "trials": [
+    {
+      "trace": "j1-pos15-characterization.log",
+      "sha256": "1919216c4f397fb77b5f1218e5b7a0045d3e8191e9562d01489e1e249492c3e7",
+      "joint": "joint_1",
+      "requested_delta_rad": 0.014999999664723873,
+      "duration_sec": 8.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "errors": [
+        "joint_1 did not settle at its starting pose within 3.000 s: position -0.050638 rad, start -0.060013 rad, error 0.009375 rad (limit 0.003750 rad), velocity -0.000000 rad/s (limit 0.020000 rad/s); both limits must hold continuously for 0.250 s"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": -0.04501282423734665,
+        "measured_q": -0.05309375375509262,
+        "measured_delta": 0.006919015198945999,
+        "measured_velocity": 0.0016852100379765034,
+        "measured_torque": 0.5203059315681458,
+        "gravity_ff": -0.0,
+        "kp": 60.0,
+        "kd": 2.5
+      }
+    },
+    {
+      "trace": "joint_1-5mrad.log",
+      "sha256": "3f109dd0ac750ae7ee1d4b9240c2f9ea0d72dc90dee6fef45d81fb7d9b0f33ef",
+      "joint": "joint_1",
+      "requested_delta_rad": 0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.boundary-survey.local.yaml",
+      "profile_sha256": "9aaa49b368d6a109ec45f5a91b3b74ecf71213b0671ff60f3c560e5059d8dd30",
+      "errors": [
+        "measured signed peak excursion 0.000103 rad did not reach 0.002500 rad in the requested direction; max positive excursion 0.000103 rad, max negative excursion 0.000000 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": -0.05693482607603073,
+        "measured_q": -0.06183886528015137,
+        "measured_delta": 9.587407112121582e-05,
+        "measured_velocity": -0.0,
+        "measured_torque": 0.2601529657840729,
+        "gravity_ff": -0.0,
+        "kp": 60.0,
+        "kd": 2.5
+      }
+    },
+    {
+      "trace": "joint_2-5mrad.log",
+      "sha256": "96a3d7a522e438a86027d31a773925706fcbb45cd50eefc3d1e9f093e6d7d9f2",
+      "joint": "joint_2",
+      "requested_delta_rad": 0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.boundary-survey.local.yaml",
+      "profile_sha256": "9aaa49b368d6a109ec45f5a91b3b74ecf71213b0671ff60f3c560e5059d8dd30",
+      "errors": [
+        "joint_2 did not settle at its starting pose within 3.000 s: position -1.568605 rad, start -1.570156 rad, error 0.001550 rad (limit 0.001250 rad), velocity 0.000000 rad/s (limit 0.020000 rad/s); both limits must hold continuously for 0.250 s"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": -1.5651556253433228,
+        "measured_q": -1.568550705909729,
+        "measured_delta": 0.0016047954559326172,
+        "measured_velocity": 2.5651705694469673e-13,
+        "measured_torque": 0.8919529914855957,
+        "gravity_ff": 0.5945560932159424,
+        "kp": 80.0,
+        "kd": 2.5
+      }
+    },
+    {
+      "trace": "joint_3-5mrad.log",
+      "sha256": "3ca225b58ff656104ed0db05fee4da181dc8a197512a2baecc5994f15aa521d4",
+      "joint": "joint_3",
+      "requested_delta_rad": -0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.boundary-survey.local.yaml",
+      "profile_sha256": "9aaa49b368d6a109ec45f5a91b3b74ecf71213b0671ff60f3c560e5059d8dd30",
+      "errors": [
+        "measured signed peak excursion 0.000000 rad did not reach 0.002500 rad in the requested direction; max positive excursion 0.000000 rad, max negative excursion 0.000000 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": 1.5641897916793823,
+        "measured_q": 1.5691897869110107,
+        "measured_delta": 0.0,
+        "measured_velocity": 0.0,
+        "measured_torque": -0.0743294209241867,
+        "gravity_ff": -0.0,
+        "kp": 2.0,
+        "kd": 0.30000001192092896
+      }
+    },
+    {
+      "trace": "j4-neg15-characterization.log",
+      "sha256": "0fdb588ee38b2c12639d359d783ce86416c4785b09b61410253f35b185da3410",
+      "joint": "joint_4",
+      "requested_delta_rad": -0.014999999664723873,
+      "duration_sec": 8.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "errors": [
+        "measured signed peak excursion -0.003662 rad did not reach 0.007500 rad in the requested direction; max positive excursion 0.000000 rad, max negative excursion -0.003662 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": -0.014079215936362743,
+        "measured_q": -0.0026938272640109062,
+        "measured_delta": -0.0036145548801869154,
+        "measured_velocity": -2.564609223772163e-13,
+        "measured_torque": -0.45021605491638184,
+        "gravity_ff": -0.0,
+        "kp": 40.0,
+        "kd": 2.0
+      }
+    },
+    {
+      "trace": "j4-negative-5mrad.log",
+      "sha256": "1a55c7b3330c1af7f6575b9ecf83b8105213686b6f9bbe4612c3b2bfbadf422a",
+      "joint": "joint_4",
+      "requested_delta_rad": -0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "errors": [
+        "measured signed peak excursion -0.000719 rad did not reach 0.002500 rad in the requested direction; max positive excursion 0.000000 rad, max negative excursion -0.000719 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": -0.00429978221654892,
+        "measured_q": 9.739233064465225e-06,
+        "measured_delta": -0.000690403685439378,
+        "measured_velocity": 0.0,
+        "measured_torque": -0.16450200974941254,
+        "gravity_ff": -0.0,
+        "kp": 40.0,
+        "kd": 2.0
+      }
+    },
+    {
+      "trace": "j5-neg15-slow.log",
+      "sha256": "c2afd53d49fe9c3b655470717ce3cde146b83a9d1fa908358ec4ce1d814673f4",
+      "joint": "joint_5",
+      "requested_delta_rad": -0.014999999664723873,
+      "duration_sec": 8.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.011945839039981365,
+      "return_error_rad": 0.0011313855648040771
+    },
+    {
+      "trace": "j5-neg30-slow.log",
+      "sha256": "8e6100dfa86005f0ab57c3d1de83cf8b66f2fc08ee30fec25fd592d3d063ae0a",
+      "joint": "joint_5",
+      "requested_delta_rad": -0.029999999329447746,
+      "duration_sec": 12.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.02481202781200409,
+      "return_error_rad": 0.0033267447724938393
+    },
+    {
+      "trace": "j5-negative-5mrad.log",
+      "sha256": "f417ba98a1e128dd7f8f2a5769639d08b1a6f464429c4b1bc103952cd69a47c5",
+      "joint": "joint_5",
+      "requested_delta_rad": -0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.0034514572471380234,
+      "return_error_rad": 0.0007669907063245773
+    },
+    {
+      "trace": "j5-pos30-slow.log",
+      "sha256": "b5dc1092e8345b0884f432f2efd1fff6852096a90ef57b2dd4f38c6b98b51682",
+      "joint": "joint_5",
+      "requested_delta_rad": 0.029999999329447746,
+      "duration_sec": 12.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": 0.025866638869047165,
+      "return_error_rad": 0.0022721337154507637
+    },
+    {
+      "trace": "j5-pos5.log",
+      "sha256": "7f38b35cdf94b4b86d4562940d4683f59d07d8d568fb7c8336329def602c5a7c",
+      "joint": "joint_5",
+      "requested_delta_rad": 0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "errors": [
+        "measured signed peak excursion 0.002406 rad did not reach 0.002500 rad in the requested direction; max positive excursion 0.002406 rad, max negative excursion -0.000010 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": 0.016715887933969498,
+        "measured_q": 0.01408397313207388,
+        "measured_delta": 0.0023680077865719795,
+        "measured_velocity": 0.0008526722667738795,
+        "measured_torque": 0.11255401372909546,
+        "gravity_ff": -4.7118510337895714e-07,
+        "kp": 50.0,
+        "kd": 2.0
+      }
+    },
+    {
+      "trace": "j5-positive-15mrad-characterization.log",
+      "sha256": "ea1ce00ee7ec02354320039abbc30ff8bd80ecd4caceb8b9302d4fad187ba372",
+      "joint": "joint_5",
+      "requested_delta_rad": 0.014999999664723873,
+      "duration_sec": 8.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": 0.01025849673897028,
+      "return_error_rad": 0.0016777915880084038
+    },
+    {
+      "trace": "j5kp60-pos5.log",
+      "sha256": "09c293436c97326716ed43a722bd73c495f7ecc221be9a44504950a9bdb8542e",
+      "joint": "joint_5",
+      "requested_delta_rad": 0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": false,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.j5kp60.local.yaml",
+      "profile_sha256": "1d2d45e3d150852dd28555d41a850bda184adf3cce4c07361a9134a31f728caf",
+      "errors": [
+        "measured signed peak excursion 0.002397 rad did not reach 0.002500 rad in the requested direction; max positive excursion 0.002397 rad, max negative excursion 0.000000 rad"
+      ],
+      "at_commanded_peak": {
+        "commanded_q": 0.01749243400990963,
+        "measured_q": 0.014860513620078564,
+        "measured_delta": 0.002368008717894554,
+        "measured_velocity": 0.0,
+        "measured_torque": 0.1471860259771347,
+        "gravity_ff": -4.99847828905331e-07,
+        "kp": 60.0,
+        "kd": 2.0
+      }
+    },
+    {
+      "trace": "j6-neg15.log",
+      "sha256": "016d546ec9726fc7e5645aa540370ab87bd3bf985c9b10be999475063b32d89b",
+      "joint": "joint_6",
+      "requested_delta_rad": -0.014999999664723873,
+      "duration_sec": 6.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.014601707458496094,
+      "return_error_rad": 0.0006232261657714844
+    },
+    {
+      "trace": "j6-neg30.log",
+      "sha256": "ebf0fff28cdbbb363a304a2c142f1a59b438075e827dd723209e2c979385f3be",
+      "joint": "joint_6",
+      "requested_delta_rad": -0.029999999329447746,
+      "duration_sec": 10.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.02806258201599121,
+      "return_error_rad": 0.0008149147033691406
+    },
+    {
+      "trace": "j6-negative-5mrad.log",
+      "sha256": "d8c921d8f5ad2093c3a23c0c37ae0211174c209c441df9b2bc3f7e939fac8021",
+      "joint": "joint_6",
+      "requested_delta_rad": -0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": -0.00254058837890625,
+      "return_error_rad": 0.0004603862762451172
+    },
+    {
+      "trace": "j6-pos15.log",
+      "sha256": "8833ad6c89345c914025f4372f93e4b7f4bcc715d23f4142e0a9f667d9fc3e86",
+      "joint": "joint_6",
+      "requested_delta_rad": 0.014999999664723873,
+      "duration_sec": 6.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": 0.0140838623046875,
+      "return_error_rad": 0.0008819103240966797
+    },
+    {
+      "trace": "j6-pos30.log",
+      "sha256": "dee5cb6643797886b32110e204bb963412bfd53226d6b2c2c1478621efb711e5",
+      "joint": "joint_6",
+      "requested_delta_rad": 0.029999999329447746,
+      "duration_sec": 10.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": 0.027880191802978516,
+      "return_error_rad": 0.0009396076202392578
+    },
+    {
+      "trace": "j6-pos5.log",
+      "sha256": "f1bd045a9540c971a5d18385ef41f8595babb3383e63a7c9dbd116fe9c1b11d3",
+      "joint": "joint_6",
+      "requested_delta_rad": 0.004999999888241291,
+      "duration_sec": 4.0,
+      "passed": true,
+      "disabled_confirmations": 6,
+      "profile": "firefly_y6.cia402.can2.survey.local.yaml",
+      "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f",
+      "measured_peak_delta_rad": 0.0030875205993652344,
+      "return_error_rad": 0.0006520748138427734
+    }
+  ],
+  "real_observation": {
+    "passed": true,
+    "execution_enabled": false,
+    "controller_manager_present": false,
+    "observed_samples": 501,
+    "driver_messages": 501,
+    "all_motors_online": true,
+    "calibrated": false,
+    "plan_only_scene_valid": true,
+    "contacts": [],
+    "plan_error_code": 1,
+    "plan_points": 21,
+    "plan_only_passed": true,
+    "launch_exit_code": 0
+  },
+  "shutdown": {
+    "error": null,
+    "pid": 7538,
+    "schema_version": 1,
+    "state": "disabled_confirmed",
+    "unix_time_ms": 1790651182719
+  },
+  "final_read_only": {
+    "time": "2026-09-29T03:06:43.252523+00:00",
+    "interface": "can2",
+    "nodes": [
+      {
+        "node": 1,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267842,
+          "revision": 9,
+          "serial_number": 621871117
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 31.590002059936523,
+        "mit_factor": 0.1810384839773178,
+        "driver_temp_x10": 339,
+        "motor_temp_x10": 313,
+        "samples_rev": [
+          0.00380706787109375,
+          0.00380706787109375,
+          0.00380706787109375,
+          0.00380706787109375,
+          0.00380706787109375,
+          0.00380706787109375,
+          0.00380706787109375
+        ],
+        "position_rev": 0.00380706787109375,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": -0.049571512911091714
+      },
+      {
+        "node": 2,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267842,
+          "revision": 9,
+          "serial_number": 622266383
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 31.590002059936523,
+        "mit_factor": 0.1810384839773178,
+        "driver_temp_x10": 335,
+        "motor_temp_x10": 311,
+        "samples_rev": [
+          0.25133806467056274,
+          0.25133806467056274,
+          0.25133806467056274,
+          0.25133806467056274,
+          0.25133806467056274,
+          0.25133806467056274,
+          0.25133806467056274
+        ],
+        "position_rev": 0.25133806467056274,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": -1.5689865850730325
+      },
+      {
+        "node": 3,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267842,
+          "revision": 9,
+          "serial_number": 610481161
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 31.590002059936523,
+        "mit_factor": 0.1810384839773178,
+        "driver_temp_x10": 341,
+        "motor_temp_x10": 303,
+        "samples_rev": [
+          0.2536461353302002,
+          0.2536461353302002,
+          0.2536461353302002,
+          0.2536461353302002,
+          0.2536461353302002,
+          0.2536461353302002,
+          0.2536461353302002
+        ],
+        "position_rev": 0.2536461353302002,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": 1.569189670729599
+      },
+      {
+        "node": 4,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267841,
+          "revision": 9,
+          "serial_number": 644751887
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 8.658000946044922,
+        "mit_factor": 0.011813798919320107,
+        "driver_temp_x10": 355,
+        "motor_temp_x10": 327,
+        "samples_rev": [
+          -1.52587890625e-05,
+          -1.52587890625e-05,
+          -1.52587890625e-05,
+          -1.52587890625e-05,
+          -1.52587890625e-05,
+          -1.52587890625e-05,
+          -1.52587890625e-05
+        ],
+        "position_rev": -1.52587890625e-05,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": 4.812620075714743e-05
+      },
+      {
+        "node": 5,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267841,
+          "revision": 9,
+          "serial_number": 656806155
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 8.658000946044922,
+        "mit_factor": 0.011813798919320107,
+        "driver_temp_x10": 361,
+        "motor_temp_x10": 326,
+        "samples_rev": [
+          -0.0021270811557769775,
+          -0.0021270811557769775,
+          -0.0021270811557769775,
+          -0.0021270811557769775,
+          -0.0021270811557769775,
+          -0.0021270811557769775,
+          -0.0021270811557769775
+        ],
+        "position_rev": -0.0021270811557769775,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": 0.013614154934843522
+      },
+      {
+        "node": 6,
+        "identity": {
+          "vendor_id": 1213809740,
+          "product_code": 2863267841,
+          "revision": 9,
+          "serial_number": 623776780
+        },
+        "status_word": 561,
+        "mode": 0,
+        "error_code": 0,
+        "heartbeat_consumer": 0,
+        "peak_torque_nm": 8.658000946044922,
+        "mit_factor": 0.011813798919320107,
+        "driver_temp_x10": 364,
+        "motor_temp_x10": 336,
+        "samples_rev": [
+          0.31681060791015625,
+          0.31681060791015625,
+          0.31681060791015625,
+          0.31681060791015625,
+          0.31681060791015625,
+          0.31681060791015625,
+          0.31681060791015625
+        ],
+        "position_rev": 0.31681060791015625,
+        "span_rad": 0.0,
+        "final_status_word": 561,
+        "disabled": true,
+        "q_coordinate_v2_rad": 2.1120427567797266
+      }
+    ],
+    "errors": [],
+    "passed": true,
+    "profile": "config/hardware/firefly_y6.cia402.can2.survey.local.yaml",
+    "profile_sha256": "32d65e875303318a5bfc60114f29572a82d1fbf2d8a128b518958f4d3bf5e18f"
+  },
+  "final_can_link": [
+    {
+      "ifindex": 11,
+      "ifname": "can2",
+      "flags": [
+        "NOARP",
+        "UP",
+        "LOWER_UP",
+        "ECHO"
+      ],
+      "mtu": 72,
+      "qdisc": "pfifo_fast",
+      "operstate": "UP",
+      "linkmode": "DEFAULT",
+      "group": "default",
+      "txqlen": 10,
+      "link_type": "can",
+      "promiscuity": 0,
+      "allmulti": 0,
+      "min_mtu": 72,
+      "max_mtu": 72,
+      "linkinfo": {
+        "info_kind": "can",
+        "info_data": {
+          "ctrlmode": [
+            "FD"
+          ],
+          "ctrlmode_supported": [
+            "LOOPBACK",
+            "LISTEN-ONLY",
+            "BERR-REPORTING",
+            "FD",
+            "CC-LEN8-DLC"
+          ],
+          "state": "ERROR-ACTIVE",
+          "berr_counter": {
+            "tx": 0,
+            "rx": 0
+          },
+          "restart_ms": 0,
+          "bittiming": {
+            "bitrate": 1000000,
+            "sample_point": "0.800",
+            "tq": 12,
+            "prop_seg": 31,
+            "phase_seg1": 32,
+            "phase_seg2": 16,
+            "sjw": 5,
+            "brp": 1
+          },
+          "bittiming_const": {
+            "name": "gs_usb",
+            "tseg1": {
+              "min": 2,
+              "max": 256
+            },
+            "tseg2": {
+              "min": 1,
+              "max": 128
+            },
+            "sjw": {
+              "min": 1,
+              "max": 128
+            },
+            "brp": {
+              "min": 1,
+              "max": 512
+            },
+            "brp_inc": 1
+          },
+          "data_bittiming": {
+            "bitrate": 4000000,
+            "sample_point": "0.800",
+            "tq": 12,
+            "prop_seg": 7,
+            "phase_seg1": 8,
+            "phase_seg2": 4,
+            "sjw": 3,
+            "brp": 1
+          },
+          "data_bittiming_const": {
+            "name": "gs_usb",
+            "tseg1": {
+              "min": 1,
+              "max": 32
+            },
+            "tseg2": {
+              "min": 1,
+              "max": 16
+            },
+            "sjw": {
+              "min": 1,
+              "max": 16
+            },
+            "brp": {
+              "min": 1,
+              "max": 32
+            },
+            "brp_inc": 1
+          },
+          "clock": 80000000
+        },
+        "info_xstats": {
+          "restarts": 0,
+          "bus_error": 0,
+          "arbitration_lost": 0,
+          "error_warning": 0,
+          "error_passive": 0,
+          "bus_off": 0
+        }
+      },
+      "num_tx_queues": 1,
+      "num_rx_queues": 1,
+      "gso_max_size": 65536,
+      "gso_max_segs": 65535,
+      "tso_max_size": 65536,
+      "tso_max_segs": 65535,
+      "gro_max_size": 65536,
+      "parentbus": "usb",
+      "parentdev": "3-2.1:1.0",
+      "stats64": {
+        "rx": {
+          "bytes": 88388809,
+          "packets": 6962593,
+          "errors": 0,
+          "dropped": 0,
+          "over_errors": 0,
+          "multicast": 0
+        },
+        "tx": {
+          "bytes": 7022809,
+          "packets": 163762,
+          "errors": 0,
+          "dropped": 0,
+          "carrier_errors": 0,
+          "collisions": 0
+        }
+      }
+    }
+  ],
+  "software_validation": {
+    "rust": "286 passed, 1 ignored",
+    "ros_colcon": "Summary: 176 tests, 0 errors, 0 failures, 0 skipped",
+    "reader": "4 passed",
+    "device_binding": "3 passed",
+    "mock_protocol_watchdog": "passed",
+    "mock_trajectory": "passed",
+    "headless_gpu_compose": "passed",
+    "supervised_launch": "passed",
+    "rust_format": "passed"
+  }
+}

@@ -137,6 +137,12 @@ std::vector<hardware_interface::CommandInterface> HexArmSystem::export_command_i
 hardware_interface::CallbackReturn HexArmSystem::on_configure(
   const rclcpp_lifecycle::State &)
 {
+  // Error recovery may return to UNCONFIGURED without on_cleanup. Join the
+  // previous executor before replacing any ROS entity it can still access.
+  if (active_.load()) {
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  stop_io_thread();
   static std::atomic_uint instance{0U};
   const auto name = "hex_arm_system_io_" + std::to_string(instance.fetch_add(1U));
   io_node_ = std::make_shared<rclcpp::Node>(name);
@@ -225,6 +231,7 @@ hardware_interface::CallbackReturn HexArmSystem::on_error(
 {
   active_.store(false);
   (void)call_safety_service(deactivate_client_, "error stop", false);
+  stop_io_thread();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
