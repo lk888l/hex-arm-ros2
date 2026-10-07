@@ -37,7 +37,7 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 
 ### NVIDIA GPU 检查与回退
 
-NVIDIA 主机需先按 [README](../README_cn.md#nvidia-独立显卡加速) 安装 Container
+NVIDIA 主机需先按 [Docker 开发环境](docker_development_cn.md#nvidia-独立显卡加速) 安装 Container
 Toolkit。完成后，本地 Ubuntu 脚本会自动叠加 `compose.nvidia.yaml`：
 
 ```bash

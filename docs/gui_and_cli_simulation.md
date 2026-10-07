@@ -42,7 +42,7 @@ Gazebo will be slower.
 ### NVIDIA GPU checks and fallback
 
 On an NVIDIA host, first install Container Toolkit as described in the
-[README](../README.md#nvidia-discrete-gpu-acceleration). The native Ubuntu
+[Docker development guide](docker_development.md#nvidia-discrete-gpu-acceleration). The native Ubuntu
 helper then adds `compose.nvidia.yaml` automatically:
 
 ```bash
