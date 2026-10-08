@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 import copy
+import json
 import yaml
 
 from launch import LaunchContext
@@ -34,7 +35,10 @@ class _FakeMoveItConfig:
     robot_description_semantic = {"robot_description_semantic": "test"}
     robot_description_kinematics = {"robot_description_kinematics": {}}
     planning_pipelines = {"planning_pipelines": ["ompl"]}
-    joint_limits = {"robot_description_planning": {}}
+    joint_limits = {"robot_description_planning": {"joint_limits": {
+        f"joint_{index}": {"max_velocity": 1.2566370614359172, "max_acceleration": .6}
+        for index in range(1, 7)
+    }}}
 
     @staticmethod
     def to_dict():
@@ -310,6 +314,11 @@ def test_executing_launch_delays_rviz_until_its_verified_startup_event(monkeypat
     assert not any(isinstance(action, Node) and action.node_package == "rviz2" for action in actions)
     includes = [action for action in actions if isinstance(action, IncludeLaunchDescription)]
     assert dict(includes[0].launch_arguments)["moveit_ready_token"] == token
+    inherited_rates = json.loads(dict(includes[0].launch_arguments)["startup_motion_limits"])
+    assert inherited_rates == {
+        f"joint_{index}": {"velocity_rad_s": 1.2566370614359172, "acceleration_rad_s2": .6}
+        for index in range(1, 7)
+    }
     handlers = [action.event_handler for action in actions if isinstance(action, RegisterEventHandler)]
     event = module.StartupVerified("/tmp/validated.local.yaml", token)
     handler = next(handler for handler in handlers if handler.matches(event))

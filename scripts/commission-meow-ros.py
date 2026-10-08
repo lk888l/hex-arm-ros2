@@ -27,25 +27,38 @@ def return_steps(profile, prior, digest):
     if (profile.get('bus', {}).get('protocol') != 'meow'
             or not profile.get('validated') or not profile.get('calibrated')
             or prior.get('passed') is not True or prior.get('deactivated')
-            or 'ready_hold' not in prior or prior.get('profile_sha256') != digest):
+            or 'ready_hold' not in prior or prior.get('profile_sha256') != digest
+            or not isinstance(prior.get('motion_limits'), dict)):
         raise RuntimeError('requires this active launch\'s successful, exact-profile Meow startup')
     records = prior.get('steps', [])
     if not records:
         raise RuntimeError('startup evidence contains no steps')
     expected = startup.startup_steps(
         profile, records[0]['initial'], [0.] * 6,
-        align_folded=records[0]['step'] == 'align_folded')
+        align_folded=records[0]['step'] == 'align_folded',
+        motion_limits=prior.get('motion_limits'))
     if len(records) != len(expected):
         raise RuntimeError('startup evidence does not match the standard sequence')
-    for record, (label, target, duration) in zip(records, expected):
+    for index, (record, (label, target, duration)) in enumerate(zip(records, expected)):
         if (record.get('status') != 4 or record.get('error_code') != 0
                 or record.get('step') != label or record.get('duration_sec') != duration
                 or record.get('target') != target):
             raise RuntimeError('startup evidence does not match the standard sequence')
+        reference = (records[index-1]['target'] if index else
+                     startup.folded_entry_command(profile, record['initial']))
+        if record.get('command_reference', reference) != reference:
+            raise RuntimeError('startup evidence contains a changed command reference')
     forward = records[-3:]
+    rates = startup.resolve_motion_limits(profile, prior.get('motion_limits'))
+    folded = forward[0].get('command_reference')
+    if folded is None:
+        folded = startup.folded_entry_command(profile, forward[0]['initial'])
     return [(f"return_{forward[i]['step']}",
-             forward[i-1]['target'] if i else forward[0]['initial'],
-             2 * forward[i]['duration_sec']) for i in (2, 1, 0)]
+             forward[i-1]['target'] if i else folded,
+             startup.rest_to_rest_duration(
+                 forward[i]['target'],
+                 forward[i-1]['target'] if i else folded, rates))
+            for i in (2, 1, 0)]
 
 
 def warm_connections(node, check_live=True):
@@ -170,7 +183,7 @@ def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, ac
         errors, velocity = node.spin_hold(startup.READY, 10., len(node.samples))
         report['ready_hold'] = {'max_error_rad': errors, 'max_velocity_rad_s': velocity}
     for label, target, duration in reverse:
-        node.direct_step(target, duration, label)
+        node.direct_step(target, duration, label, retime=True)
         node.is_valid(node.q(), startup.FOLDED_CONTACTS)
     node.wait_stationary(reverse[-1][1])
     report['folded_q'] = node.q()
@@ -203,9 +216,11 @@ def main():
     reverse = return_steps(profile, prior, digest)
     goals = campaign_goals(json.loads(args.campaign.read_text()), profile, digest) if args.campaign else None
     rclpy.init()
-    node = shutdown.StopProbe(profile, record_commands=args.record_commands)
+    node = shutdown.StopProbe(profile, record_commands=args.record_commands,
+                              motion_limits=prior.get('motion_limits'))
     report = {'passed': False, 'profile_sha256': digest,
               'startup_report': str(args.startup_report), 'moveit': [],
+              'motion_limits': node.motion_limits,
               'velocity_scaling': args.velocity_scaling, 'acceleration_scaling': args.acceleration_scaling,
               'hold_position_tolerance_rad': startup.HOLD_POSITION_TOLERANCE_RAD,
               'hold_velocity_peak_rad_s': startup.HOLD_VELOCITY_PEAK_RAD_S}

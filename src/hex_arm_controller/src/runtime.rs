@@ -15,7 +15,7 @@ use crate::conversion::{
     RosTarget,
 };
 use crate::interpolation::Interpolator;
-use crate::profile::{validate_gravity_vector, HardwareProfile};
+use crate::profile::{validate_gravity_vector, HardwareProfile, MotorProtocol};
 use crate::protocol::pb;
 use crate::safety::{OperatingMode, SafetyState};
 
@@ -143,6 +143,26 @@ impl GravityStartupRamp {
 }
 
 #[derive(Debug)]
+struct MeowEntryHold {
+    measured: Vec<f32>,
+    bounded: Vec<f32>,
+}
+
+impl MeowEntryHold {
+    fn matches(&self, targets: &[RosTarget], allow_measured_echo: bool) -> bool {
+        targets.len() == self.bounded.len()
+            && targets.iter().enumerate().all(|(index, target)| {
+                target.velocity_rad_s.abs() <= 1.0e-6
+                    && ((target.position_rad - self.bounded[index]).abs()
+                        <= MEASURED_POSITION_EPSILON_RAD
+                        || (allow_measured_echo
+                            && (target.position_rad - self.measured[index]).abs()
+                                <= MEASURED_POSITION_EPSILON_RAD))
+            })
+    }
+}
+
+#[derive(Debug)]
 struct RuntimeData {
     /// Process shutdown is a one-way latch.  It is set before waiting for any
     /// in-flight mode transition so queued API work cannot reach hardware
@@ -164,6 +184,9 @@ struct RuntimeData {
     initialized: bool,
     gravity: [f32; 3],
     gravity_startup_ramp: Option<GravityStartupRamp>,
+    /// ros2_control initially echoes the measured activation pose. Only that
+    /// stationary echo may map to the bounded Meow hold, until motion starts.
+    meow_entry_hold: Option<MeowEntryHold>,
     gravity_comp: Option<GravityCompLease>,
     events: VecDeque<pb::Event>,
     next_event_seq: u64,
@@ -206,6 +229,7 @@ impl ArmRuntime {
                 initialized: false,
                 gravity,
                 gravity_startup_ramp: None,
+                meow_entry_hold: None,
                 gravity_comp: None,
                 events: VecDeque::with_capacity(EVENT_CAPACITY),
                 next_event_seq: 1,
@@ -455,6 +479,18 @@ impl ArmRuntime {
             .transpose()?;
         let active_targets = (requested == OperatingMode::Active)
             .then(|| hold_targets.clone().expect("ACTIVE hold targets prepared"));
+        let meow_entry_hold = active_targets.as_ref().and_then(|targets| {
+            if self.profile.bus.protocol != MotorProtocol::Meow {
+                return None;
+            }
+            let measured = self.ros_joint_state(&feedback).0;
+            let bounded: Vec<_> = targets.iter().map(|target| target.position_rad).collect();
+            measured
+                .iter()
+                .zip(&bounded)
+                .any(|(raw, command)| (raw - command).abs() > MEASURED_POSITION_EPSILON_RAD)
+                .then_some(MeowEntryHold { measured, bounded })
+        });
 
         let hardware_result = match requested {
             OperatingMode::Disabled => self.backend.disable_all().await,
@@ -518,6 +554,7 @@ impl ArmRuntime {
                 false
             } else {
                 data.safety = next_safety;
+                data.meow_entry_hold = meow_entry_hold;
                 data.gravity_comp = damping.map(|damping| GravityCompLease {
                     damping,
                     renewed_at: Instant::now(),
@@ -615,7 +652,7 @@ impl ArmRuntime {
         };
         let automatic_gravity_feedforward = point.tau_ff.is_empty();
         let tau = vector_or(&point.tau_ff, 0.0)?;
-        let targets: Vec<_> = (0..DOF)
+        let mut targets: Vec<_> = (0..DOF)
             .map(|index| RosTarget {
                 position_rad: q[index],
                 velocity_rad_s: dq[index],
@@ -624,7 +661,6 @@ impl ArmRuntime {
                 kd_nm_s_rad: kd[index],
             })
             .collect();
-        self.validate_targets(&targets)?;
         anyhow::ensure!(
             command.t_from_start_ns[0] >= 0,
             "relative setpoint time must be non-negative"
@@ -638,10 +674,36 @@ impl ArmRuntime {
             "joint commands require ACTIVE mode"
         );
         anyhow::ensure!(!data.damped_stopping, "controller is shutting down");
+        let default_hold =
+            automatic_gravity_feedforward && point.kp.is_empty() && point.kd.is_empty();
+        if default_hold {
+            if let Some(hold) = &data.meow_entry_hold {
+                let outside = targets
+                    .iter()
+                    .zip(&self.profile.joints)
+                    .any(|(target, joint)| {
+                        !(joint.limits.position_lower_rad..=joint.limits.position_upper_rad)
+                            .contains(&target.position_rad)
+                    });
+                if outside && hold.matches(&targets, true) {
+                    for (target, bounded) in targets.iter_mut().zip(&hold.bounded) {
+                        target.position_rad = *bounded;
+                    }
+                }
+            }
+        }
+        self.validate_targets(&targets)?;
         if automatic_gravity_feedforward {
             if let Some(ramp) = &data.gravity_startup_ramp {
                 ramp.validate_hold_command(&targets)?;
             }
+        }
+        if data
+            .meow_entry_hold
+            .as_ref()
+            .is_some_and(|hold| !default_hold || !hold.matches(&targets, false))
+        {
+            data.meow_entry_hold = None;
         }
         let rebase_from_feedback = data
             .command
@@ -677,6 +739,7 @@ impl ArmRuntime {
         data.feedback = feedback;
         data.safety.clear_fault();
         data.command = None;
+        data.meow_entry_hold = None;
         data.gravity_comp = None;
         data.disable_pending = false;
         data.next_disable_retry_at = None;
@@ -983,6 +1046,7 @@ impl ArmRuntime {
         let mut data = self.data.write();
         data.safety.disable_preserving_fault();
         data.command = None;
+        data.meow_entry_hold = None;
         data.session = None;
         data.gravity = self.profile.gravity_vector_base_m_s2;
         data.initialized = false;
@@ -1328,7 +1392,7 @@ impl ArmRuntime {
             .zip(&self.profile.joints)
             .zip(damping)
             .map(|((state, joint), kd)| RosTarget {
-                position_rad: hand_guiding_position_target(
+                position_rad: bounded_feedback_position(
                     motor_position_to_ros(state.position_rev, joint),
                     joint,
                     self.profile.controller.hand_guiding_position_margin_rad,
@@ -1344,13 +1408,26 @@ impl ArmRuntime {
     }
 
     fn hold_targets(&self, feedback: &FeedbackSnapshot) -> Vec<RosTarget> {
+        let bounded_meow_entry = self.profile.bus.protocol == MotorProtocol::Meow
+            && feedback
+                .joints
+                .iter()
+                .zip(&self.profile.joints)
+                .all(|(state, joint)| {
+                    motor_velocity_to_ros(state.velocity_rev_s, joint).abs()
+                        <= crate::startup_recipe::RECIPE.stopped_velocity_rad_s
+                });
         let mut targets: Vec<_> = feedback
             .joints
             .iter()
             .zip(&self.profile.joints)
             .map(|(state, joint)| {
                 let measured = motor_position_to_ros(state.position_rev, joint);
-                let position_rad = canonical_feedback_position(measured, joint);
+                let position_rad = if bounded_meow_entry {
+                    bounded_feedback_position(measured, joint, None)
+                } else {
+                    canonical_feedback_position(measured, joint)
+                };
                 RosTarget {
                     position_rad,
                     velocity_rad_s: 0.0,
@@ -1773,7 +1850,7 @@ fn canonical_feedback_position(measured: f32, joint: &crate::profile::JointProfi
     }
 }
 
-fn hand_guiding_position_target(
+fn bounded_feedback_position(
     measured: f32,
     joint: &crate::profile::JointProfile,
     margin: Option<f32>,
@@ -1785,8 +1862,8 @@ fn hand_guiding_position_target(
         && measured >= lower - margin - MEASURED_POSITION_EPSILON_RAD
         && measured <= upper + margin + MEASURED_POSITION_EPSILON_RAD
     {
-        // Only the zero-Kp MIT position field is bounded. Gravity, damping and
-        // measured-state publication continue to use the actual feedback.
+        // Confine feedback-derived holds to command limits. Gravity and fault
+        // checks, and measured-state publication, retain the actual feedback.
         measured.clamp(lower, upper)
     } else {
         // Never hide feedback outside the accepted envelope or non-finite data.
@@ -3680,6 +3757,132 @@ mod tests {
         let hold = runtime.hold_targets(&feedback);
         assert!(hold[1].position_rad < joint.limits.position_lower_rad);
         assert!(runtime.validate_targets(&hold).is_err());
+    }
+
+    #[tokio::test]
+    async fn meow_boundary_entry_keeps_feedback_and_commands_bounded() {
+        let backend = Arc::new(DampingBackend::new(false));
+        let mut runtime = runtime_with_backend(backend.clone());
+        let profile = Arc::make_mut(&mut runtime.profile);
+        profile.bus.protocol = MotorProtocol::Meow;
+        profile.controller.gravity_startup_slew_rate_nm_s = Some(1.0);
+        profile.joints[1].limits.position_lower_rad = -1.57;
+        profile.joints[1].limits.position_upper_rad = 2.09;
+        profile.joints[2].limits.position_lower_rad = -1.57;
+        profile.joints[2].limits.position_upper_rad = 1.57;
+        for joint in &mut profile.joints {
+            joint.limits.measured_position_margin_rad = 0.01;
+        }
+        let q = [-0.048_891, -1.570_404, 1.579, 0.001_54, 0.011_08, 0.217_66];
+        *backend.state.write() = feedback_from_ros(&runtime, q, [0.0; DOF]);
+        runtime.initialize().await.unwrap();
+        let (session, _, _) = runtime.acquire("meow-fold-boundary".into()).unwrap();
+        runtime
+            .set_mode(session, OperatingMode::Active)
+            .await
+            .unwrap();
+        assert_eq!(backend.inner.enable_calls.load(Ordering::Acquire), 1);
+        let published = runtime.joint_state_proto().q;
+        assert!((published[1] - q[1]).abs() < 1.0e-6);
+        assert!((published[2] - q[2]).abs() < 1.0e-6);
+        let sent = backend.last.read().unwrap();
+        assert!(
+            (motor_position_to_ros(sent[1].position_rev, &runtime.profile.joints[1]) + 1.57).abs()
+                < 1.0e-6
+        );
+        assert!(
+            (motor_position_to_ros(sent[2].position_rev, &runtime.profile.joints[2]) - 1.57).abs()
+                < 1.0e-6
+        );
+
+        let mut echo = streaming_command(session, vec![]);
+        echo.points[0].q = published.clone();
+        runtime.submit_trajectory(echo.clone()).unwrap();
+        let bounded = runtime
+            .data
+            .read()
+            .command
+            .as_ref()
+            .unwrap()
+            .targets
+            .clone();
+        assert_eq!(bounded[1].position_rad, -1.57);
+        assert_eq!(bounded[2].position_rad, 1.57);
+        runtime.validate_targets(&bounded).unwrap();
+        for fault in [
+            "different_pose",
+            "velocity",
+            "gains",
+            "feedforward",
+            "other_axis",
+        ] {
+            let mut bad = echo.clone();
+            match fault {
+                "different_pose" => bad.points[0].q[1] -= 0.001,
+                "velocity" => bad.points[0].dq = vec![0.001; DOF],
+                "gains" => bad.points[0].kp = vec![5.0; DOF],
+                "feedforward" => bad.points[0].tau_ff = vec![0.0; DOF],
+                "other_axis" => bad.points[0].q[0] += 0.01,
+                _ => unreachable!(),
+            }
+            assert!(runtime.submit_trajectory(bad).is_err(), "accepted {fault}");
+        }
+        let start = runtime
+            .data
+            .read()
+            .gravity_startup_ramp
+            .as_ref()
+            .unwrap()
+            .last_tick_ns;
+        runtime.apply_command_gravity_feedforward(
+            &mut bounded.clone(),
+            &backend.feedback(),
+            true,
+            start + 100_000_000,
+        );
+        assert!(runtime.data.read().gravity_startup_ramp.is_none());
+        // The controller may still echo its activation reference after gravity
+        // settles and before the first bounded FJT waypoint arrives.
+        runtime.submit_trajectory(echo.clone()).unwrap();
+        let mut motion = streaming_command(session, vec![]);
+        motion.points[0].q = bounded.iter().map(|target| target.position_rad).collect();
+        motion.points[0].q[0] += 0.01;
+        runtime.submit_trajectory(motion).unwrap();
+        assert!(runtime.data.read().meow_entry_hold.is_none());
+        assert!(runtime.submit_trajectory(echo).is_err());
+        assert_eq!(runtime.profile.joints[1].limits.position_lower_rad, -1.57);
+        assert!((runtime.joint_state_proto().q[1] - q[1]).abs() < 1.0e-6);
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn meow_boundary_entry_rejects_excess_margin_or_moving_feedback_before_enable() {
+        for (protocol, measured, speed, margin) in [
+            (MotorProtocol::Meow, -1.581, 0.0, 0.01),
+            (MotorProtocol::Meow, -1.570_404, 0.0201, 0.01),
+            (MotorProtocol::Meow, -1.570_404, 0.0, 0.0),
+            (MotorProtocol::Cia402, -1.570_404, 0.0, 0.01),
+        ] {
+            let backend = Arc::new(DampingBackend::new(false));
+            let mut runtime = runtime_with_backend(backend.clone());
+            let profile = Arc::make_mut(&mut runtime.profile);
+            profile.bus.protocol = protocol;
+            profile.joints[1].limits.position_lower_rad = -1.57;
+            profile.joints[1].limits.measured_position_margin_rad = margin;
+            let mut q = [0.0; DOF];
+            q[1] = measured;
+            let mut dq = [0.0; DOF];
+            dq[1] = speed;
+            *backend.state.write() = feedback_from_ros(&runtime, q, dq);
+            runtime.initialize().await.unwrap();
+            let (session, _, _) = runtime.acquire("bad-meow-boundary".into()).unwrap();
+            assert!(runtime
+                .set_mode(session, OperatingMode::Active)
+                .await
+                .is_err());
+            assert_eq!(backend.inner.enable_calls.load(Ordering::Acquire), 0);
+            runtime.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]

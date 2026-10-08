@@ -115,6 +115,12 @@ Absolute encoders check the entry posture. Startup follows **J2 → J4 → J3**:
 J2 to −1.350 (8 s), J4 to −0.300 (10 s), and J3 to 1.430 (6 s).
 The authoritative recipe is [startup.yaml](src/hex_arm_controller/config/startup.yaml).
 
+Folded placement allows **0.01 rad (about 0.57°)** of J2/J3 variation around the reference.
+The deployment profile also sets `measured_position_margin_rad: 0.01`, accepting J2 from
+−1.580 to −1.560 rad and J3 from 1.560 to 1.580 rad at startup. The activation hold and
+trajectory start bound small endpoint deviations to legal command positions. Actual feedback
+continues to drive gravity and fault checks; zero offsets and normal command limits retain their values.
+
 ### 2. Launch MoveIt (complete host command)
 
 **If your prompt is `root@hex-arm-dev`, run `exit` first to return to the host.**
@@ -179,6 +185,7 @@ Limits and units:
 
 - Multiply GUI Rev/s and Rev/s² by `2π` to obtain ROS / MoveIt / Rust rad/s and rad/s².
 - Position and dynamics default to `commissioning`. Changing only positions or hardware speed still leaves the 0.1 rad/s and 0.1 rad/s² planning caps.
+- Meow unfolding, folded return, and preparatory alignment use this launch's MoveIt velocity and acceleration caps, with durations calculated from travel. Return-to-ready uses 1.0/1.0 scaling. The 10-second startup stationary check remains.
 - RViz velocity and acceleration scaling are additional multipliers; set both to 1.0 for full planning limits.
 - The old `replacement.local.yaml` retains narrow windows; use `moveit_deployment.local.yaml` from the command above.
 

@@ -20,8 +20,8 @@ spec.loader.exec_module(startup)
 
 
 class StopProbe(startup.Probe):
-    def __init__(self, profile, record_commands=False):
-        super().__init__(profile, record_commands=record_commands)
+    def __init__(self, profile, record_commands=False, motion_limits=None):
+        super().__init__(profile, record_commands=record_commands, motion_limits=motion_limits)
         self.driver = None
         self.driver_at = 0.0
         self.monitor_motion = False

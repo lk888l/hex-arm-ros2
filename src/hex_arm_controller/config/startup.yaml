@@ -1,7 +1,11 @@
-# Authority for both the ROS FJT client and the standalone commissioning tool.
+# Shared posture/order for the ROS FJT client and standalone commissioning tool.
+# ROS startup/return times follow the effective MoveIt velocity/acceleration caps.
+# duration_sec below is retained only for the standalone commissioning trial.
 # After each power cycle and before automatic startup, place the arm at this folded entry:
 # J2=-1.570 rad and J3=1.570 rad (all other joints nominally zero).
 # Absolute encoders verify this posture; this is not a homing procedure.
+# ROS Meow entry uses the profile's measured_position_margin_rad (up to 0.01)
+# for endpoint placement differences, while all commanded positions stay bounded.
 schema_version: 1
 folded_position_rad: [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
 ros_folded_tolerance_rad: [0.03, 0.01, 0.01, 0.01, 0.03]

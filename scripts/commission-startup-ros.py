@@ -33,7 +33,9 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 import yaml
-from hex_arm_bringup.startup_recipe import load_recipe, ready_position
+from hex_arm_bringup.startup_recipe import (
+    load_recipe, ready_position, resolve_motion_limits, rest_to_rest_duration,
+)
 
 JOINTS = [f"joint_{i}" for i in range(1, 7)]
 STARTUP_RECIPE = load_recipe()
@@ -43,6 +45,7 @@ READY = ready_position(STARTUP_RECIPE)
 FOLDED_TOLERANCE = STARTUP_RECIPE["ros_folded_tolerance_rad"]
 HOLD_POSITION_TOLERANCE_RAD = 0.015
 HOLD_VELOCITY_PEAK_RAD_S = 0.02
+POSITION_EPSILON_RAD = 1e-6
 # Existing strict-model contacts at the documented powered-off folded pose.
 # Only a bounded, independently commissioned J3 exit/re-entry may traverse them.
 FOLDED_CONTACTS = {tuple(sorted(pair)) for pair in (("link_1", "link_5"), ("link_2", "link_4"))}
@@ -155,7 +158,26 @@ def cia402_steps(recipe, profile, positions, profile_sha256):
     return result
 
 
-def startup_steps(profile, positions, velocities, *, align_folded=False):
+def folded_entry_command(profile, positions):
+    """Bound a Meow entry hold using the profile's feedback-only allowance."""
+    if profile["bus"]["protocol"] != "meow" or len(positions) != 6:
+        raise RuntimeError("folded entry margin requires six-axis Meow feedback")
+    reference = []
+    for q, joint in zip(positions, profile["joints"]):
+        limits = joint["limits"]
+        margin = limits.get("measured_position_margin_rad", 0.0)
+        if (isinstance(margin, bool) or not isinstance(margin, (int, float))
+                or not math.isfinite(margin) or not 0 <= margin <= .01):
+            raise RuntimeError(f"invalid measured position margin for {joint['name']}")
+        lower, upper = limits["position_lower_rad"], limits["position_upper_rad"]
+        if (not math.isfinite(q) or not
+                lower - margin - POSITION_EPSILON_RAD <= q <= upper + margin + POSITION_EPSILON_RAD):
+            raise RuntimeError(f"folded feedback exceeds {joint['name']} profile allowance: {q}")
+        reference.append(min(upper, max(lower, q)))
+    return reference
+
+
+def startup_steps(profile, positions, velocities, *, align_folded=False, motion_limits=None):
     """Return bounded FJT goals; only J1–J5 define the folded entry posture."""
     if (len(positions) != 6 or len(velocities) != 6
             or not all(math.isfinite(q) for q in positions)
@@ -169,42 +191,43 @@ def startup_steps(profile, positions, velocities, *, align_folded=False):
         # J2/J3 still define the documented folded structure. Only explicitly
         # acknowledged placement of the base/wrist is aligned before unfolding.
         tolerances = [.15, .01, .01, .03, .05]
-    if any(abs(a - b) > tolerance for a, b, tolerance
+    if any(abs(a - b) > tolerance + POSITION_EPSILON_RAD for a, b, tolerance
            in zip(positions[:5], FOLDED[:5], tolerances)):
         raise RuntimeError(f"fixed startup requires J1–J5 folded reference: {positions}")
     j6 = profile["joints"][5]["limits"]
     if not j6["position_lower_rad"] <= positions[5] <= j6["position_upper_rad"]:
         raise RuntimeError("measured J6 is outside the selected profile")
+    rates = resolve_motion_limits(profile, motion_limits)
     steps = []
-    # Preserve the measured folded J2/J3/J4 values until each axis's turn.
+    # Preserve the folded J2/J3/J4 values until each axis's turn, bounding
+    # feedback within its allowed margin to the strict command endpoints.
     # The nominal fold is a posture check, not a goal that must be reached first.
-    target = list(positions)
+    previous = folded_entry_command(profile, positions)
+    target = previous.copy()
     for axis in (0, 4, 5):
         target[axis] = 0.0
     if align_folded:
         target[3] = 0.0
     if abs(positions[5]) > 0.01 or align_folded:
-        # Quintic rest-to-rest peaks are 1.875*d/T and 5.774*d/T².
-        # Use at most half the profile speed/acceleration, capped at 0.05 SI.
-        duration = 2.0
-        for actual, desired, joint in zip(positions, target, profile["joints"]):
-            distance = abs(desired - actual)
-            velocity = min(0.05, joint["limits"]["velocity_rad_s"] / 2.0)
-            acceleration = min(0.05, joint["limits"]["acceleration_rad_s2"] / 2.0)
-            duration = max(duration, 1.875 * distance / velocity,
-                           math.sqrt(5.774 * distance / acceleration))
-        steps.append(("align_folded" if align_folded else "align_j6", target.copy(), math.ceil(duration) + 1))
+        duration = rest_to_rest_duration(previous, target, rates)
+        steps.append(("align_folded" if align_folded else "align_j6", target.copy(), duration))
+        previous = target.copy()
     for step in STARTUP_RECIPE["steps"]:
-        axis, value, duration = step["joint_index"], step["target_rad"], step["duration_sec"]
+        axis, value = step["joint_index"], step["target_rad"]
         target[axis] = value
+        duration = rest_to_rest_duration(previous, target, rates)
         steps.append((f"startup_j{axis + 1}", target.copy(), duration))
+        previous = target.copy()
     return steps
 
 
 class Probe(Node):
-    def __init__(self, profile, record_commands=False, sequence=None, profile_sha256=None, align_folded=False):
+    def __init__(self, profile, record_commands=False, sequence=None, profile_sha256=None,
+                 align_folded=False, motion_limits=None):
         super().__init__("hex_arm_real_commissioning")
         self.profile = profile
+        self.motion_limits = resolve_motion_limits(profile, motion_limits)
+        self.folded_entry_checked = False
         self.positions = {}
         self.velocity = {}
         self.received_at = 0.0
@@ -281,11 +304,14 @@ class Probe(Node):
         self.spin(1.0)
         if startup_ready:
             # Reject a wrong posture/path while motors are still disabled.
-            self.check_point(self.q())
-            for _, target, _ in startup_steps(
+            steps = startup_steps(
                     self.profile, self.q(), [self.velocity[name] for name in JOINTS],
-                    align_folded=getattr(self, "align_folded", False)):
+                    align_folded=getattr(self, "align_folded", False),
+                    motion_limits=getattr(self, "motion_limits", None))
+            self.check_point(folded_entry_command(self.profile, self.q()))
+            for _, target, _ in steps:
                 self.check_point(target)
+            self.folded_entry_checked = True
         else:
             # CiA402 starts by holding the measured pose. Check the position
             # window and stationary feedback before requesting motor torque.
@@ -423,11 +449,12 @@ class Probe(Node):
         for q, joint in zip(positions, self.profile["joints"]):
             limits = joint["limits"]
             if not math.isfinite(q) or not (
-                limits["position_lower_rad"] - 1e-6 <= q <= limits["position_upper_rad"] + 1e-6
+                limits["position_lower_rad"] - POSITION_EPSILON_RAD <= q
+                <= limits["position_upper_rad"] + POSITION_EPSILON_RAD
             ):
                 raise RuntimeError(f"trajectory exceeds {joint['name']} profile authority: {q}")
 
-    def direct_step(self, target, duration, label):
+    def direct_step(self, target, duration, label, *, retime=False):
         self.check_point(target)
         started_at = time.monotonic()
         initial = self.q()
@@ -436,11 +463,17 @@ class Probe(Node):
         # Preserve the prior settled position reference while clearing its
         # derivatives. Rebasing to compliant feedback would drop PD support.
         reference = self.last_commanded_target or initial
+        if self.last_commanded_target is None and getattr(self, "folded_entry_checked", False):
+            reference = folded_entry_command(self.profile, reference)
         self.check_point(reference)
         if any(abs(a-b) > HOLD_POSITION_TOLERANCE_RAD for a, b in zip(reference, initial)):
             raise RuntimeError("direct trajectory requires a settled prior reference")
+        if retime:
+            # The first goal uses fresh measured feedback; later goals retain
+            # the settled command reference rather than rebasing PD support.
+            duration = rest_to_rest_duration(reference, target, self.motion_limits)
         for a, b, joint in zip(reference, target, self.profile["joints"]):
-            limits = joint["limits"]
+            limits = self.motion_limits[joint["name"]]
             if (1.875 * abs(b-a) / duration > limits["velocity_rad_s"]
                     or 5.774 * abs(b-a) / duration**2 > limits["acceleration_rad_s2"]):
                 raise RuntimeError("fixed trajectory exceeds quintic motion rates")
@@ -463,6 +496,7 @@ class Probe(Node):
         self.active_goal = None
         self.spin(0.3)
         record = {"step": label, "started_at": started_at, "duration_sec": duration, "initial": initial,
+                  "command_reference": list(reference),
                   "target": list(target), "actual": self.q(),
                   "status": result.status, "error_code": result.result.error_code,
                   "message": result.result.error_string}
@@ -501,7 +535,7 @@ class Probe(Node):
                 self.sequence_path_checks.append({"step": label, "q": q, "strict_valid": strict})
             previous = target
 
-    def plan_and_execute(self, target, velocity_scaling=0.2, acceleration_scaling=0.1):
+    def plan_and_execute(self, target, velocity_scaling=1.0, acceleration_scaling=1.0):
         self.last_plan_diagnostics = None
         for value in (velocity_scaling, acceleration_scaling):
             if isinstance(value, bool) or not math.isfinite(value) or not 0 < value <= 1:
@@ -595,6 +629,8 @@ class Probe(Node):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--motion-limits", default="",
+                        help="Internal JSON of this launch's effective MoveIt velocity/acceleration caps")
     parser.add_argument("--allow-motion", action="store_true", required=True)
     parser.add_argument("--moveit", action="store_true")
     parser.add_argument("--activate-controllers", action="store_true",
@@ -618,6 +654,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = yaml.safe_load(args.profile.read_text())
+    motion_limits = resolve_motion_limits(
+        profile, json.loads(args.motion_limits) if args.motion_limits else None)
     if args.moveit_ready_token and (not args.activate_controllers
                                    or not re.fullmatch(r"[0-9a-f]{32}", args.moveit_ready_token)):
         raise RuntimeError("MoveIt handoff requires controller activation and a per-launch token")
@@ -640,9 +678,11 @@ def main():
     hold_duration = measured_hold_duration(profile)
     rclpy.init()
     node = Probe(profile, record_commands=args.record_commands, sequence=sequence,
-                 profile_sha256=profile_sha256, align_folded=args.align_folded)
+                 profile_sha256=profile_sha256, align_folded=args.align_folded,
+                 motion_limits=motion_limits)
     report = {"time": datetime.now(timezone.utc).isoformat(),
               "profile": str(args.profile), "profile_sha256": profile_sha256, "steps": node.steps,
+              "motion_limits": motion_limits,
               "hold_position_tolerance_rad": HOLD_POSITION_TOLERANCE_RAD,
               "hold_velocity_peak_rad_s": HOLD_VELOCITY_PEAK_RAD_S}
     if sequence is not None:
@@ -726,12 +766,13 @@ def main():
                 report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
         else:
             steps = startup_steps(profile, node.q(), [node.velocity[name] for name in JOINTS],
-                                  align_folded=args.align_folded)
+                                  align_folded=args.align_folded, motion_limits=node.motion_limits)
+            node.folded_entry_checked = True
             # Check every target before sending the first motion command.
             for _, target, _ in steps:
                 node.check_point(target)
             for label, target, duration in steps:
-                node.direct_step(target, duration, label)
+                node.direct_step(target, duration, label, retime=True)
             start = len(node.samples)
             node.spin(10.0)
             held = node.samples[start:]

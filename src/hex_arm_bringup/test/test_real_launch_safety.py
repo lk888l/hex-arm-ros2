@@ -250,6 +250,39 @@ def test_real_execution_selects_protocol_startup(tmp_path: Path) -> None:
     assert '"--hold-current"' in source
 
 
+def test_effective_moveit_dynamics_reach_the_startup_process_as_one_json_argument(tmp_path: Path):
+    import json
+    module = _load_launch_module()
+    context = _context(_profile(tmp_path), "true")
+    rates = json.dumps({
+        f"joint_{index}": {"velocity_rad_s": 1.2566370614359172, "acceleration_rad_s2": .6}
+        for index in range(1, 7)
+    })
+    context.launch_configurations['startup_motion_limits'] = rates
+    actions = module._real_nodes(context)
+    processes = []
+    seen = set()
+    def walk(value):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, ExecuteProcess):
+            if not isinstance(value, Node):
+                processes.append(value)
+        elif isinstance(value, dict):
+            for item in value.values(): walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value: walk(item)
+        elif hasattr(value, '__dict__'):
+            for item in vars(value).values(): walk(item)
+    walk(actions)
+    commands = [[perform_substitutions(context, token) for token in process.cmd]
+                for process in processes]
+    startup = next(command for command in commands if any(
+        token.endswith('commission-startup-ros.py') for token in command))
+    assert startup[startup.index('--motion-limits') + 1] == rates
+
+
 def test_real_launch_rejects_v1_and_missing_gravity_installation_data(
     tmp_path: Path,
 ) -> None:

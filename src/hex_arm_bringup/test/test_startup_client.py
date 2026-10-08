@@ -25,8 +25,8 @@ def test_j6_alignment_preserves_startup_order_and_quintic_limits(j6):
     assert [label for label, _, _ in steps] == ["align_j6", "startup_j2", "startup_j4", "startup_j3"]
     _, target, duration = steps[0]
     assert target == client.FOLDED
-    assert 1.875 * abs(j6) / duration <= min(0.05, config["joints"][5]["limits"]["velocity_rad_s"] / 2)
-    assert 5.774 * abs(j6) / duration**2 <= min(0.05, config["joints"][5]["limits"]["acceleration_rad_s2"] / 2)
+    assert 1.875 * abs(j6) / duration <= config["joints"][5]["limits"]["velocity_rad_s"]
+    assert 5.774 * abs(j6) / duration**2 <= config["joints"][5]["limits"]["acceleration_rad_s2"]
     assert steps[-1][1] == client.READY
 
 
@@ -201,16 +201,63 @@ def test_lost_hardware_status_response_has_bounded_retry_and_cleanup(recover):
 
 
 def test_small_free_joint_placement_offsets_keep_original_reference_and_order():
+    config = profile()
+    config['joints'][1]['limits']['measured_position_margin_rad'] = .01
     q = [-0.0202, -1.5708, 1.5654, 0.00035, -0.02056, -0.15945]
-    steps = client.startup_steps(profile(), q, [0.0] * 6)
+    steps = client.startup_steps(config, q, [0.0] * 6)
     assert [s[0] for s in steps] == ["align_j6", "startup_j2", "startup_j4", "startup_j3"]
-    assert [steps[0][1][i] for i in (1, 2, 3)] == [q[i] for i in (1, 2, 3)]
+    assert [steps[0][1][i] for i in (1, 2, 3)] == [-1.57, q[2], q[3]]
     assert steps[1][1][2:4] == q[2:4]
     assert steps[2][1][2] == q[2]
     assert steps[-1][1] == client.READY
     for i in range(6):
-        assert 1.875 * abs(q[i] - steps[0][1][i]) / steps[0][2] <= 0.05
-        assert 5.774 * abs(q[i] - steps[0][1][i]) / steps[0][2]**2 <= 0.05
+        limits = config["joints"][i]["limits"]
+        reference = client.folded_entry_command(config, q)
+        assert 1.875 * abs(reference[i] - steps[0][1][i]) / steps[0][2] <= limits["velocity_rad_s"]
+        assert 5.774 * abs(reference[i] - steps[0][1][i]) / steps[0][2]**2 <= limits["acceleration_rad_s2"]
+
+
+@pytest.mark.parametrize('axis,measured', [(1, -1.570404052734375), (1, -1.58), (2, 1.58)])
+@pytest.mark.parametrize('align', [False, True])
+def test_folded_feedback_margin_produces_only_in_range_command_waypoints(axis, measured, align):
+    from types import SimpleNamespace as NS
+    config = profile()
+    config['joints'][axis]['limits']['measured_position_margin_rad'] = .01
+    q = client.FOLDED.copy(); q[axis] = measured; q[5] = .217
+    limits = config['joints'][axis]['limits'].copy()
+    steps = client.startup_steps(config, q, [0.] * 6, align_folded=align)
+    fake = NS(profile=config)
+    client.Probe.check_point(fake, client.folded_entry_command(config, q))
+    for _, target, _ in steps:
+        client.Probe.check_point(fake, target)
+    assert steps[0][1][axis] == client.FOLDED[axis]
+    assert steps[-1][1] == client.READY
+    assert config['joints'][axis]['limits'] == limits
+    assert q[axis] == measured
+    with pytest.raises(RuntimeError, match='profile authority'):
+        client.Probe.check_point(fake, q)
+    config['joints'][axis]['limits']['measured_position_margin_rad'] = 0.
+    with pytest.raises(RuntimeError, match='profile allowance'):
+        client.startup_steps(config, q, [0.] * 6, align_folded=align)
+
+
+@pytest.mark.parametrize('margin', [None, True, -.001, .0101, math.nan, math.inf])
+def test_folded_entry_rejects_invalid_feedback_allowances(margin):
+    config = profile()
+    config['joints'][1]['limits']['measured_position_margin_rad'] = margin
+    with pytest.raises(RuntimeError, match='invalid measured position margin'):
+        client.folded_entry_command(config, client.FOLDED)
+
+
+def test_folded_margin_does_not_accept_wrong_posture_or_moving_feedback():
+    config = profile()
+    for joint in config['joints']:
+        joint['limits']['measured_position_margin_rad'] = .01
+    for q, dq in [([0., -1.5801, 1.57, 0., 0., 0.], [0.] * 6),
+                  ([0., -1.57, 1.5801, 0., 0., 0.], [0.] * 6),
+                  (client.FOLDED, [0., .0201, 0., 0., 0., 0.])]:
+        with pytest.raises(RuntimeError):
+            client.startup_steps(config, q, dq, align_folded=True)
 
 
 @pytest.mark.parametrize("axis,delta", [(0, 0.0301), (1, 0.0101), (2, -0.0101), (3, 0.0101), (4, -0.0301)])
@@ -304,9 +351,9 @@ def test_explicit_meow_placement_alignment_preserves_fold_and_motion_rates():
     assert [s[0] for s in steps] == ['align_folded','startup_j2','startup_j4','startup_j3']
     assert steps[0][1] == client.FOLDED
     assert steps[-1][1] == client.READY
-    for actual, target in zip(q, steps[0][1]):
-        assert 1.875*abs(target-actual)/steps[0][2] <= .05
-        assert 5.774*abs(target-actual)/steps[0][2]**2 <= .05
+    for actual, target, joint in zip(q, steps[0][1], config["joints"]):
+        assert 1.875*abs(target-actual)/steps[0][2] <= joint["limits"]["velocity_rad_s"]
+        assert 5.774*abs(target-actual)/steps[0][2]**2 <= joint["limits"]["acceleration_rad_s2"]
     for axis, value in [(0, -.151), (1,-1.54), (2,1.54), (3,.031), (4,.051)]:
         bad = q.copy(); bad[axis]=value
         with pytest.raises(RuntimeError): client.startup_steps(config,bad,[0.0]*6,align_folded=True)
@@ -382,3 +429,102 @@ def test_expanded_trajectory_deadline_tracks_duration_and_rejects_bad_timing():
             client.planned_execution_timeout(points)
     with pytest.raises(RuntimeError):
         client.planned_execution_timeout([])
+
+
+@pytest.mark.parametrize("command_reference", [None, "settled"])
+def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(command_reference):
+    from types import SimpleNamespace as NS
+    config = profile()
+    for joint in config["joints"]:
+        joint["limits"].update(velocity_rad_s=1.2566370614359172,
+                               acceleration_rad_s2=1.2566370614359172)
+    rates = {name: dict(velocity_rad_s=1.2566370614359172, acceleration_rad_s2=.6)
+             for name in client.JOINTS}
+    actual = client.READY.copy(); actual[2] += .01
+    reference = client.READY.copy() if command_reference else None
+    target = client.READY.copy(); target[2] = client.FOLDED[2]
+    goals = []
+    def send(goal, **_):
+        goals.append(goal)
+        def result():
+            actual[:] = target
+            return NS(status=4, result=NS(error_code=0, error_string=""))
+        return NS(accepted=True, get_result_async=result)
+    initial = actual.copy()
+    fake = NS(profile=config, motion_limits=rates, last_commanded_target=reference,
+              q=lambda: actual.copy(), check_point=lambda _: None, action_feedback=[], steps=[],
+              fjt=NS(send_goal_async=send), wait=lambda future, _: future, spin=lambda _: None)
+    record = client.Probe.direct_step(fake, target, 48., "return_startup_j3", retime=True)
+    start, end = goals[0].trajectory.points
+    assert list(start.positions) == (reference or initial)
+    assert list(end.positions) == target
+    seconds = end.time_from_start.sec + end.time_from_start.nanosec / 1e9
+    assert seconds == record["duration_sec"] < 2.
+    for i, name in enumerate(client.JOINTS):
+        distance = abs(end.positions[i] - start.positions[i])
+        assert 1.875 * distance / seconds <= rates[name]["velocity_rad_s"]
+        assert 5.774 * distance / seconds**2 <= rates[name]["acceleration_rad_s2"]
+    assert fake.last_commanded_target == target
+
+
+def test_direct_motion_rejects_rates_above_planning_caps_before_sending_goal():
+    from types import SimpleNamespace as NS
+    config = profile()
+    for joint in config["joints"]:
+        joint["limits"].update(velocity_rad_s=1.25, acceleration_rad_s2=1.25)
+    fake = NS(profile=config, motion_limits={
+        name: dict(velocity_rad_s=1.25, acceleration_rad_s2=.6) for name in client.JOINTS},
+        last_commanded_target=None, q=lambda: client.READY.copy(), check_point=lambda _: None)
+    target = client.READY.copy(); target[3] += .3
+    with pytest.raises(RuntimeError, match="quintic motion rates"):
+        client.Probe.direct_step(fake, target, 1.2, "too_fast")
+
+
+def test_first_folded_goal_bounds_feedback_but_retains_actual_pose_in_report():
+    from types import SimpleNamespace as NS
+    config = profile()
+    for joint in config['joints']:
+        joint['limits']['measured_position_margin_rad'] = .01
+    measured = [-.048891, -1.570404052734375, 1.579, .00154, .01108, .21766]
+    actual = measured.copy()
+    label, target, duration = client.startup_steps(
+        config, measured, [0.] * 6, align_folded=True)[0]
+    goals = []
+    def send(goal, **_):
+        goals.append(goal)
+        actual[:] = target
+        return NS(accepted=True, get_result_async=lambda: NS(
+            status=4, result=NS(error_code=0, error_string='')))
+    fake = NS(profile=config, motion_limits=client.resolve_motion_limits(config),
+              last_commanded_target=None, q=lambda: actual.copy(),
+              folded_entry_checked=False, action_feedback=[], steps=[],
+              fjt=NS(send_goal_async=send), wait=lambda future, _: future, spin=lambda _: None)
+    fake.check_point = lambda q: client.Probe.check_point(fake, q)
+    with pytest.raises(RuntimeError, match='profile authority'):
+        client.Probe.direct_step(fake, target, duration, label, retime=True)
+    assert not goals
+    fake.folded_entry_checked = True
+    record = client.Probe.direct_step(fake, target, duration, label, retime=True)
+    assert record['initial'] == measured
+    assert record['command_reference'][1:3] == [-1.57, 1.57]
+    assert list(goals[0].trajectory.points[0].positions) == record['command_reference']
+    for point in goals[0].trajectory.points:
+        client.Probe.check_point(fake, point.positions)
+    outside_goal = target.copy(); outside_goal[1] = measured[1]
+    with pytest.raises(RuntimeError, match='profile authority'):
+        client.Probe.direct_step(fake, outside_goal, duration, 'invalid_goal', retime=True)
+    assert len(goals) == 1
+
+
+def test_return_to_ready_requests_full_normal_moveit_velocity_and_acceleration():
+    from types import SimpleNamespace as NS
+    goals = []
+    fake = NS(profile=profile(), q=lambda: client.READY.copy(),
+              check_point=lambda _: None, is_valid=lambda _: True,
+              move_group=NS(send_goal_async=lambda goal: goals.append(goal) or NS(accepted=False)),
+              wait=lambda future, _: future)
+    with pytest.raises(RuntimeError, match="planning goal rejected"):
+        client.Probe.plan_and_execute(fake, client.READY)
+    assert len(goals) == 1
+    assert goals[0].request.max_velocity_scaling_factor == 1.0
+    assert goals[0].request.max_acceleration_scaling_factor == 1.0

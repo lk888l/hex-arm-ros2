@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import xml.etree.ElementTree as ET
 import uuid
 
@@ -235,6 +236,7 @@ def _bringup_arguments(
     align_folded: bool = False,
     allow_enable_transient: bool = False,
     readiness_token: str = "",
+    startup_motion_limits: str = "",
 ) -> dict[str, str]:
     if enable_execution and not startup_ready:
         raise RuntimeError("real execution requires the protocol startup procedure")
@@ -256,6 +258,7 @@ def _bringup_arguments(
         **({"allow_enable_transient": "true"} if allow_enable_transient else {}),
         **({"align_folded": "true"} if align_folded else {}),
         **({"moveit_ready_token": readiness_token} if readiness_token else {}),
+        **({"startup_motion_limits": startup_motion_limits} if startup_motion_limits else {}),
         # The outer launch owns the single MoveIt-configured RViz process.
         "use_rviz": "false",
     }
@@ -290,6 +293,14 @@ def _launch_setup(context: LaunchContext):
     moveit_config = _build_moveit_config(enable_execution, hardware_profile, position_limits,
                                        dynamics_limits, planning_limits_file)
     readiness_token = uuid.uuid4().hex if enable_execution else ""
+    startup_motion_limits = ""
+    if enable_execution:
+        planning = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
+        startup_motion_limits = json.dumps({
+            name: {"velocity_rad_s": planning[name]["max_velocity"],
+                   "acceleration_rad_s2": planning[name]["max_acceleration"]}
+            for name in JOINT_NAMES
+        })
 
     real_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -297,7 +308,7 @@ def _launch_setup(context: LaunchContext):
         ),
         launch_arguments=_bringup_arguments(
             hardware_profile, zenoh_connect, enable_execution, startup_ready, startup_sequence,
-            startup_trial, align_folded, allow_enable_transient, readiness_token
+            startup_trial, align_folded, allow_enable_transient, readiness_token, startup_motion_limits
         ).items(),
     )
     move_group = Node(

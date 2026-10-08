@@ -112,6 +112,11 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 J2 到 −1.350（8 s）、J4 到 −0.300（10 s）、J3 到 1.430（6 s）。
 权威配置见 [startup.yaml](src/hex_arm_controller/config/startup.yaml)。
 
+折叠摆放允许 J2/J3 相对参考各偏差 **0.01 rad（约 0.57°）**；本部署 profile
+也配置了 `measured_position_margin_rad: 0.01`。因此 J2 可在 −1.580～−1.560 rad、
+J3 可在 1.560～1.580 rad 进入启动。使能保持和轨迹起点会将边界外的微小偏差收回到
+合法目标范围，实际反馈仍用于重力计算和故障检查；软零偏与正常运动限位保持原值。
+
 ### 2. 启动 MoveIt（宿主机完整命令）
 
 **如果当前提示符是 `root@hex-arm-dev`，先执行 `exit` 返回宿主机。**
@@ -175,6 +180,7 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 - GUI 的 Rev/s、Rev/s² 分别乘 `2π`，才是 ROS / MoveIt / Rust 的 rad/s、rad/s²。
 - 位置与动态默认均为 `commissioning`；仅切换位置或提高硬件速度，仍保留 0.1 rad/s、0.1 rad/s² 动态上限。
 - RViz 速度和加速度缩放是额外比例，均设为 1.0 才能使用完整规划限值。
+- Meow 开机展开、关机收拢和准备对齐沿用本次 MoveIt 的速度、加速度上限，按行程自动计算轨迹时长；返回 ready 使用 1.0/1.0 缩放。开机后的 10 秒静止验收仍保留。
 - 旧 `replacement.local.yaml` 保留窄窗口；日常部署使用上方命令的 `moveit_deployment.local.yaml`。
 
 2026-09-30 已通过三个大范围 MoveIt 组合目标、返回 ready、受控回折及确认失能，

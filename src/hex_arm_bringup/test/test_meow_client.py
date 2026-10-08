@@ -13,28 +13,67 @@ client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 
 
-def fixture():
+def fixture(deployment=False):
     profile = yaml.safe_load((ROOT/'config/hardware/firefly_y6.meow_mit.example.yaml').read_text())
     profile.update(validated=True, calibrated=True)
+    if deployment:
+        for joint in profile['joints']:
+            joint['limits'].update(velocity_rad_s=1.2566370614359172,
+                                   acceleration_rad_s2=1.2566370614359172)
+    rates = client.startup.resolve_motion_limits(profile)
+    if deployment:
+        for limits in rates.values():
+            limits['acceleration_rad_s2'] = .6
     q = client.startup.FOLDED.copy()
     steps = []
-    for label, target, duration in client.startup.startup_steps(profile, q, [0.]*6, align_folded=True):
+    for label, target, duration in client.startup.startup_steps(
+            profile, q, [0.]*6, align_folded=True, motion_limits=rates):
         steps.append(dict(step=label, target=target, initial=q, duration_sec=duration, status=4, error_code=0))
         q = target
-    prior = dict(passed=True, ready_hold={}, profile_sha256='exact', steps=steps)
+    prior = dict(passed=True, ready_hold={}, profile_sha256='exact', steps=steps, motion_limits=rates)
     return profile, prior
 
 
-def test_return_reverses_verified_startup_at_half_speed():
-    profile, prior = fixture()
+@pytest.mark.parametrize('deployment', [False, True])
+def test_return_reverses_verified_startup_at_normal_motion_rates(deployment):
+    profile, prior = fixture(deployment)
     steps = client.return_steps(profile, prior, 'exact')
     assert [s[0] for s in steps] == ['return_startup_j3', 'return_startup_j4', 'return_startup_j2']
-    assert [s[2] for s in steps] == [12., 20., 16.]
+    assert [s[2] for s in steps] == [s['duration_sec'] for s in reversed(prior['steps'][-3:])]
     assert steps[-1][1] == client.startup.FOLDED
+    if deployment:
+        assert sum(s[2] for s in steps) < 5.
+
+
+@pytest.mark.parametrize('align', [False, True])
+def test_boundary_entry_returns_to_bounded_command_reference(align):
+    profile, prior = fixture(deployment=True)
+    for joint in profile['joints']:
+        joint['limits']['measured_position_margin_rad'] = .01
+    initial = client.startup.FOLDED.copy()
+    initial[1] = -1.570404052734375
+    initial[2] = 1.579
+    prior['steps'] = []
+    reference = client.startup.folded_entry_command(profile, initial)
+    for label, target, duration in client.startup.startup_steps(
+            profile, initial, [0.] * 6, align_folded=align, motion_limits=prior['motion_limits']):
+        prior['steps'].append(dict(step=label, initial=initial.copy(), target=target,
+                                  command_reference=reference.copy(), duration_sec=duration,
+                                  status=4, error_code=0))
+        reference = target.copy()
+        initial = target.copy()
+    reverse = client.return_steps(profile, prior, 'exact')
+    assert reverse[-1][1] == client.startup.FOLDED
+    for _, target, _ in reverse:
+        assert target == client.startup.folded_entry_command(profile, target)
+    bad = copy.deepcopy(prior)
+    bad['steps'][-3]['command_reference'][1] = -1.579
+    with pytest.raises(RuntimeError, match='changed command reference'):
+        client.return_steps(profile, bad, 'exact')
 
 
 @pytest.mark.parametrize('fault', ['profile', 'failed', 'deactivated', 'no_hold', 'uncalibrated',
-                                   'protocol', 'goal_failed', 'target', 'duration', 'entry', 'missing'])
+                                   'protocol', 'goal_failed', 'target', 'duration', 'entry', 'missing', 'no_rates'])
 def test_incomplete_or_changed_evidence_never_authorizes_folded_return(fault):
     profile, prior = fixture()
     prior = copy.deepcopy(prior)
@@ -49,6 +88,7 @@ def test_incomplete_or_changed_evidence_never_authorizes_folded_return(fault):
     if fault == 'duration': prior['steps'][1]['duration_sec'] = 1
     if fault == 'entry': prior['steps'][0]['initial'][1] += .1
     if fault == 'missing': prior['steps'].pop()
+    if fault == 'no_rates': prior.pop('motion_limits')
     with pytest.raises(RuntimeError):
         client.return_steps(profile, prior, 'exact')
 

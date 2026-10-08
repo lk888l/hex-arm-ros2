@@ -147,6 +147,7 @@ def _real_nodes(context):
         raise RuntimeError("startup_trial must be true or false")
     startup_trial = startup_trial == "true"
     readiness_token = LaunchConfiguration("moveit_ready_token", default="").perform(context)
+    startup_motion_limits = LaunchConfiguration("startup_motion_limits", default="").perform(context)
     if readiness_token and (not activate_hardware or not re.fullmatch(r"[0-9a-f]{32}", readiness_token)):
         raise RuntimeError("moveit_ready_token requires activation and this launch's 32-digit token")
     if startup_trial and (not activate_hardware or not startup_sequence):
@@ -260,6 +261,7 @@ def _real_nodes(context):
                 *(["--allow-enable-transient"] if allow_enable_transient else []),
                 *(["--align-folded"] if align_folded else []),
                 *(["--moveit-ready-token", readiness_token] if readiness_token else []),
+                *(["--motion-limits", startup_motion_limits] if startup_motion_limits else []),
                 "--output", report,
             ],
             output="screen",
@@ -351,6 +353,8 @@ def generate_launch_description() -> LaunchDescription:
                               description="Validate CiA402 startup and MoveIt, return to entry, then disable"),
         DeclareLaunchArgument("moveit_ready_token", default_value="",
                               description="Internal per-launch handoff to the gated MoveIt runtime"),
+        DeclareLaunchArgument("startup_motion_limits", default_value="",
+                              description="Internal JSON dynamics inherited from the effective MoveIt limits"),
         DeclareLaunchArgument("allow_enable_transient", default_value="false", choices=["true", "false"],
                               description="Explicit Meow enable/ramp allowance: 0.15 rad/s for 0.25 s, then 0.05; settle before trajectories"),
         DeclareLaunchArgument("align_folded", default_value="false", choices=["true", "false"],
