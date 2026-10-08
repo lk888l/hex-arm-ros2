@@ -6,9 +6,9 @@ default_acceleration_scaling_factor: 1.0
 joint_limits:
   joint_1: &deployment_limit
     has_velocity_limits: true
-    max_velocity: 1.2566370614359172
+    max_velocity: 2.2340214425527414
     has_acceleration_limits: true
-    max_acceleration: 0.6
+    max_acceleration: 0.9375
   joint_2: *deployment_limit
   joint_3: *deployment_limit
   joint_4: *deployment_limit

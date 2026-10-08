@@ -358,66 +358,71 @@ mod tests {
     fn full_range_stream_with_planning_acceleration_headroom_tracks_under_jitter() {
         let initial = [0.65_f32, -0.6, 0.7, -0.4, 0.25, 0.4];
         let final_q = [-0.65_f32, -0.8, 0.85, -0.4, -0.25, -0.4];
-        let hardware_rate = 0.2_f32 * std::f32::consts::TAU;
-        let planning_acceleration = 0.6_f64;
-        let ramp_sec = (1.3 / planning_acceleration).sqrt();
-        let total_sec = 2.0 * ramp_sec;
-        let mut interpolator =
-            Interpolator::hold(initial.iter().map(|q| target(*q, 0.0)).collect(), 0);
+        let hardware_acceleration = 1.2566370614359172_f64 as f32;
         let intervals = [
             10_000_000, 12_000_000, 8_000_000, 10_000_000, 11_000_000, 9_000_000,
         ];
-        let mut now_ns = 0_u64;
-        let mut maximum_error = 0.0_f32;
-        for tick in 0..450 {
-            now_ns += intervals[tick % intervals.len()];
-            let t = (now_ns as f64 / NS_PER_SECOND).min(total_sec);
-            let (distance, speed) = if t < ramp_sec {
-                (
-                    0.5 * planning_acceleration * t * t,
-                    planning_acceleration * t,
-                )
-            } else {
-                let remaining = total_sec - t;
-                (
-                    1.3 - 0.5 * planning_acceleration * remaining * remaining,
-                    planning_acceleration * remaining,
-                )
-            };
-            let goals: Vec<_> = initial
-                .iter()
-                .zip(final_q)
-                .map(|(start, end)| {
-                    let delta = (end - start) as f64;
-                    target(
-                        (*start as f64 + delta * distance / 1.3) as f32,
-                        (delta * speed / 1.3) as f32,
+        for (hardware_velocity, planning_acceleration) in [
+            (hardware_acceleration, 0.6_f64),
+            (1.6755160819145563_f64 as f32, 0.75_f64),
+            (2.2340214425527414_f64 as f32, 0.9375_f64),
+        ] {
+            let ramp_sec = (1.3 / planning_acceleration).sqrt();
+            let total_sec = 2.0 * ramp_sec;
+            let mut interpolator =
+                Interpolator::hold(initial.iter().map(|q| target(*q, 0.0)).collect(), 0);
+            let mut now_ns = 0_u64;
+            let mut maximum_error = 0.0_f32;
+            for tick in 0..450 {
+                now_ns += intervals[tick % intervals.len()];
+                let t = (now_ns as f64 / NS_PER_SECOND).min(total_sec);
+                let (distance, speed) = if t < ramp_sec {
+                    (
+                        0.5 * planning_acceleration * t * t,
+                        planning_acceleration * t,
                     )
-                })
-                .collect();
-            interpolator
-                .retarget_with_limits(
-                    goals.clone(),
-                    now_ns,
-                    10_000_000,
-                    &[hardware_rate; 6],
-                    &[hardware_rate; 6],
-                )
-                .unwrap();
-            for (index, (actual, desired)) in
-                interpolator.sample(now_ns).iter().zip(&goals).enumerate()
-            {
-                maximum_error =
-                    maximum_error.max((actual.position_rad - desired.position_rad).abs());
-                let (velocity, acceleration) = interpolator.segment_bounds(index);
-                assert!(velocity <= hardware_rate as f64 * (1.0 + BOUND_ROUNDOFF));
-                assert!(acceleration <= hardware_rate as f64 * (1.0 + BOUND_ROUNDOFF));
+                } else {
+                    let remaining = total_sec - t;
+                    (
+                        1.3 - 0.5 * planning_acceleration * remaining * remaining,
+                        planning_acceleration * remaining,
+                    )
+                };
+                let goals: Vec<_> = initial
+                    .iter()
+                    .zip(final_q)
+                    .map(|(start, end)| {
+                        let delta = (end - start) as f64;
+                        target(
+                            (*start as f64 + delta * distance / 1.3) as f32,
+                            (delta * speed / 1.3) as f32,
+                        )
+                    })
+                    .collect();
+                interpolator
+                    .retarget_with_limits(
+                        goals.clone(),
+                        now_ns,
+                        10_000_000,
+                        &[hardware_velocity; 6],
+                        &[hardware_acceleration; 6],
+                    )
+                    .unwrap();
+                for (index, (actual, desired)) in
+                    interpolator.sample(now_ns).iter().zip(&goals).enumerate()
+                {
+                    maximum_error =
+                        maximum_error.max((actual.position_rad - desired.position_rad).abs());
+                    let (velocity, acceleration) = interpolator.segment_bounds(index);
+                    assert!(velocity <= hardware_velocity as f64 * (1.0 + BOUND_ROUNDOFF));
+                    assert!(acceleration <= hardware_acceleration as f64 * (1.0 + BOUND_ROUNDOFF));
+                }
             }
+            assert!(
+                maximum_error < 0.025,
+                "stream error was {maximum_error} rad with planning acceleration {planning_acceleration} rad/s^2"
+            );
         }
-        assert!(
-            maximum_error < 0.025,
-            "stream error was {maximum_error} rad"
-        );
     }
 
     #[test]

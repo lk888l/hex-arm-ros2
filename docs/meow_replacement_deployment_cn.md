@@ -35,8 +35,8 @@
 - 用户于 2026-09-30 指定到位、保持及回折位置验收为 **0.015 rad**；动态跟踪门限仍为 0.04 rad。
 - 保持速度峰值已按用户要求恢复 **0.02 rad/s**；显式使能瞬态仍为前 0.25 秒 0.15 rad/s、
   后续重力渐入 0.05 rad/s。短暂试用的 0.08 rad/s 保持门槛已撤回。
-- 命令速度/加速度：六轴 1.2566370614 rad/s、1.2566370614 rad/s²，来自 GUI 的
-  0.2 Rev/s、0.2 Rev/s² 乘 `2π`；J2/J4 实测反馈速率额外允许 0.02 rad/s。
+- 命令速度/加速度：六轴 2.2340214426 rad/s、1.2566370614 rad/s²；速度在上一轮
+  96°/s 的基础上再次提高 1/3，加速度仍为 0.2 Rev/s² 乘 `2π`。J2/J4 实测反馈速率额外允许 0.02 rad/s。
 - 位置范围：J1 ±2.86、J2 [−1.57,2.09]、J3/J4 ±1.57、J5 ±1.54、J6 ±2.79 rad。
   MoveIt 再与 URDF 取交集；规划和执行使用严格碰撞模型。
 - 折叠入口 J2/J3 各允许相对 ±1.570 rad 参考偏差 0.01 rad，配合本 profile
@@ -51,10 +51,14 @@
 加速度来自硬件 profile，不再混入 commissioning 的 0.1 上限。启动日志打印最终 SI 限值。
 
 本次正式入口使用 `dynamics_limits:=custom` 加载 `joint_limits_deployment.yaml`：
-规划速度 1.256637 rad/s、加速度 0.6 rad/s²，默认缩放均为 1.0。
+规划速度 2.234021 rad/s（128°/s）、加速度 0.9375 rad/s²，默认缩放均为 1.0。
+这次按用户要求在上一轮 96°/s、0.75 rad/s² 的基础上，再将规划速度提高 1/3、加速度提高 1/4，
+同步提高硬件 profile 的速度限值；
+硬件加速度限值仍为 1.256637 rad/s²。新限值尚未进行真机动作复测。
 100 Hz ROS 命令再经 500 Hz Rust 有界插值；规划与插值采用完全相同加速度上限时，
-首轮真机动作触发了 J2 的 0.04 rad 跟踪保护。0.6 的独立规划配置为插值和实际跟踪保留余量，
-硬件 profile 仍独立约束所有命令。该余量经过多轴帧抖动回归测试，真机表现以本轮结果为准。
+首轮真机动作触发了 J2 的 0.04 rad 跟踪保护。原 0.6 rad/s² 的独立规划配置为插值和实际跟踪保留余量，
+该配置经过多轴帧抖动回归测试和 2026-09-30 真机部署验收；新的 0.9375 rad/s² 仍低于硬件加速度上限，
+硬件 profile 继续独立约束所有命令。历史验收结果不表示这次提高后的限值已通过真机验收。
 
 | 数据 | GUI 六轴 MIT / 电机协议 | ROS、MoveIt、Rust profile |
 |---|---|---|
@@ -74,7 +78,7 @@ python3 scripts/prepare-moveit-profile.py \
   --source config/hardware/firefly_y6.meow.can2.hand_guiding_full_range.local.yaml \
   --output config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml \
   --urdf src/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf \
-  --velocity-rev-s 0.2 --acceleration-rev-s2 0.2 \
+  --velocity-rad-s 2.2340214425527414 --acceleration-rev-s2 0.2 \
   --full-urdf-range --clear-motion-feedforward
 ```
 
@@ -119,6 +123,13 @@ custom 中六轴速度、加速度必须完整、有限且为正；它们仍与�
 该 YAML 只选择动态参数，位置范围由 `position_limits` 单独控制。
 规划请求中的 velocity/acceleration scaling 是无单位比例；RViz 设为 1.0 才能使用上述完整动态限值。
 
+灰影规划预览默认按每个轨迹点 `0.05 s` 循环播放。在当前 RViz 窗口设置
+**Displays → MotionPlanning → Planned Path → State Display Time = 0.05 s**，
+保持 **Loop Animation** 勾选；若播放暂停，可取消后再次勾选以解除暂停。
+修改 **Velocity Scaling** 或 **Accel Scaling** 后需重新 **Plan**。
+灰影显示规划预览，固定播放时序不与真机速度同步；
+查看实际反馈姿态请使用由 `/hex_arm/internal/state` 硬件反馈更新的 **Scene Robot**。
+
 ## 启动
 
 先在控制进程退出时，确认机械臂处于文档折叠入口、身份和无故障状态。
@@ -160,7 +171,7 @@ python3 scripts/commission-meow-ros.py --allow-motion \
 将示例路径替换为本次启动打印的完整路径；不要使用旧运行的报告。
 此工具核对配置 SHA256、成功启动步骤、真实硬件与新鲜反馈，必要时严格规划回 ready，
 再检查固定回折路径，按 J3→J4→J2 使用本次 MoveIt 的正常速度、加速度上限回折，最后停止控制器并确认硬件 INACTIVE。
-开机展开、准备对齐和回折的时长均按各轴行程自动计算，正式部署使用 1.256637 rad/s、0.6 rad/s²；
+开机展开、准备对齐和回折的时长均按各轴行程自动计算，正式部署使用 2.234021 rad/s、0.9375 rad/s²；
 返回 ready 使用 1.0/1.0 缩放。启动报告保存本次动态限值，关机时继续使用相同限值。
 更新后重新构建并重新启动工程；旧启动报告不再授权新的回折流程。开机后的 10 秒静止验收仍保留。
 出现失败会取消目标并请求失能，报告中的 `passed` 不会伪装为成功。
@@ -171,7 +182,7 @@ python3 scripts/commission-meow-ros.py --allow-motion \
 所有 MoveIt 轨迹维持严格碰撞检查；只有固定折叠路径允许文档中已有的两个模型接触对。
 `--campaign` 和 `--test-moveit` 的速度、加速度比例默认均为 1.0，可通过
 `--velocity-scaling` / `--acceleration-scaling` 单独调整；接受 (0,1] 的有限值。
-报告记录所用比例、规划时长及逐轴规划速度/加速度峰值。固定展开和回折使用已验证的独立时序。
+报告记录所用比例、规划时长及逐轴规划速度/加速度峰值。固定展开和回折同样按本次 MoveIt 动态限值自动计算时长。
 
 工具确认控制器停止、ROS 硬件 INACTIVE 后，再退出监督启动进程。
 还须检查 `driver-shutdown.json` 为 `disabled_confirmed`，并在控制进程退出后独立读取六轴模式/故障；

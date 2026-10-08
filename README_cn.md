@@ -160,13 +160,20 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 以当前状态为起点执行 **Plan** / **Plan & Execute**。无界面客户端也必须等待这条日志。
 `startup_ready:=false` 不能绕过真机自动启动。
 
+灰影规划预览默认按每个轨迹点 `0.05 s` 循环播放。在当前 RViz 窗口设置
+**Displays → MotionPlanning → Planned Path → State Display Time = 0.05 s**，
+保持 **Loop Animation** 勾选；若播放暂停，可取消后再次勾选以解除暂停。
+修改 **Velocity Scaling** 或 **Accel Scaling** 后需重新 **Plan**。
+灰影显示规划预览，固定播放时序不与真机速度同步；
+查看实际反馈姿态请使用由 `/hex_arm/internal/state` 硬件反馈更新的 **Scene Robot**。
+
 当前正式配置：
 
 | 项目 | 数值或行为 |
 |---|---|
 | 位置范围 | J1 ±2.86；J2 [−1.57,2.09]；J3/J4 ±1.57；J5 ±1.54；J6 ±2.79 rad |
-| 硬件速度 / 加速度 | 1.256637 rad/s / 1.256637 rad/s² |
-| MoveIt 规划速度 / 加速度 | 1.256637 rad/s / **0.6 rad/s²** |
+| 硬件速度 / 加速度 | 2.234021 rad/s / 1.256637 rad/s² |
+| MoveIt 规划速度 / 加速度 | 2.234021 rad/s（128°/s）/ **0.9375 rad/s²** |
 | Kp / Kd | Kp `[100,100,150,110,80,80]` N·m/rad；Kd 六轴 15 N·m·s/rad |
 | 重力补偿 | 六轴比例 1.0；J2 前馈限幅 ±5 N·m |
 | 扭矩预算 | 总上限与 PD 配置上限均为 1000‰；额外预留 0，`pd_allocation: remaining` |
@@ -186,6 +193,7 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 2026-09-30 已通过三个大范围 MoveIt 组合目标、返回 ready、受控回折及确认失能，
 当时总扭矩上限为 650‰。当前 100% 与动态 PD 分配已通过离线校验，尚未重新做真机动作复测；
 完整 URDF 边界及附加载荷未穷举验收。
+当前规划速度在 96°/s 的基础上再次提高 1/3，加速度在 0.75 rad/s² 的基础上再次提高 1/4；这组更高限值尚未进行真机动作复测。
 配置细节与实测见 [替换臂部署说明](docs/meow_replacement_deployment_cn.md)和
 [验收记录](docs/commissioning_evidence/2026-09-30-can2-moveit-deployment.md)。
 

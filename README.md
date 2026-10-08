@@ -165,13 +165,21 @@ Wait for `MoveIt startup verified: execution available`, then select `arm` and t
 state in RViz for **Plan** / **Plan & Execute**. Headless clients also wait for this message.
 `startup_ready:=false` cannot bypass automatic hardware startup.
 
+The gray planned-path preview defaults to `0.05 s` per trajectory point with looping enabled.
+In the current RViz window, set **Displays → MotionPlanning → Planned Path → State Display Time = 0.05 s**
+and keep **Loop Animation** checked; if playback is paused, uncheck it and check it again.
+After changing **Velocity Scaling** or **Accel Scaling**, run **Plan** again. The gray model is
+a planning preview; fixed playback timing does not synchronize its speed with the hardware.
+Use **Scene Robot**, updated from hardware feedback on `/hex_arm/internal/state`, to view
+the actual feedback pose.
+
 Current production settings:
 
 | Setting | Value or behavior |
 |---|---|
 | Position ranges | J1 ±2.86; J2 [−1.57,2.09]; J3/J4 ±1.57; J5 ±1.54; J6 ±2.79 rad |
-| Hardware velocity / acceleration | 1.256637 rad/s / 1.256637 rad/s² |
-| MoveIt planning velocity / acceleration | 1.256637 rad/s / **0.6 rad/s²** |
+| Hardware velocity / acceleration | 2.234021 rad/s / 1.256637 rad/s² |
+| MoveIt planning velocity / acceleration | 2.234021 rad/s (128°/s) / **0.9375 rad/s²** |
 | Kp / Kd | Kp `[100,100,150,110,80,80]` N·m/rad; Kd 15 N·m·s/rad on each axis |
 | Gravity compensation | All scales 1.0; J2 feedforward cap ±5 N·m |
 | Torque budget | Total and configured PD caps 1000‰; extra reserve 0, `pd_allocation: remaining` |
@@ -193,6 +201,8 @@ The 2026-09-30 trials passed three large-range MoveIt targets, return to ready, 
 and confirmed disable with a 650‰ total torque ceiling. The current 100% ceiling and remaining PD
 allocation passed offline validation, without a new hardware motion trial. The complete URDF
 boundary and added payloads have not been exhaustively tested.
+The current planning limits increase velocity by another one third from 96°/s and acceleration
+by another one quarter from 0.75 rad/s²; these higher limits have not been tested on hardware.
 See [replacement-arm deployment (Chinese)](docs/meow_replacement_deployment_cn.md) and
 [measured results (Chinese)](docs/commissioning_evidence/2026-09-30-can2-moveit-deployment.md).
 
