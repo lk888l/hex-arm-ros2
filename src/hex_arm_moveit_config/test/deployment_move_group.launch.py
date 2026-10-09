@@ -7,7 +7,9 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -22,13 +24,20 @@ def setup(context):
     readiness_token = LaunchConfiguration("startup_readiness_token").perform(context)
     if not readiness_token:
         config.trajectory_execution = {}
-    return [Node(package="hex_arm_moveit_runtime", executable="hex_arm_move_group",
+    process = Node(package="hex_arm_moveit_runtime", executable="hex_arm_move_group",
                  output="screen", additional_env=module._move_group_environment(),
                  parameters=[config.to_dict(), module._move_group_runtime_parameters(bool(readiness_token)),
-                             {"startup_readiness_token": readiness_token}])]
+                             {"startup_readiness_token": readiness_token,
+                              "test_fail_execution_capability":
+                                  LaunchConfiguration("test_fail_execution_capability").perform(context) == "true",
+                              "capabilities": LaunchConfiguration("extra_capabilities").perform(context)}])
+    return [RegisterEventHandler(OnProcessExit(target_action=process,
+                on_exit=[EmitEvent(event=Shutdown(reason="offline MoveGroup exited"))])), process]
 
 
 def generate_launch_description():
     return LaunchDescription([DeclareLaunchArgument("hardware_profile"),
                               DeclareLaunchArgument("startup_readiness_token", default_value=""),
+                              DeclareLaunchArgument("test_fail_execution_capability", default_value="false"),
+                              DeclareLaunchArgument("extra_capabilities", default_value=""),
                               OpaqueFunction(function=setup)])

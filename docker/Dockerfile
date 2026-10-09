@@ -1,4 +1,5 @@
-FROM osrf/ros:jazzy-desktop
+ARG ROS_BASE_IMAGE=osrf/ros:jazzy-desktop
+FROM ${ROS_BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG RUST_TOOLCHAIN=1.88.0

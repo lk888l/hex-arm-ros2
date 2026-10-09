@@ -17,3 +17,4 @@ pub mod shutdown_report;
 pub mod single_turn;
 pub mod socketcan_preflight;
 pub mod startup_recipe;
+pub mod trace;

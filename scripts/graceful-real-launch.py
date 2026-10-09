@@ -66,6 +66,24 @@ def stop_child(process, signal_initial=True):
     signal_group(process, signal.SIGTERM)
 
 
+def record_run_manifest(profile, run_dir, scope, command):
+    # Synthetic non-ROS test processes do not have an installed robot model.
+    if Path(command[0]).name != "ros2" or command[1:2] != ["launch"]:
+        return
+    from ament_index_python.packages import get_package_prefix
+    prefix = get_package_prefix("hex_arm_controller")
+    recorder = Path(__file__).with_name("runtime-manifest.py")
+    if not recorder.is_file():
+        recorder = Path("/usr/local/bin/hex-arm-runtime-manifest.py")
+    argv = [sys.executable, str(recorder), "run", "--prefix", prefix,
+            "--profile", str(profile), "--allow-development", "--scope", scope,
+            "--output", str(run_dir / "run-manifest.json")]
+    argv.extend("--launch-argument=" + argument for argument in command)
+    if os.environ.get("HEX_ARM_RUNTIME_IMAGE"):
+        argv += ["--image-identity", os.environ["HEX_ARM_RUNTIME_IMAGE"]]
+    subprocess.run(argv, check=True, timeout=10)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", required=True, type=Path)
@@ -95,6 +113,7 @@ def main():
     try:
         if signals:
             return 1
+        record_run_manifest(args.profile, run_dir, args.scope, command)
         launch = subprocess.Popen(command, env=env, start_new_session=True)
         while launch.poll() is None and not signals:
             time.sleep(0.05)

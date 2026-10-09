@@ -6,7 +6,9 @@ services:
       dockerfile: docker/Dockerfile.runtime
       args:
         BUILD_IMAGE: ${HEX_ARM_BUILD_IMAGE:-hex-arm-jazzy:local}
-    image: hex-arm-runtime:local
+        RELEASE_BUILD: ${HEX_ARM_RELEASE_BUILD:-0}
+        SOURCE_REVISION: ${HEX_ARM_SOURCE_REVISION:-development}
+    image: ${HEX_ARM_RUNTIME_IMAGE:-hex-arm-runtime:local}
     init: true
     network_mode: host
     ipc: host
@@ -21,6 +23,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       ROS_HOME: /tmp/ros
+      HEX_ARM_RUNTIME_IMAGE: ${HEX_ARM_RUNTIME_IMAGE:-}
     tmpfs:
       - /tmp:rw,nosuid,nodev
     volumes:

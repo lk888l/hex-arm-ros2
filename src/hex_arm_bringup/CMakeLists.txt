@@ -6,6 +6,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS ../../scripts/commission-startup-ros.py
   ../../scripts/commission-meow-ros.py ../../scripts/commission-shutdown-ros.py ../../scripts/graceful-real-launch.py
+  ../../scripts/runtime-manifest.py
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch rviz worlds
   DESTINATION share/${PROJECT_NAME}

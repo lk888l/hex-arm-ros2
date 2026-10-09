@@ -43,6 +43,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -56,6 +57,7 @@
 #include <moveit/move_group/move_group_capability.hpp>
 #include <moveit/move_group/move_group_context.hpp>
 #include <moveit/moveit_cpp/moveit_cpp.hpp>
+#include <moveit/plan_execution/plan_execution.hpp>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.hpp>
 #include <moveit/trajectory_execution_manager/trajectory_execution_manager.hpp>
 #include <moveit/utils/logger.hpp>
@@ -94,13 +96,18 @@ static const char* const DEFAULT_CAPABILITIES[] = {
 class MoveGroupExe
 {
 public:
-  MoveGroupExe(const moveit_cpp::MoveItCppPtr& moveit_cpp, const std::string& default_planning_pipeline, bool debug)
+  MoveGroupExe(const moveit_cpp::MoveItCppPtr& moveit_cpp, const std::string& default_planning_pipeline, bool debug,
+               std::function<void()> cancel_executor)
+    : cancel_executor_(std::move(cancel_executor))
   {
     bool allow_trajectory_execution;
     moveit_cpp->getNode()->get_parameter_or("allow_trajectory_execution", allow_trajectory_execution, true);
     context_ =
         std::make_shared<MoveGroupContext>(moveit_cpp, default_planning_pipeline, allow_trajectory_execution, debug);
     moveit_cpp->getNode()->get_parameter_or("startup_readiness_token", startup_readiness_token_, std::string{});
+#ifdef HEX_ARM_ENABLE_GATE_FAILURE_TEST
+    moveit_cpp->getNode()->get_parameter_or("test_fail_execution_capability", test_fail_execution_capability_, false);
+#endif
     if (!startup_readiness_token_.empty() && !allow_trajectory_execution)
     {
       throw std::runtime_error("startup readiness gate requires trajectory execution to be configured");
@@ -112,20 +119,51 @@ public:
       startup_ready_subscription_ = moveit_cpp->getNode()->create_subscription<std_msgs::msg::String>(
           "/hex_arm/internal/moveit_startup_ready", rclcpp::QoS(1).reliable().transient_local(),
           [this](const std_msgs::msg::String::SharedPtr message) {
-            if (message->data != startup_readiness_token_ || deferred_capabilities_.empty())
+            if (message->data != startup_readiness_token_ || deferred_capabilities_.empty() || failed_)
             {
               return;
             }
-            for (const auto& name : deferred_capabilities_)
+            try
             {
-              if (!loadCapability(name))
+              for (const auto& name : deferred_capabilities_)
               {
-                throw std::runtime_error("failed to unlock MoveIt execution capability: " + name);
+                if (!loadCapability(name))
+                {
+                  throw std::runtime_error("failed to unlock MoveIt execution capability: " + name);
+                }
               }
+              deferred_capabilities_.clear();
+              RCLCPP_INFO(getLogger(), "MoveIt execution unlocked after verified startup hold");
             }
-            deferred_capabilities_.clear();
-            RCLCPP_INFO(getLogger(), "MoveIt execution unlocked after verified startup hold");
+            catch (const std::exception& error)
+            {
+              closeExecution(error.what());
+            }
+            catch (...)
+            {
+              closeExecution("unknown plugin exception");
+            }
           });
+    }
+  }
+
+  bool failed() const
+  {
+    return failed_;
+  }
+
+  void stopExecution()
+  {
+    if (context_->plan_execution_)
+    {
+      context_->plan_execution_->stop();
+    }
+    if (context_->trajectory_execution_manager_)
+    {
+      // ExecuteTrajectory owns a callback thread blocked in waitForExecution.
+      // Finish its goal while ROS and controller callbacks still exist, before
+      // capabilities_.clear() joins that thread during destruction.
+      context_->trajectory_execution_manager_->stopExecution(true);
     }
   }
 
@@ -162,15 +200,40 @@ public:
   }
 
 private:
+  void closeExecution(const char* reason)
+  {
+    // A MultiThreadedExecutor worker must never throw out of the unlock
+    // callback. Roll back capabilities already loaded by this attempt and
+    // let main perform the common teardown with its executor still alive.
+    capabilities_.erase(std::remove_if(capabilities_.begin(), capabilities_.end(),
+                                      [](const auto& entry) { return isExecutionCapability(entry.first); }),
+                        capabilities_.end());
+    failed_ = true;
+    RCLCPP_ERROR(getLogger(), "MoveIt execution unlock failed; execution closed: %s", reason);
+    cancel_executor_();
+  }
+
+  static bool isExecutionCapability(const std::string& name)
+  {
+    return name == "move_group/MoveGroupMoveAction" || name == "move_group/MoveGroupExecuteTrajectoryAction";
+  }
+
   bool loadCapability(const std::string& name)
   {
     try
     {
       printf(MOVEIT_CONSOLE_COLOR_CYAN "Loading '%s'..." MOVEIT_CONSOLE_COLOR_RESET "\n", name.c_str());
-      MoveGroupCapabilityPtr cap = capability_plugin_loader_->createUniqueInstance(name);
+      std::string plugin_name = name;
+#ifdef HEX_ARM_ENABLE_GATE_FAILURE_TEST
+      if (test_fail_execution_capability_ && name == "move_group/MoveGroupMoveAction")
+      {
+        plugin_name = "hex_arm_test/MissingCapability";
+      }
+#endif
+      MoveGroupCapabilityPtr cap = capability_plugin_loader_->createUniqueInstance(plugin_name);
       cap->setContext(context_);
       cap->initialize();
-      capabilities_.push_back(cap);
+      capabilities_.emplace_back(name, cap);
       return true;
     }
     catch (pluginlib::PluginlibException& ex)
@@ -191,7 +254,7 @@ private:
     {
       RCLCPP_FATAL_STREAM(getLogger(),
                           "Exception while creating plugin loader for move_group capabilities: " << ex.what());
-      return;
+      throw;
     }
 
     std::set<std::string> capabilities;
@@ -233,22 +296,23 @@ private:
       // Keep collision/scene/planning services available for startup validation,
       // but expose neither MoveGroup plan-and-execute nor ExecuteTrajectory
       // until the startup client acknowledges this launch's stationary hold.
-      if (!startup_readiness_token_.empty() &&
-          (capability == "move_group/MoveGroupMoveAction" ||
-           capability == "move_group/MoveGroupExecuteTrajectoryAction"))
+      if (!startup_readiness_token_.empty() && isExecutionCapability(capability))
       {
         deferred_capabilities_.push_back(capability);
         continue;
       }
-      loadCapability(capability);
+      if (!loadCapability(capability))
+      {
+        throw std::runtime_error("failed to configure MoveIt capability: " + capability);
+      }
     }
 
     std::stringstream ss;
     ss << '\n' << '\n' << "********************************************************" << '\n';
     ss << "* MoveGroup using: " << '\n';
-    for (const MoveGroupCapabilityPtr& cap : capabilities_)
+    for (const auto& cap : capabilities_)
     {
-      ss << "*     - " << cap->getName() << '\n';
+      ss << "*     - " << cap.second->getName() << '\n';
     }
     ss << "********************************************************" << '\n';
     RCLCPP_INFO(getLogger(), "%s", ss.str().c_str());
@@ -256,10 +320,15 @@ private:
 
   MoveGroupContextPtr context_;
   std::shared_ptr<pluginlib::ClassLoader<MoveGroupCapability>> capability_plugin_loader_;
-  std::vector<MoveGroupCapabilityPtr> capabilities_;
+  std::vector<std::pair<std::string, MoveGroupCapabilityPtr>> capabilities_;
   std::string startup_readiness_token_;
   std::vector<std::string> deferred_capabilities_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr startup_ready_subscription_;
+  std::function<void()> cancel_executor_;
+  std::atomic<bool> failed_{ false };
+#ifdef HEX_ARM_ENABLE_GATE_FAILURE_TEST
+  bool test_fail_execution_capability_{ false };
+#endif
 };
 }  // namespace move_group
 
@@ -315,130 +384,202 @@ void wait_for_shutdown_signal(const sigset_t& shutdown_signals, std::atomic<bool
     }
   }
 }
+
+class ShutdownSignalWaiter
+{
+public:
+  ShutdownSignalWaiter(const sigset_t& shutdown_signals, rclcpp::executors::MultiThreadedExecutor& executor)
+    : thread_(wait_for_shutdown_signal, std::cref(shutdown_signals), std::ref(stop_), std::ref(executor))
+  {
+  }
+
+  ~ShutdownSignalWaiter()
+  {
+    stop_.store(true, std::memory_order_release);
+    if (thread_.joinable())
+    {
+      thread_.join();
+    }
+  }
+
+  ShutdownSignalWaiter(const ShutdownSignalWaiter&) = delete;
+  ShutdownSignalWaiter& operator=(const ShutdownSignalWaiter&) = delete;
+
+private:
+  std::atomic<bool> stop_{ false };
+  std::thread thread_;
+};
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  const sigset_t shutdown_signals = block_shutdown_signals();
-
-  rclcpp::InitOptions init_options;
-  init_options.shutdown_on_signal = false;
-  rclcpp::init(argc, argv, init_options, rclcpp::SignalHandlerOptions::None);
-
-  rclcpp::NodeOptions node_options;
-  node_options.allow_undeclared_parameters(true);
-  node_options.automatically_declare_parameters_from_overrides(true);
-  rclcpp::Node::SharedPtr node = rclcpp::Node::make_shared("move_group", node_options);
-  retain_default_callback_group_until_process_exit(node);
-  moveit::setNodeLoggerName(node->get_name());
-  moveit_cpp::MoveItCpp::Options moveit_cpp_options(node);
-  moveit_cpp_options.planning_pipeline_options.parent_namespace =
-      node->get_effective_namespace() + ".planning_pipelines";
-
-  std::vector<std::string> planning_pipeline_configs;
-  if (node->get_parameter("planning_pipelines", planning_pipeline_configs))
+  int result = 0;
+  bool initialized = false;
+  bool node_added = false;
+  rclcpp::Node::SharedPtr node;
+  moveit_cpp::MoveItCppPtr moveit_cpp;
+  planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor;
+  std::unique_ptr<move_group::MoveGroupExe> move_group_executable;
+  std::unique_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
+  try
   {
-    if (planning_pipeline_configs.empty())
+    const sigset_t shutdown_signals = block_shutdown_signals();
+
+    rclcpp::InitOptions init_options;
+    init_options.shutdown_on_signal = false;
+    rclcpp::init(argc, argv, init_options, rclcpp::SignalHandlerOptions::None);
+    initialized = true;
+    executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
+
+    rclcpp::NodeOptions node_options;
+    node_options.allow_undeclared_parameters(true);
+    node_options.automatically_declare_parameters_from_overrides(true);
+    node = rclcpp::Node::make_shared("move_group", node_options);
+    retain_default_callback_group_until_process_exit(node);
+    moveit::setNodeLoggerName(node->get_name());
+    moveit_cpp::MoveItCpp::Options moveit_cpp_options(node);
+    moveit_cpp_options.planning_pipeline_options.parent_namespace =
+        node->get_effective_namespace() + ".planning_pipelines";
+
+    std::vector<std::string> planning_pipeline_configs;
+    if (node->get_parameter("planning_pipelines", planning_pipeline_configs))
     {
-      RCLCPP_ERROR(node->get_logger(), "Failed to read parameter 'move_group.planning_pipelines'");
-    }
-    else
-    {
-      for (const auto& config : planning_pipeline_configs)
+      if (planning_pipeline_configs.empty())
       {
-        moveit_cpp_options.planning_pipeline_options.pipeline_names.push_back(config);
+        RCLCPP_ERROR(node->get_logger(), "Failed to read parameter 'move_group.planning_pipelines'");
+      }
+      else
+      {
+        for (const auto& config : planning_pipeline_configs)
+        {
+          moveit_cpp_options.planning_pipeline_options.pipeline_names.push_back(config);
+        }
+      }
+    }
+
+    auto& pipeline_names = moveit_cpp_options.planning_pipeline_options.pipeline_names;
+    std::string default_planning_pipeline;
+    if (node->get_parameter("default_planning_pipeline", default_planning_pipeline))
+    {
+      if (std::find(pipeline_names.begin(), pipeline_names.end(), default_planning_pipeline) == pipeline_names.end())
+      {
+        RCLCPP_WARN(node->get_logger(),
+                    "MoveGroup launched with ~default_planning_pipeline '%s' not configured in ~planning_pipelines",
+                    default_planning_pipeline.c_str());
+        default_planning_pipeline.clear();
+      }
+    }
+    else if (pipeline_names.size() > 1)
+    {
+      RCLCPP_WARN(node->get_logger(),
+                  "MoveGroup launched without ~default_planning_pipeline specifying the namespace for the default "
+                  "planning pipeline configuration");
+    }
+    if (default_planning_pipeline.empty())
+    {
+      if (!pipeline_names.empty())
+      {
+        RCLCPP_WARN(node->get_logger(), "Using default pipeline '%s'", pipeline_names.front().c_str());
+        default_planning_pipeline = pipeline_names.front();
+      }
+      else
+      {
+        RCLCPP_WARN(node->get_logger(),
+                    "Falling back to using the the move_group node namespace (deprecated behavior).");
+        default_planning_pipeline = "move_group";
+        pipeline_names = { default_planning_pipeline };
+        moveit_cpp_options.planning_pipeline_options.parent_namespace = node->get_effective_namespace();
+      }
+      node->set_parameter(rclcpp::Parameter("default_planning_pipeline", default_planning_pipeline));
+    }
+
+    moveit_cpp = std::make_shared<moveit_cpp::MoveItCpp>(node, moveit_cpp_options);
+    planning_scene_monitor = moveit_cpp->getPlanningSceneMonitorNonConst();
+    if (!planning_scene_monitor->getPlanningScene())
+    {
+      throw std::runtime_error("Planning scene not configured");
+    }
+
+    bool debug = false;
+    for (int index = 1; index < argc; ++index)
+    {
+      if (std::strncmp(argv[index], "--debug", 7) == 0)
+      {
+        debug = true;
+        break;
+      }
+    }
+    RCLCPP_INFO(node->get_logger(), "MoveGroup debug mode is %s", debug ? "ON" : "OFF");
+
+    move_group_executable = std::make_unique<move_group::MoveGroupExe>(
+        moveit_cpp, default_planning_pipeline, debug, [&executor]() { executor->cancel(); });
+    bool monitor_dynamics;
+    if (node->get_parameter("monitor_dynamics", monitor_dynamics) && monitor_dynamics)
+    {
+      RCLCPP_INFO(node->get_logger(), "MoveGroup monitors robot dynamics (higher load)");
+      planning_scene_monitor->getStateMonitor()->enableCopyDynamics(true);
+    }
+    planning_scene_monitor->publishDebugInformation(debug);
+    move_group_executable->status();
+
+    executor->add_node(node);
+    node_added = true;
+    {
+      ShutdownSignalWaiter signal_waiter(shutdown_signals, *executor);
+      executor->spin();
+    }
+    result = move_group_executable->failed() ? 1 : 0;
+  }
+  catch (const std::exception& error)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("hex_arm_safe_move_group"), "MoveGroup failed: %s", error.what());
+    result = 1;
+  }
+  catch (...)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("hex_arm_safe_move_group"), "MoveGroup failed with an unknown exception");
+    result = 1;
+  }
+
+  // Normal signals, startup failures and unlock failures share this order.
+  // Stop and detach before releasing main-node callback groups, while the
+  // former executor and ROS context are still alive.
+  if (executor)
+  {
+    executor->cancel();
+    if (node_added)
+    {
+      try
+      {
+        executor->remove_node(node);
+      }
+      catch (const std::exception& error)
+      {
+        RCLCPP_ERROR(rclcpp::get_logger("hex_arm_safe_move_group"), "MoveGroup detach failed: %s", error.what());
+        result = 1;
       }
     }
   }
-
-  auto& pipeline_names = moveit_cpp_options.planning_pipeline_options.pipeline_names;
-  std::string default_planning_pipeline;
-  if (node->get_parameter("default_planning_pipeline", default_planning_pipeline))
+  if (move_group_executable)
   {
-    if (std::find(pipeline_names.begin(), pipeline_names.end(), default_planning_pipeline) == pipeline_names.end())
+    try
     {
-      RCLCPP_WARN(node->get_logger(),
-                  "MoveGroup launched with ~default_planning_pipeline '%s' not configured in ~planning_pipelines",
-                  default_planning_pipeline.c_str());
-      default_planning_pipeline.clear();
+      move_group_executable->stopExecution();
+    }
+    catch (const std::exception& error)
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("hex_arm_safe_move_group"), "MoveGroup execution stop failed: %s", error.what());
+      result = 1;
     }
   }
-  else if (pipeline_names.size() > 1)
+  move_group_executable.reset();
+  planning_scene_monitor.reset();
+  moveit_cpp.reset();
+  node.reset();
+  executor.reset();
+  if (initialized)
   {
-    RCLCPP_WARN(node->get_logger(),
-                "MoveGroup launched without ~default_planning_pipeline specifying the namespace for the default "
-                "planning pipeline configuration");
-  }
-  if (default_planning_pipeline.empty())
-  {
-    if (!pipeline_names.empty())
-    {
-      RCLCPP_WARN(node->get_logger(), "Using default pipeline '%s'", pipeline_names.front().c_str());
-      default_planning_pipeline = pipeline_names.front();
-    }
-    else
-    {
-      RCLCPP_WARN(node->get_logger(),
-                  "Falling back to using the the move_group node namespace (deprecated behavior).");
-      default_planning_pipeline = "move_group";
-      pipeline_names = { default_planning_pipeline };
-      moveit_cpp_options.planning_pipeline_options.parent_namespace = node->get_effective_namespace();
-    }
-    node->set_parameter(rclcpp::Parameter("default_planning_pipeline", default_planning_pipeline));
-  }
-
-  auto moveit_cpp = std::make_shared<moveit_cpp::MoveItCpp>(node, moveit_cpp_options);
-  auto planning_scene_monitor = moveit_cpp->getPlanningSceneMonitorNonConst();
-  if (!planning_scene_monitor->getPlanningScene())
-  {
-    RCLCPP_ERROR(node->get_logger(), "Planning scene not configured");
-    planning_scene_monitor.reset();
-    moveit_cpp.reset();
-    node.reset();
     rclcpp::shutdown();
-    return 1;
   }
-
-  bool debug = false;
-  for (int index = 1; index < argc; ++index)
-  {
-    if (std::strncmp(argv[index], "--debug", 7) == 0)
-    {
-      debug = true;
-      break;
-    }
-  }
-  RCLCPP_INFO(node->get_logger(), "MoveGroup debug mode is %s", debug ? "ON" : "OFF");
-
-  auto move_group_executable =
-      std::make_unique<move_group::MoveGroupExe>(moveit_cpp, default_planning_pipeline, debug);
-  bool monitor_dynamics;
-  if (node->get_parameter("monitor_dynamics", monitor_dynamics) && monitor_dynamics)
-  {
-    RCLCPP_INFO(node->get_logger(), "MoveGroup monitors robot dynamics (higher load)");
-    planning_scene_monitor->getStateMonitor()->enableCopyDynamics(true);
-  }
-  planning_scene_monitor->publishDebugInformation(debug);
-  move_group_executable->status();
-
-  {
-    rclcpp::executors::MultiThreadedExecutor executor;
-    executor.add_node(node);
-    std::atomic<bool> stop_waiter{ false };
-    std::thread signal_waiter(wait_for_shutdown_signal, std::cref(shutdown_signals), std::ref(stop_waiter),
-                              std::ref(executor));
-    executor.spin();
-    stop_waiter.store(true, std::memory_order_release);
-    signal_waiter.join();
-    executor.remove_node(node);
-
-    // Tear down every owner of main-node callback groups while their former
-    // executor and the ROS context are still alive.
-    move_group_executable.reset();
-    planning_scene_monitor.reset();
-    moveit_cpp.reset();
-    node.reset();
-  }
-  rclcpp::shutdown();
-  return 0;
+  return result;
 }

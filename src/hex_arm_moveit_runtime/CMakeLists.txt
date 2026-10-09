@@ -27,6 +27,10 @@ endif()
 
 add_executable(hex_arm_move_group src/hex_arm_move_group.cpp)
 target_compile_features(hex_arm_move_group PRIVATE cxx_std_17)
+if(BUILD_TESTING)
+  # Only test builds can substitute a nonexistent plugin at the unlock boundary.
+  target_compile_definitions(hex_arm_move_group PRIVATE HEX_ARM_ENABLE_GATE_FAILURE_TEST=1)
+endif()
 ament_target_dependencies(hex_arm_move_group
   moveit_core
   moveit_ros_move_group

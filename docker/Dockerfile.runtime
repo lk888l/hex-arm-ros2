@@ -3,22 +3,41 @@
 # Set BUILD_IMAGE to a digest in a release pipeline.
 ARG BUILD_IMAGE=hex-arm-jazzy:local
 FROM ${BUILD_IMAGE} AS build
+ARG BUILD_IMAGE
+ARG RELEASE_BUILD=0
+ARG SOURCE_REVISION=development
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /tmp/hex-arm-build
 COPY src ./src
 COPY config ./config
 COPY scripts ./scripts
+COPY docker ./docker
+RUN [[ "$RELEASE_BUILD" == 0 || "$RELEASE_BUILD" == 1 ]] \
+ && release_args=() \
+ && if [[ "$RELEASE_BUILD" == 1 ]]; then release_args=(--release --review-file docker/release-base.json); fi \
+ && python3 scripts/runtime-manifest.py validate-base --build-image "$BUILD_IMAGE" "${release_args[@]}"
 RUN source /opt/ros/jazzy/setup.bash \
  && colcon build --merge-install --install-base /opt/hex-arm \
       --packages-up-to hex_arm_moveit_config --executor sequential \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
                    -DHEX_ARM_BUILD_COMMISSIONING=OFF \
- && python3 scripts/test-runtime-install.py /opt/hex-arm
+ && python3 scripts/test-runtime-install.py /opt/hex-arm \
+ && release_args=() \
+ && if [[ "$RELEASE_BUILD" == 1 ]]; then release_args=(--release --review-file docker/release-base.json); fi \
+ && python3 scripts/runtime-manifest.py build --source . --prefix /opt/hex-arm \
+      --build-image "$BUILD_IMAGE" --source-revision "$SOURCE_REVISION" \
+      --build-flags='Release;BUILD_TESTING=OFF;HEX_ARM_BUILD_COMMISSIONING=OFF;merge-install' \
+      "${release_args[@]}" --output /opt/hex-arm/share/hex_arm_runtime/build-manifest.json
 
 FROM ${BUILD_IMAGE} AS runtime
+ARG BUILD_IMAGE
+ARG SOURCE_REVISION=development
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.base.name="${BUILD_IMAGE}"
 WORKDIR /opt/hex-arm
 COPY --from=build /opt/hex-arm /opt/hex-arm
 COPY docker/runtime-entrypoint.sh /usr/local/bin/hex-arm-entrypoint
+COPY scripts/runtime-manifest.py /usr/local/bin/hex-arm-runtime-manifest.py
 ENV ROS_LOG_DIR=/var/log/hex-arm \
     PYTHONDONTWRITEBYTECODE=1
 STOPSIGNAL SIGINT

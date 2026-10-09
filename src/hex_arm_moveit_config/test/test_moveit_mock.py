@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
+import tempfile
+
+import pytest
 
 from action_msgs.msg import GoalStatus
 from control_msgs.action import FollowJointTrajectory
-from moveit_msgs.action import MoveGroup
+from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
 from moveit_msgs.srv import GetStateValidity
 import rclpy
@@ -69,6 +73,7 @@ class MoveItProbe(Node):
         *,
         plan_only: bool,
         start: list[float] | None = None,
+        wait: bool = True,
     ):
         goal = MoveGroup.Goal()
         goal.request.group_name = "arm"
@@ -100,6 +105,8 @@ class MoveItProbe(Node):
         handle = spin_until(self, self.client.send_goal_async(goal), 10.0)
         if not handle.accepted:
             raise RuntimeError("MoveGroup goal was rejected")
+        if not wait:
+            return handle
         wrapped = spin_until(self, handle.get_result_async(), 30.0)
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
             raise RuntimeError(f"MoveGroup action finished with status {wrapped.status}")
@@ -227,6 +234,88 @@ def main() -> None:
 
 def test_moveit_mock() -> None:
     main()
+
+
+@pytest.mark.parametrize("shutdown_signal", [signal.SIGINT, signal.SIGTERM])
+@pytest.mark.parametrize("cancel_first", [False, True])
+def test_exit_during_mock_execution(tmp_path, shutdown_signal, cancel_first):
+    """Exercise the TEM destructor with a live GenericSystem goal, never CAN."""
+    case_index = int(cancel_first) * 2 + int(shutdown_signal == signal.SIGTERM)
+    # Separate from the 100..199 domains used by the gate/planning fixtures;
+    # freshly created action clients must not see a previous fixture's server.
+    environment = {**os.environ, "ROS_DOMAIN_ID": str(200 + (os.getpid() + case_index) % 20)}
+    os.environ["ROS_DOMAIN_ID"] = environment["ROS_DOMAIN_ID"]
+    with tempfile.TemporaryFile(mode="w+") as output:
+        child = subprocess.Popen(
+            ["ros2", "launch", "hex_arm_moveit_config", "moveit_mock.launch.py",
+             "use_rviz:=false", "limits_profile:=sim"], stdout=output, stderr=subprocess.STDOUT,
+            start_new_session=True, env=environment)
+        rclpy.init()
+        node = MoveItProbe()
+        execute = ActionClient(node, ExecuteTrajectory, "/execute_trajectory")
+        try:
+            deadline = time.monotonic() + 30.0
+            while not (node.client.wait_for_server(timeout_sec=0.2)
+                       and execute.wait_for_server(timeout_sec=0.2)
+                       and node.trajectory_client.wait_for_server(timeout_sec=0.2)):
+                assert child.poll() is None and time.monotonic() < deadline
+            # DDS service responses and MoveIt's independent controller client
+            # need to finish discovery after the action names first appear.
+            time.sleep(2.0)
+            deadline = time.monotonic() + 5.0
+            while len(node.positions) != 6 and time.monotonic() < deadline:
+                rclpy.spin_once(node, timeout_sec=0.05)
+            initial = dict(node.positions)
+            if cancel_first:
+                # The RViz MoveGroup action implements preemption. Upstream
+                # 2.12.4 ExecuteTrajectory serializes its cancel callback behind
+                # execution and does not call its preempt helper.
+                handle = node.request(TARGET, plan_only=False, wait=False)
+            else:
+                planned = node.request(TARGET, plan_only=True)
+                goal = ExecuteTrajectory.Goal(trajectory=planned.planned_trajectory)
+                handle = spin_until(node, execute.send_goal_async(goal), 5.0)
+            assert handle.accepted
+            result = handle.get_result_async()
+            deadline = time.monotonic() + 5.0
+            while (not any(abs(node.positions.get(name, 0.0) - initial[name]) > 1e-4 for name in JOINTS)
+                   and time.monotonic() < deadline and not result.done()):
+                rclpy.spin_once(node, timeout_sec=0.02)
+            assert not result.done(), "test trajectory ended before exercising active teardown"
+            assert any(abs(node.positions[name] - initial[name]) > 1e-4 for name in JOINTS)
+            if cancel_first:
+                cancellation = spin_until(node, handle.cancel_goal_async(), 3.0)
+                assert cancellation.goals_canceling
+                cancelled = spin_until(node, result, 5.0)
+                assert cancelled.result.error_code.val == MoveItErrorCodes.PREEMPTED
+            output.seek(0)
+            match = re.search(r"\[hex_arm_move_group-\d+\]: process started with pid \[(\d+)\]", output.read())
+            assert match is not None
+            stopped_at = time.monotonic()
+            os.kill(int(match.group(1)), shutdown_signal)
+            child.wait(timeout=15.0)
+            assert time.monotonic() - stopped_at < 5.0, "MoveIt waited for the trajectory instead of stopping it"
+        except BaseException:
+            output.seek(0)
+            print(output.read(), file=sys.stderr)
+            raise
+        finally:
+            execute.destroy()
+            node.destroy_node()
+            rclpy.shutdown()
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGINT)
+                try:
+                    child.wait(timeout=15.0)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    child.wait(timeout=5.0)
+        output.seek(0)
+        log = output.read()
+        assert child.returncode == 0, log
+        assert f"received signal {int(shutdown_signal)}; cancelling executor" in log
+        assert re.search(r"\[hex_arm_move_group-\d+\]: process has finished cleanly", log), log
+        assert not re.search(r"\[hex_arm_move_group-\d+\]: process has died", log), log
 
 
 if __name__ == "__main__":
