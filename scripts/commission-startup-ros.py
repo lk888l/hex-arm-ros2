@@ -22,6 +22,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
+from control_msgs.msg import JointTolerance
 from controller_manager_msgs.srv import (
     ConfigureController, ListHardwareComponents, LoadController,
     SetHardwareComponentState, SwitchController,
@@ -45,6 +46,7 @@ READY = ready_position(STARTUP_RECIPE)
 FOLDED_TOLERANCE = STARTUP_RECIPE["ros_folded_tolerance_rad"]
 HOLD_POSITION_TOLERANCE_RAD = 0.015
 HOLD_VELOCITY_PEAK_RAD_S = 0.02
+READY_HOLD_SECONDS = 3.0
 POSITION_EPSILON_RAD = 1e-6
 # Existing strict-model contacts at the documented powered-off folded pose.
 # Only a bounded, independently commissioned J3 exit/re-entry may traverse them.
@@ -72,6 +74,18 @@ def rest_to_rest_points(initial, target, duration):
     end.accelerations = [0.0] * 6
     end.time_from_start = trajectory_duration(duration)
     return [start, end]
+
+
+def set_path_tolerance(goal, position_rad):
+    """Override only this trajectory's position tracking tolerance."""
+    if position_rad is None:
+        return
+    if isinstance(position_rad, bool) or not math.isfinite(position_rad) or position_rad <= 0:
+        raise RuntimeError("trajectory path tolerance must be finite and positive")
+    goal.path_tolerance = [
+        JointTolerance(name=name, position=position_rad)
+        for name in goal.trajectory.joint_names
+    ]
 
 
 def planned_execution_timeout(points):
@@ -478,6 +492,8 @@ class Probe(Node):
                     or 5.774 * abs(b-a) / duration**2 > limits["acceleration_rad_s2"]):
                 raise RuntimeError("fixed trajectory exceeds quintic motion rates")
         goal.trajectory.points = rest_to_rest_points(reference, target, duration)
+        path_tolerance = getattr(self, "shutdown_path_tolerance_rad", None)
+        set_path_tolerance(goal, path_tolerance)
         def record_feedback(message):
             feedback = message.feedback
             self.action_feedback.append({
@@ -500,6 +516,8 @@ class Probe(Node):
                   "target": list(target), "actual": self.q(),
                   "status": result.status, "error_code": result.result.error_code,
                   "message": result.result.error_string}
+        if path_tolerance is not None:
+            record["path_tolerance_rad"] = path_tolerance
         feedback = self.action_feedback[feedback_start:]
         if feedback:
             record["max_tracking_error_rad"] = [
@@ -610,20 +628,23 @@ class Probe(Node):
             "planned_peak_acceleration_rad_s2": [max(abs(p.accelerations[i]) for p in trajectory.joint_trajectory.points)
                                                 for i in range(6)],
         }
+        execution = self.execute_planned_trajectory(trajectory, execution_timeout)
+        self.last_commanded_target = list(target)
+        self.spin(1.0)
+        return {**self.last_plan_diagnostics, "actual": self.q(), **execution}
+
+    def execute_planned_trajectory(self, trajectory, timeout):
         execution = ExecuteTrajectory.Goal()
         execution.trajectory = trajectory
         handle = self.wait(self.trajectory_executor.send_goal_async(execution), 5.0)
         if not handle.accepted:
             raise RuntimeError("MoveIt execution rejected")
         self.active_goal = handle
-        wrapped = self.wait(handle.get_result_async(), execution_timeout)
+        wrapped = self.wait(handle.get_result_async(), timeout)
         self.active_goal = None
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED or wrapped.result.error_code.val != MoveItErrorCodes.SUCCESS:
             raise RuntimeError(f"MoveIt execution failed: {wrapped.result.error_code.val}")
-        self.last_commanded_target = list(target)
-        self.spin(1.0)
-        return {**self.last_plan_diagnostics, "actual": self.q(),
-                "moveit_error_code": wrapped.result.error_code.val}
+        return {"moveit_error_code": wrapped.result.error_code.val}
 
 
 def main():
@@ -742,8 +763,8 @@ def main():
                     node.is_valid(node.q())
                 ready = steps[-1][1]
                 start = len(node.samples)
-                errors, velocity = node.spin_hold(ready, 10.0, start)
-                report["ready_hold"] = {"seconds": 10.0, "target": ready, "q": node.q(),
+                errors, velocity = node.spin_hold(ready, READY_HOLD_SECONDS, start)
+                report["ready_hold"] = {"seconds": READY_HOLD_SECONDS, "target": ready, "q": node.q(),
                                         "max_error_rad": errors, "max_velocity_rad_s": velocity}
                 report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
                 if args.moveit:
@@ -774,10 +795,10 @@ def main():
             for label, target, duration in steps:
                 node.direct_step(target, duration, label, retime=True)
             start = len(node.samples)
-            node.spin(10.0)
+            node.spin(READY_HOLD_SECONDS)
             held = node.samples[start:]
             report["ready_hold"] = {
-                "seconds": 10.0, "samples": len(held), "last_q": node.q(),
+                "seconds": READY_HOLD_SECONDS, "samples": len(held), "last_q": node.q(),
                 "max_error_rad": [max(abs(s["q"][i] - READY[i]) for s in held) for i in range(6)],
                 "max_velocity_rad_s": max(abs(v) for s in held for v in s["dq"]),
             }

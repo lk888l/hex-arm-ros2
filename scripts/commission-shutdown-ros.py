@@ -18,6 +18,10 @@ spec = importlib.util.spec_from_file_location("startup_client", Path(__file__).w
 startup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(startup)
 
+SHUTDOWN_PATH_TOLERANCE_RAD = 0.1
+SHUTDOWN_RETURN_VELOCITY_SCALING = 0.5
+SHUTDOWN_RETURN_ACCELERATION_SCALING = 0.5
+
 
 class StopProbe(startup.Probe):
     def __init__(self, profile, record_commands=False, motion_limits=None):
@@ -25,7 +29,32 @@ class StopProbe(startup.Probe):
         self.driver = None
         self.driver_at = 0.0
         self.monitor_motion = False
+        self.shutdown_path_tolerance_rad = None
         self.driver_sub = self.create_subscription(DriverState, "/hex_arm/driver_state", self.driver_state, 10)
+
+    def execute_planned_trajectory(self, trajectory, timeout):
+        if self.shutdown_path_tolerance_rad is None:
+            return super().execute_planned_trajectory(trajectory, timeout)
+        # ExecuteTrajectory cannot carry per-goal tolerances. Send the fully
+        # checked MoveIt plan to the same controller with the shutdown override.
+        goal = startup.FollowJointTrajectory.Goal()
+        goal.trajectory = trajectory.joint_trajectory
+        startup.set_path_tolerance(goal, self.shutdown_path_tolerance_rad)
+        self.last_plan_diagnostics.update(
+            execution_action="follow_joint_trajectory",
+            path_tolerance_rad=self.shutdown_path_tolerance_rad)
+        if not self.fjt.wait_for_server(timeout_sec=2.0):
+            raise RuntimeError("shutdown FJT action unavailable")
+        handle = self.wait(self.fjt.send_goal_async(goal), 5.0)
+        if not handle.accepted:
+            raise RuntimeError("shutdown FJT execution rejected")
+        self.active_goal = handle
+        wrapped = self.wait(handle.get_result_async(), timeout)
+        self.active_goal = None
+        if wrapped.status != startup.GoalStatus.STATUS_SUCCEEDED or wrapped.result.error_code != 0:
+            raise RuntimeError(
+                f"shutdown FJT execution failed: {wrapped.result.error_code}; {wrapped.result.error_string}")
+        return {"fjt_error_code": wrapped.result.error_code}
 
     def driver_state(self, message):
         self.driver = message
@@ -107,12 +136,14 @@ def main():
     rclpy.init()
     node = StopProbe(profile)
     report = {"passed": False, "phase": "preflight",
+              "shutdown_path_tolerance_rad": SHUTDOWN_PATH_TOLERANCE_RAD,
               "shutdown_damping": profile.get("controller", {}).get("shutdown_damping")}
     try:
         deadline = time.monotonic() + 5
         while (len(node.positions) != 6 or node.driver is None) and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
         node.check_live()
+        node.shutdown_path_tolerance_rad = SHUTDOWN_PATH_TOLERANCE_RAD
         node.monitor_motion = True
         node.cancel_motion()
         node.wait_stationary()
@@ -123,7 +154,8 @@ def main():
                     and node.move_group.wait_for_server(timeout_sec=2.0)
                     and node.trajectory_executor.wait_for_server(timeout_sec=2.0)):
                 raise RuntimeError("strict MoveIt unavailable; return-to-ready refused")
-            report["return"] = node.plan_and_execute(ready)
+            report["return"] = node.plan_and_execute(
+                ready, SHUTDOWN_RETURN_VELOCITY_SCALING, SHUTDOWN_RETURN_ACCELERATION_SCALING)
         node.wait_stationary(ready)
         report["ready_q"] = node.q()
         if sequence is not None:

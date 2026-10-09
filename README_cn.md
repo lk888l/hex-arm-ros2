@@ -154,7 +154,7 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 
 ### 3. 等待验收，再规划执行
 
-启动动作结束后还有 **10 秒 ready 静止验收**。
+启动动作结束后还有 **3 秒 ready 静止验收**。
 期间 MoveIt 执行动作接口尚未开放，RViz 等待验收通过后自动打开。
 看到 `MoveIt startup verified: execution available` 后，在 RViz 选择 `arm`，
 以当前状态为起点执行 **Plan** / **Plan & Execute**。无界面客户端也必须等待这条日志。
@@ -187,7 +187,7 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 - GUI 的 Rev/s、Rev/s² 分别乘 `2π`，才是 ROS / MoveIt / Rust 的 rad/s、rad/s²。
 - 位置与动态默认均为 `commissioning`；仅切换位置或提高硬件速度，仍保留 0.1 rad/s、0.1 rad/s² 动态上限。
 - RViz 速度和加速度缩放是额外比例，均设为 1.0 才能使用完整规划限值。
-- Meow 开机展开、关机收拢和准备对齐沿用本次 MoveIt 的速度、加速度上限，按行程自动计算轨迹时长；返回 ready 使用 1.0/1.0 缩放。开机后的 10 秒静止验收仍保留。
+- Meow 开机展开、关机收拢和准备对齐沿用本次 MoveIt 的速度、加速度上限，按行程自动计算轨迹时长；关机返回 ready 固定使用 0.5/0.5 速度、加速度缩放。开机后的静止验收为 3 秒。
 - 旧 `replacement.local.yaml` 保留窄窗口；日常部署使用上方命令的 `moveit_deployment.local.yaml`。
 
 2026-09-30 已通过三个大范围 MoveIt 组合目标、返回 ready、受控回折及确认失能，
@@ -201,7 +201,10 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 
 在拥有 `real-launch` 的终端第一次按 **Ctrl+C**，机械臂先经 MoveIt 返回 ready，
 再按 **J3 → J4 → J2** 受控回折并确认失能。
+关机返回 ready 固定使用 **0.5/0.5** 速度、加速度缩放。
 再次 Ctrl+C 或故障走立即停机路径。
+返回 ready 和回折的关机轨迹逐条使用 **0.1 rad 路径跟踪容差**；最终到位仍需满足 0.015 rad
+位置误差及 0.02 rad/s 静止检查。返回轨迹经 MoveIt 严格规划和逐点检查后交给 FJT 控制器执行。
 
 等待回折结果与 `VERIFIED structured disabled_confirmed` 后再断电。
 保留本次 `startup-ready.json`、`launch.log`、`driver-shutdown.json` 路径；
@@ -329,7 +332,7 @@ MoveIt 检查碰撞，轨迹控制器检查跟踪误差，Rust 负责总线、�
 | source 报路径缺失 | 核对容器及挂载；不要在宿主机或旧容器复用本容器生成的 symlink-install |
 | 窗口不出现、显示授权错误 | 在宿主机图形终端运行 `docker-dev.sh doctor`；按图形诊断文档处理 |
 | 只有模型/滑块，没有 MotionPlanning | `view` 仅预览；规划使用 MoveIt mock 或上方真机入口 |
-| 真机启动时 RViz 尚未打开 | 等待启动和 10 秒静止验收；失败时查看本次 `startup-ready.json` 的 `passed/error` |
+| 真机启动时 RViz 尚未打开 | 等待启动和 3 秒静止验收；失败时查看本次 `startup-ready.json` 的 `passed/error` |
 | `another supervised real launch already owns can2` | 在原启动终端完成正常停止 |
 | `Meow torque ceiling lacks PD/gravity headroom` | 核对是否用了旧 profile 或旧驱动；当前部署需 `remaining` 预算和已重新构建的 controller |
 | 停机尾部出现 `context is invalid` 或 `process has died` | 查看完整日志、启动报告及 `driver-shutdown.json` 的 `disabled_confirmed`，不能仅凭尾部 ROS 错误判断 |

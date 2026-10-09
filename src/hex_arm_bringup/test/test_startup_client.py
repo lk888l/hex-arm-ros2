@@ -432,7 +432,8 @@ def test_expanded_trajectory_deadline_tracks_duration_and_rejects_bad_timing():
 
 
 @pytest.mark.parametrize("command_reference", [None, "settled"])
-def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(command_reference):
+@pytest.mark.parametrize("path_tolerance", [None, 0.1])
+def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(command_reference, path_tolerance):
     from types import SimpleNamespace as NS
     config = profile()
     for joint in config["joints"]:
@@ -453,6 +454,7 @@ def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(co
     initial = actual.copy()
     fake = NS(profile=config, motion_limits=rates, last_commanded_target=reference,
               q=lambda: actual.copy(), check_point=lambda _: None, action_feedback=[], steps=[],
+              shutdown_path_tolerance_rad=path_tolerance,
               fjt=NS(send_goal_async=send), wait=lambda future, _: future, spin=lambda _: None)
     record = client.Probe.direct_step(fake, target, 48., "return_startup_j3", retime=True)
     start, end = goals[0].trajectory.points
@@ -465,6 +467,10 @@ def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(co
         assert 1.875 * distance / seconds <= rates[name]["velocity_rad_s"]
         assert 5.774 * distance / seconds**2 <= rates[name]["acceleration_rad_s2"]
     assert fake.last_commanded_target == target
+    assert [(t.name, t.position) for t in goals[0].path_tolerance] == (
+        [(name, path_tolerance) for name in client.JOINTS] if path_tolerance else [])
+    assert not goals[0].goal_tolerance
+    assert record.get("path_tolerance_rad") == path_tolerance
 
 
 def test_direct_motion_rejects_rates_above_planning_caps_before_sending_goal():

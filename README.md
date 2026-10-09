@@ -159,7 +159,7 @@ For disabled observation and planning, set `enable_execution`, `align_folded`, a
 
 ### 3. Wait for verification, then execute
 
-Startup movements are followed by a **10-second stationary ready hold**.
+Startup movements are followed by a **3-second stationary ready hold**.
 MoveIt execution actions remain unavailable during startup; RViz opens after verification.
 Wait for `MoveIt startup verified: execution available`, then select `arm` and the current start
 state in RViz for **Plan** / **Plan & Execute**. Headless clients also wait for this message.
@@ -193,7 +193,7 @@ Limits and units:
 
 - Multiply GUI Rev/s and Rev/s² by `2π` to obtain ROS / MoveIt / Rust rad/s and rad/s².
 - Position and dynamics default to `commissioning`. Changing only positions or hardware speed still leaves the 0.1 rad/s and 0.1 rad/s² planning caps.
-- Meow unfolding, folded return, and preparatory alignment use this launch's MoveIt velocity and acceleration caps, with durations calculated from travel. Return-to-ready uses 1.0/1.0 scaling. The 10-second startup stationary check remains.
+- Meow unfolding, folded return, and preparatory alignment use this launch's MoveIt velocity and acceleration caps, with durations calculated from travel. Shutdown return-to-ready uses fixed 0.5/0.5 velocity and acceleration scaling. The startup stationary check lasts 3 seconds.
 - RViz velocity and acceleration scaling are additional multipliers; set both to 1.0 for full planning limits.
 - The old `replacement.local.yaml` retains narrow windows; use `moveit_deployment.local.yaml` from the command above.
 
@@ -210,7 +210,11 @@ See [replacement-arm deployment (Chinese)](docs/meow_replacement_deployment_cn.m
 
 The first **Ctrl+C** in the owning `real-launch` terminal returns through ready using MoveIt,
 then performs the controlled **J3 → J4 → J2** folded return and confirms disable.
+Shutdown return-to-ready uses fixed **0.5/0.5** velocity and acceleration scaling.
 A second Ctrl+C or a fault requests immediate shutdown.
+Shutdown return and folding trajectories use a per-goal **0.1 rad position path tolerance**.
+Final settling still requires 0.015 rad position error and 0.02 rad/s velocity.
+The return trajectory is strictly planned and checked by MoveIt before FJT controller execution.
 
 Wait for the return result and `VERIFIED structured disabled_confirmed` before removing power.
 Retain this run's `startup-ready.json`, `launch.log`, and `driver-shutdown.json` paths;
@@ -342,7 +346,7 @@ daily builds use checked-in sources. Retain `install/` and its symlink targets u
 | Sourcing reports missing paths | Check the container and mount; do not reuse this container's symlink-install on the host or in an old container |
 | No window or display authorization errors | Run `docker-dev.sh doctor` in a host graphical terminal and follow the GUI guide |
 | Model/sliders without MotionPlanning | `view` only previews the model; use MoveIt mock or the real entry above |
-| RViz has not opened during hardware startup | Wait for startup and the 10-second hold; inspect `passed/error` in this run's `startup-ready.json` on failure |
+| RViz has not opened during hardware startup | Wait for startup and the 3-second hold; inspect `passed/error` in this run's `startup-ready.json` on failure |
 | `another supervised real launch already owns can2` | Complete normal shutdown in the original launch terminal |
 | `Meow torque ceiling lacks PD/gravity headroom` | Check for an old profile or driver; current deployment requires the `remaining` budget and rebuilt controller |
 | `context is invalid` or `process has died` at shutdown | Inspect the complete log, startup report, and `disabled_confirmed` in `driver-shutdown.json`, rather than only trailing ROS errors |

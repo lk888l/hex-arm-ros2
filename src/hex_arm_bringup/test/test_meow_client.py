@@ -158,3 +158,33 @@ def test_normal_exit_after_campaign_does_not_move_or_enable_again(monkeypatch):
     assert report == dict(passed=True, deactivated=True, already_inactive=True)
     with pytest.raises(RuntimeError, match='require active'):
         client.run(node, [], True, {})
+
+
+@pytest.mark.parametrize('campaign', [False, True])
+def test_shutdown_tolerance_covers_ready_and_folding_without_changing_campaign(monkeypatch, campaign):
+    profile, prior = fixture()
+    reverse = client.return_steps(profile, prior, 'exact')
+    q = client.startup.READY.copy(); q[0] += .02
+    planned, folded = [], []
+    components = [SimpleNamespace(name='FireflyY6System', plugin_name='hex_arm_hardware/HexArmSystem',
+                                 state=SimpleNamespace(id=3, label='active'))]
+    node = SimpleNamespace(q=lambda: q.copy(), driver=None, list_hardware_components=lambda: components,
+                           check_live=lambda: None, wait_stationary=lambda *args: None,
+                           check_point=lambda q: None, is_valid=lambda *args: True,
+                           sequence_path_checks=[], samples=[], deactivate=lambda: None,
+                           spin_hold=lambda *args: ([0.]*6, 0.))
+    def plan(target, velocity_scaling, acceleration_scaling):
+        planned.append((node.shutdown_path_tolerance_rad, velocity_scaling, acceleration_scaling))
+        q[:] = target
+        return {}
+    def fold(target, duration, label, **kwargs):
+        folded.append(node.shutdown_path_tolerance_rad)
+        q[:] = target
+    node.plan_and_execute, node.direct_step = plan, fold
+    monkeypatch.setattr(client, 'warm_connections', lambda *args, **kwargs: None)
+    report = {'moveit': []}
+    goals = [('return_ready', client.startup.READY, .5)] if campaign else None
+    client.run(node, reverse, False, report, goals=goals, velocity_scaling=.8, acceleration_scaling=.6)
+    assert planned == ([(None, .5, .5), (None, .8, .6)] if campaign else [(.1, .5, .5)])
+    assert folded == [0.1]*3
+    assert report['shutdown_path_tolerance_rad'] == 0.1 and report['passed']

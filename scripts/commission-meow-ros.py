@@ -141,10 +141,15 @@ def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, ac
     if not any(c.name == 'FireflyY6System' and 'hex_arm_hardware' in c.plugin_name
                and c.state.label == 'active' for c in components):
         raise RuntimeError('requires active real FireflyY6System')
+    node.shutdown_path_tolerance_rad = (
+        None if goals or test_moveit else shutdown.SHUTDOWN_PATH_TOLERANCE_RAD)
+    report['shutdown_path_tolerance_rad'] = shutdown.SHUTDOWN_PATH_TOLERANCE_RAD
     node.wait_stationary()
     if any(abs(q-t) > startup.HOLD_POSITION_TOLERANCE_RAD
            for q, t in zip(node.q(), startup.READY)):
-        report['return_to_ready'] = node.plan_and_execute(startup.READY)
+        report['return_to_ready'] = node.plan_and_execute(
+            startup.READY, shutdown.SHUTDOWN_RETURN_VELOCITY_SCALING,
+            shutdown.SHUTDOWN_RETURN_ACCELERATION_SCALING)
     node.wait_stationary(startup.READY)
     # Fixed startup/re-entry alone traverses the known folded contacts. Every
     # MoveIt plan and its execution retain the strict collision model.
@@ -182,6 +187,7 @@ def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, ac
                 print(json.dumps(record), flush=True)
         errors, velocity = node.spin_hold(startup.READY, 10., len(node.samples))
         report['ready_hold'] = {'max_error_rad': errors, 'max_velocity_rad_s': velocity}
+    node.shutdown_path_tolerance_rad = shutdown.SHUTDOWN_PATH_TOLERANCE_RAD
     for label, target, duration in reverse:
         node.direct_step(target, duration, label, retime=True)
         node.is_valid(node.q(), startup.FOLDED_CONTACTS)
