@@ -157,6 +157,108 @@ TEST_F(HardwareIoShutdown, FreshFeedbackAloneCannotEnableBeforeCommandSubscriber
   EXPECT_EQ(enables.load(), 1U);
 }
 
+TEST_F(HardwareIoShutdown, OptionalTraceUsesSharedClockAndDrainsBeforeDestruction)
+{
+  const auto directory = std::filesystem::temp_directory_path() /
+    ("hex-arm-cxx-trace-" + std::to_string(getpid()));
+  std::filesystem::create_directories(directory);
+  const char * existing = std::getenv("HEX_ARM_TRACE_DIR");
+  const std::string saved = existing ? existing : "";
+  setenv("HEX_ARM_TRACE_DIR", directory.c_str(), 1);
+  hex_arm_hardware::TransportTrace trace;
+  trace.start();
+  ASSERT_TRUE(trace.enabled());
+  timespec before{};
+  clock_gettime(CLOCK_MONOTONIC, &before);
+  trace.emit("cxx_write", 7, 9, 123456);
+  ASSERT_TRUE(trace.stop());
+  EXPECT_FALSE(trace.enabled());
+  if (existing) {setenv("HEX_ARM_TRACE_DIR", saved.c_str(), 1);} else {unsetenv("HEX_ARM_TRACE_DIR");}
+  std::size_t files = 0;
+  for (const auto & entry : std::filesystem::directory_iterator(directory)) {
+    std::ifstream input(entry.path());
+    std::string header, row;
+    std::getline(input, header);
+    std::getline(input, row);
+    EXPECT_EQ(header, "timestamp_ns,pid,stage,seq,generation,source_stamp_ns");
+    const auto timestamp = std::stoll(row.substr(0, row.find(',')));
+    EXPECT_GE(timestamp, static_cast<std::int64_t>(before.tv_sec) * 1000000000LL + before.tv_nsec);
+    EXPECT_NE(row.find(",cxx_write,7,9,123456"), std::string::npos);
+    ++files;
+  }
+  EXPECT_EQ(files, 1U);
+  std::filesystem::remove_all(directory);
+}
+
+TEST_F(HardwareIoShutdown, FeedbackReadTraceKeepsTheLastAcceptedFrameIdentity)
+{
+  const auto directory = std::filesystem::temp_directory_path() /
+    ("hex-arm-cxx-feedback-trace-" + std::to_string(getpid()));
+  std::filesystem::create_directories(directory);
+  const char * existing = std::getenv("HEX_ARM_TRACE_DIR");
+  const bool had_existing = existing != nullptr;
+  const std::string saved = existing ? existing : "";
+  setenv("HEX_ARM_TRACE_DIR", directory.c_str(), 1);
+
+  hardware_interface::HardwareComponentInterfaceParams params;
+  params.hardware_info.name = "feedback_trace_test";
+  params.hardware_info.hardware_parameters["state_topic"] = "/hex_arm/trace_test_state";
+  sensor_msgs::msg::JointState feedback;
+  for (int i = 1; i <= 6; ++i) {
+    hardware_interface::ComponentInfo joint;
+    joint.name = "joint_" + std::to_string(i);
+    for (const auto & name : {"position", "velocity", "effort"}) {
+      hardware_interface::InterfaceInfo interface;
+      interface.name = name;
+      joint.state_interfaces.push_back(interface);
+      if (interface.name != "effort") {joint.command_interfaces.push_back(interface);}
+    }
+    params.hardware_info.joints.push_back(joint);
+    feedback.name.push_back(joint.name);
+  }
+  feedback.position.assign(6, 1.5);
+  feedback.header.stamp.nanosec = 111;
+  auto system = std::make_unique<hex_arm_hardware::HexArmSystem>();
+  EXPECT_EQ(system->on_init(params), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system->on_configure(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  auto state = system->export_state_interfaces();
+  auto source = std::make_shared<rclcpp::Node>("feedback_trace_source");
+  auto publisher = source->create_publisher<sensor_msgs::msg::JointState>(
+    "/hex_arm/trace_test_state", rclcpp::SensorDataQoS());
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (publisher->get_subscription_count() == 0 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_GT(publisher->get_subscription_count(), 0U);
+  while (state.front().get_optional<double>() != 1.5 && std::chrono::steady_clock::now() < deadline) {
+    publisher->publish(feedback);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    system->read(rclcpp::Time(0), rclcpp::Duration(0, 10000000));
+  }
+  EXPECT_EQ(state.front().get_optional<double>(), 1.5);
+  // An invalid newer packet is observed on DDS but cannot replace the frame
+  // consumed by read(). Repeated reads must retain the accepted source stamp.
+  feedback.name.pop_back();
+  feedback.header.stamp.nanosec = 222;
+  for (int i = 0; i < 5; ++i) {
+    publisher->publish(feedback);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    system->read(rclcpp::Time(0), rclcpp::Duration(0, 10000000));
+  }
+  system.reset();
+  if (had_existing) {setenv("HEX_ARM_TRACE_DIR", saved.c_str(), 1);} else {unsetenv("HEX_ARM_TRACE_DIR");}
+  std::string contents;
+  for (const auto & entry : std::filesystem::directory_iterator(directory)) {
+    std::ifstream input(entry.path());
+    contents.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(contents.find(",cxx_read,0,0,111\n"), std::string::npos);
+  EXPECT_NE(contents.find(",cxx_state_receive,0,0,222\n"), std::string::npos);
+  EXPECT_EQ(contents.find(",cxx_read,0,0,222\n"), std::string::npos);
+  std::filesystem::remove_all(directory);
+}
+
 TEST_F(HardwareIoShutdown, ErrorThenReconfigureJoinsOldExecutor)
 {
   auto system = std::make_unique<hex_arm_hardware::HexArmSystem>();

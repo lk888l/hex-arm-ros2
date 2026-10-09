@@ -4,21 +4,26 @@ from pathlib import Path
 import sys
 
 
+REQUIRED = (
+    "local_setup.bash",
+    "lib/hex_arm_controller/hex_arm_controller",
+    "lib/hex_arm_bringup/graceful-real-launch.py",
+    "lib/hex_arm_bringup/runtime-manifest.py",
+    "lib/hex_arm_bringup/commission-shutdown-ros.py",
+    "lib/hex_arm_bringup/commission-startup-ros.py",
+    "lib/libhex_arm_hardware.so",
+    "lib/hex_arm_moveit_runtime/hex_arm_move_group",
+    "lib/libhex_arm_moveit_tem_shutdown.so",
+    "share/hex_arm_controller/config/startup.yaml",
+    "share/hex_arm_controller/proto/robot_api.proto",
+    "share/hex_arm_moveit_config/launch/moveit_real.launch.py",
+    "share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf",
+)
+
+
 def check(prefix):
     prefix = prefix.resolve()
-    required = [
-        "local_setup.bash",
-        "lib/hex_arm_controller/hex_arm_controller",
-        "lib/hex_arm_bringup/graceful-real-launch.py",
-        "lib/hex_arm_bringup/commission-shutdown-ros.py",
-        "lib/hex_arm_bringup/commission-startup-ros.py",
-        "lib/libhex_arm_hardware.so",
-        "share/hex_arm_controller/config/startup.yaml",
-        "share/hex_arm_controller/proto/robot_api.proto",
-        "share/hex_arm_moveit_config/launch/moveit_real.launch.py",
-        "share/xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf",
-    ]
-    for relative in required:
+    for relative in REQUIRED:
         if not (prefix / relative).is_file():
             raise RuntimeError(f"runtime artifact missing: {relative}")
     for path in prefix.rglob("*"):

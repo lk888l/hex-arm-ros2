@@ -372,6 +372,7 @@ for action gating and shutdown log details.
 | [GUI and CLI simulation](docs/gui_and_cli_simulation.md) | GUI troubleshooting, actions, and Python examples |
 | [Docker development](docs/docker_development.md) | Compose, NVIDIA installation, and WSL2 |
 | [Architecture and migration (Chinese)](docs/architecture_refactor_cn.md) | Module ownership, builds, and standalone deployment |
+| [Runtime measurements and release validation (Chinese)](docs/runtime_optimization_cn.md) | State ownership, transport tracing, and MoveIt upgrade contract |
 | [Hardware state and next steps](docs/commissioning.md) | Historical tuning and development plan |
 | [Legacy CiA402 deployment (Chinese)](docs/cia402_deployment_cn.md) | Deployment and qualification before the firmware upgrade |
 | [Commissioning records](docs/commissioning_evidence/README.md) | Trial results and supporting evidence |

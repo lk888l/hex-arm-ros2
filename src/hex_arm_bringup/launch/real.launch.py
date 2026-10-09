@@ -47,11 +47,24 @@ def _positive_seconds(value, name):
     return seconds
 
 
-def _bridge_parameters(profile, zenoh_connect, startup_timeout_sec):
+def _controller_update_rate(controllers_path):
+    try:
+        config = yaml.safe_load(Path(controllers_path).read_text())
+        rate = config["controller_manager"]["ros__parameters"]["update_rate"]
+    except (OSError, KeyError, TypeError, yaml.YAMLError) as error:
+        raise RuntimeError("cannot read controller_manager update_rate") from error
+    if type(rate) is not int or rate <= 0:
+        raise RuntimeError("controller_manager update_rate must be a positive integer")
+    return rate
+
+
+def _bridge_parameters(profile, zenoh_connect, startup_timeout_sec, update_rate=100):
     return {
         "robot_prefix": profile["robot_prefix"],
         "zenoh_connect": zenoh_connect,
         "required_api_major": 0,
+        "command_period_sec": 1.0 / update_rate,
+        "stream_period_sec": 1.0 / update_rate,
         # One deadline covers API discovery plus the first fresh state.  The
         # six-axis CAN initialization measured about 16.3 s on the real arm,
         # so the launch default deliberately leaves a conservative margin.
@@ -194,6 +207,7 @@ def _real_nodes(context):
     xacro_file = PathJoinSubstitution([FindPackageShare("hex_arm_description"), "urdf", "firefly_y6.urdf.xacro"])
     controllers = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers.yaml"])
     real_commands = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers_real.yaml"])
+    update_rate = _controller_update_rate(controllers.perform(context))
     description = {"robot_description": Command([
         FindExecutable(name="xacro"), " ", xacro_file, " backend:=real controllers_file:=", controllers
     ])}
@@ -229,7 +243,7 @@ def _real_nodes(context):
         package="hex_arm_bridge", executable="hex_arm_bridge", name="hex_arm_bridge",
         namespace="", autostart=True,
         parameters=[_bridge_parameters(
-            profile, bridge_zenoh_connect, bridge_startup_timeout_sec
+            profile, bridge_zenoh_connect, bridge_startup_timeout_sec, update_rate
         )], output="screen")
     control = Node(
         package="controller_manager", executable="ros2_control_node",

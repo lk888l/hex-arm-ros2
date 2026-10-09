@@ -30,6 +30,7 @@ hex-arm-dynamics = "=0.1.0"
 hex-motor = { path = "vendor/hex-motor", optional = true }
 hex-meow-motor = { package = "hex-motor", version = "=0.3.1" }
 parking_lot = "0.12"
+libc = "0.2"
 prost = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

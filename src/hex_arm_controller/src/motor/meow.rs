@@ -24,6 +24,15 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
+
+/// The mailbox remains a latest-value target; metadata only correlates traces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StreamTargets {
+    payloads: [[u8; 20]; DOF],
+    sequence: u64,
+    generation: u64,
+}
+
 const TIMEOUT: Option<Duration> = Some(Duration::from_millis(250));
 const MODE_TIMEOUT: Duration = Duration::from_secs(2);
 const HEARTBEAT_TIMEOUT_MS: u16 = 250;
@@ -71,7 +80,7 @@ pub struct MeowBackend {
     consumers: RwLock<[bool; DOF]>,
     initialized: AtomicBool,
     heartbeat_enabled: Arc<AtomicBool>,
-    stream: Arc<RwLock<Option<[[u8; 20]; DOF]>>>,
+    stream: Arc<RwLock<Option<StreamTargets>>>,
     expected_mit: Arc<RwLock<[bool; DOF]>>,
     failed: Arc<AtomicBool>,
     operations: Mutex<()>,
@@ -113,7 +122,7 @@ impl MeowBackend {
         let telemetry = Arc::new(RwLock::new([Telemetry::default(); DOF]));
         let failed = Arc::new(AtomicBool::new(false));
         let heartbeat_enabled = Arc::new(AtomicBool::new(false));
-        let stream = Arc::new(RwLock::new(None::<[[u8; 20]; DOF]>));
+        let stream = Arc::new(RwLock::new(None::<StreamTargets>));
         let expected_mit = Arc::new(RwLock::new([false; DOF]));
         let mut tasks = Vec::new();
         {
@@ -213,54 +222,18 @@ impl MeowBackend {
                 }
             }));
         }
-        {
-            let bus = bus.clone();
-            let enabled = heartbeat_enabled.clone();
-            let failed = failed.clone();
-            let host = profile.bus.heartbeat_node_id;
-            tasks.push(tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_millis(50));
-                tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    tick.tick().await;
-                    if enabled.load(Ordering::Acquire) {
-                        let frame =
-                            heartbeat::build_heartbeat_frame(host, nmt::NmtState::Operational)
-                                .unwrap();
-                        if !matches!(
-                            tokio::time::timeout(Duration::from_millis(10), bus.send(frame)).await,
-                            Ok(Ok(()))
-                        ) {
-                            failed.store(true, Ordering::Release);
-                            break;
-                        }
-                    }
-                }
-            }));
-        }
-        {
-            let bus = bus.clone();
-            let stream = stream.clone();
-            let failed = failed.clone();
-            let profile = profile.clone();
-            tasks.push(tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_secs_f64(
-                    1.0 / f64::from(profile.controller.loop_hz),
-                ));
-                tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    tick.tick().await;
-                    let payloads = *stream.read();
-                    if let Some(payloads) = payloads {
-                        if let Err(error) = send_payloads(bus.as_ref(), &profile, &payloads).await {
-                            tracing::error!(%error, "Meow MIT PDO stream failed");
-                            failed.store(true, Ordering::Release);
-                            break;
-                        }
-                    }
-                }
-            }));
-        }
+        tasks.push(tokio::spawn(run_heartbeat(
+            bus.clone(),
+            heartbeat_enabled.clone(),
+            failed.clone(),
+            profile.bus.heartbeat_node_id,
+        )));
+        tasks.push(tokio::spawn(run_stream(
+            bus.clone(),
+            stream.clone(),
+            failed.clone(),
+            profile.clone(),
+        )));
         {
             let failed = failed.clone();
             let interface = profile.bus.interface.clone();
@@ -301,6 +274,17 @@ impl MeowBackend {
             tasks,
         })
     }
+    fn publish_stream(&self, payloads: [[u8; 20]; DOF]) {
+        let (sequence, generation) = crate::trace::context();
+        let mut stream = self.stream.write();
+        *stream = Some(StreamTargets {
+            payloads,
+            sequence,
+            generation,
+        });
+        crate::trace::record("mailbox_write", sequence, generation);
+    }
+
     async fn discover_inner(&self) -> Result<Vec<MotorIdentitySnapshot>> {
         let report = discover_read_only(
             self.bus.clone(),
@@ -539,8 +523,22 @@ impl MeowBackend {
 }
 #[async_trait]
 impl MotorBackend for MeowBackend {
-    async fn discover(&self, _refresh: bool) -> Result<Vec<MotorIdentitySnapshot>> {
+    async fn discover(&self, refresh: bool) -> Result<Vec<MotorIdentitySnapshot>> {
+        if !refresh {
+            let identities = self.identities.read();
+            if !identities.is_empty() {
+                return Ok(identities.clone());
+            }
+        }
         let _guard = self.operations.lock().await;
+        // Initialization or another discovery may have populated the cache
+        // while this request was waiting for the backend operation lock.
+        if !refresh {
+            let identities = self.identities.read();
+            if !identities.is_empty() {
+                return Ok(identities.clone());
+            }
+        }
         self.discover_inner().await
     }
     async fn initialize_disabled(&self) -> Result<()> {
@@ -701,7 +699,7 @@ impl MotorBackend for MeowBackend {
             );
         }
         let payloads = self.encode_targets(initial_targets)?;
-        *self.stream.write() = Some(payloads);
+        self.publish_stream(payloads);
         let result: Result<()> = async {
             send_payloads(self.bus.as_ref(), &self.profile, &payloads).await?;
             // Read the actual RPDO target before mode=MIT; a queued hold packet
@@ -773,7 +771,7 @@ impl MotorBackend for MeowBackend {
             self.expected_mit.read().iter().all(|enabled| *enabled),
             "all Meow axes must be enabled before updating targets"
         );
-        *self.stream.write() = Some(self.encode_targets(targets)?);
+        self.publish_stream(self.encode_targets(targets)?);
         Ok(())
     }
     async fn disable_all(&self) -> Result<()> {
@@ -1029,6 +1027,54 @@ fn encode_target(
     payload[16..18].copy_from_slice(&allocated_pd.to_le_bytes());
     Ok(payload)
 }
+async fn run_heartbeat(
+    bus: Arc<dyn CanBus>,
+    enabled: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    host: u8,
+) {
+    let mut tick = tokio::time::interval(Duration::from_millis(50));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if enabled.load(Ordering::Acquire) {
+            let frame = heartbeat::build_heartbeat_frame(host, nmt::NmtState::Operational).unwrap();
+            if !matches!(
+                tokio::time::timeout(Duration::from_millis(10), bus.send(frame)).await,
+                Ok(Ok(()))
+            ) {
+                failed.store(true, Ordering::Release);
+                break;
+            }
+        }
+    }
+}
+
+async fn run_stream(
+    bus: Arc<dyn CanBus>,
+    stream: Arc<RwLock<Option<StreamTargets>>>,
+    failed: Arc<AtomicBool>,
+    profile: Arc<HardwareProfile>,
+) {
+    let mut tick = tokio::time::interval(Duration::from_secs_f64(
+        1.0 / f64::from(profile.controller.loop_hz),
+    ));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let current = *stream.read();
+        if let Some(current) = current {
+            crate::trace::record("can_send_begin", current.sequence, current.generation);
+            if let Err(error) = send_payloads(bus.as_ref(), &profile, &current.payloads).await {
+                tracing::error!(%error, "Meow MIT PDO stream failed");
+                failed.store(true, Ordering::Release);
+                break;
+            }
+            crate::trace::record("can_send", current.sequence, current.generation);
+        }
+    }
+}
+
 async fn send_payloads(
     bus: &dyn CanBus,
     profile: &HardwareProfile,
@@ -1339,7 +1385,11 @@ mod lifecycle_tests {
             consumers: RwLock::new(touched),
             initialized: AtomicBool::new(true),
             heartbeat_enabled: Arc::new(AtomicBool::new(true)),
-            stream: Arc::new(RwLock::new(Some(hold))),
+            stream: Arc::new(RwLock::new(Some(StreamTargets {
+                payloads: hold,
+                sequence: 0,
+                generation: 0,
+            }))),
             expected_mit: Arc::new(RwLock::new([true; DOF])),
             failed: Arc::new(AtomicBool::new(false)),
             operations: Mutex::new(()),
@@ -1357,7 +1407,10 @@ mod lifecycle_tests {
         assert!(backend.disable_all().await.is_err());
         assert!(!backend.heartbeat_enabled.load(Ordering::Acquire));
         assert_eq!(*backend.consumers.read(), touched);
-        assert_eq!(*backend.stream.read(), Some(hold));
+        assert_eq!(
+            backend.stream.read().map(|current| current.payloads),
+            Some(hold)
+        );
         assert!(backend.failed.load(Ordering::Acquire));
         assert!(backend
             .clear_faults()
@@ -1367,5 +1420,146 @@ mod lifecycle_tests {
             .contains("restart"));
         assert!(backend.shutdown().await.is_err());
         assert_eq!(*backend.consumers.read(), touched);
+    }
+    fn backend_without_hardware() -> MeowBackend {
+        let profile: HardwareProfile = serde_yaml::from_str(include_str!(
+            "../../../../config/hardware/firefly_y6.meow_mit.example.yaml"
+        ))
+        .unwrap();
+        MeowBackend {
+            profile: Arc::new(profile),
+            bus: Arc::new(UnavailableSdoBus),
+            telemetry: Arc::new(RwLock::new([Telemetry::default(); DOF])),
+            calibration: RwLock::new([None; DOF]),
+            identities: RwLock::new(Vec::new()),
+            touched: RwLock::new([false; DOF]),
+            consumers: RwLock::new([false; DOF]),
+            initialized: AtomicBool::new(true),
+            heartbeat_enabled: Arc::new(AtomicBool::new(false)),
+            stream: Arc::new(RwLock::new(None)),
+            expected_mit: Arc::new(RwLock::new([false; DOF])),
+            failed: Arc::new(AtomicBool::new(false)),
+            operations: Mutex::new(()),
+            tasks: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_identity_lookup_does_not_wait_for_backend_operations_or_send_can() {
+        let backend = backend_without_hardware();
+        *backend.identities.write() = vec![MotorIdentitySnapshot {
+            node_id: 1,
+            vendor_id: 1,
+            product_code: 2,
+            revision: 3,
+            serial_number: 4,
+            model: "cached-test".into(),
+            identity_verified: true,
+        }];
+        let held_operations = backend.operations.lock().await;
+        let identities = tokio::time::timeout(Duration::from_millis(50), backend.discover(false))
+            .await
+            .expect("cached identity lookup waited on a hardware operation")
+            .unwrap();
+        assert_eq!(identities[0].serial_number, 4);
+        assert!(identities[0].identity_verified);
+        drop(held_operations);
+        // Refresh reaches the unavailable bus rather than reusing old identities.
+        assert!(backend.discover(true).await.is_err());
+        assert_eq!(backend.identities.read()[0].serial_number, 4);
+    }
+
+    struct RecordingBus {
+        frames: RwLock<Vec<CanFrame>>,
+    }
+    #[async_trait]
+    impl CanBus for RecordingBus {
+        async fn send(&self, frame: CanFrame) -> std::result::Result<(), CanIoError> {
+            self.frames.write().push(frame);
+            Ok(())
+        }
+        async fn subscribe(
+            &self,
+            _filter: CanFilter,
+        ) -> std::result::Result<Box<dyn CanRx>, CanIoError> {
+            Err(CanIoError::Disconnected)
+        }
+        fn capabilities(&self) -> CanCapabilities {
+            CanCapabilities {
+                fd: true,
+                max_dlen: 64,
+            }
+        }
+        async fn bus_state(&self) -> std::result::Result<Option<CanBusState>, CanIoError> {
+            Ok(None)
+        }
+    }
+    impl RecordingBus {
+        fn counts(&self) -> (usize, usize) {
+            let frames = self.frames.read();
+            let targets = frames
+                .iter()
+                .filter(|frame| matches!(frame.id(), CanId::Standard(0x201..=0x27f)))
+                .count();
+            let heartbeat = frames
+                .iter()
+                .filter(|frame| matches!(frame.id(), CanId::Standard(0x700..=0x77f)))
+                .count();
+            (targets, heartbeat)
+        }
+    }
+
+    #[tokio::test]
+    async fn sender_and_heartbeat_continue_when_only_control_updates_are_frozen() {
+        // Exercise the production background workers with a frozen mailbox.
+        // Neither worker evaluates the Rust command watchdog; preserve this
+        // evidence until an independent control-progress guard is designed.
+        let mut backend = backend_without_hardware();
+        let bus = Arc::new(RecordingBus {
+            frames: RwLock::new(Vec::new()),
+        });
+        backend.bus = bus.clone();
+        backend.heartbeat_enabled.store(true, Ordering::Release);
+        let payloads = [[42; 20]; DOF];
+        crate::trace::with_context(17, 23, async { backend.publish_stream(payloads) }).await;
+        let frozen = backend.stream.read().unwrap();
+        let expected_context = if crate::trace::enabled() {
+            (17, 23)
+        } else {
+            (0, 0)
+        };
+        assert_eq!((frozen.sequence, frozen.generation), expected_context);
+        backend.tasks.push(tokio::spawn(run_stream(
+            bus.clone(),
+            backend.stream.clone(),
+            backend.failed.clone(),
+            backend.profile.clone(),
+        )));
+        backend.tasks.push(tokio::spawn(run_heartbeat(
+            bus.clone(),
+            backend.heartbeat_enabled.clone(),
+            backend.failed.clone(),
+            backend.profile.bus.heartbeat_node_id,
+        )));
+        tokio::time::sleep(backend.profile.command_watchdog() + Duration::from_millis(30)).await;
+        let before = bus.counts();
+        assert!(before.0 >= DOF && before.1 >= 1);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let after = bus.counts();
+        assert!(after.0 > before.0 && after.1 > before.1);
+        assert_eq!(*backend.stream.read(), Some(frozen));
+        assert!(!backend.failed.load(Ordering::Acquire));
+        assert!(bus
+            .frames
+            .read()
+            .iter()
+            .filter(|frame| matches!(frame.id(), CanId::Standard(0x201..=0x27f)))
+            .all(|frame| frame.data() == payloads[0]));
+        *backend.stream.write() = None;
+        backend.heartbeat_enabled.store(false, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let stopped = bus.counts();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(bus.counts(), stopped);
     }
 }

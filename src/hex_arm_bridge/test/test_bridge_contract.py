@@ -134,7 +134,7 @@ def _publish_diagnostic(temperatures):
             now=lambda: SimpleNamespace(to_msg=RosTime)
         ),
     )
-    HexArmBridge._publish_snapshot(bridge)
+    HexArmBridge._publish_diagnostics(bridge)
     assert len(published) == 1
     return published[0].status[0]
 
@@ -913,3 +913,126 @@ def test_inactive_ros_commands_do_not_block_the_stream_during_mode_rpc() -> None
         progressed = finished.wait(0.2)
     worker.join(1.0)
     assert progressed
+
+
+def test_slow_diagnostic_formatting_does_not_block_stream_and_worker_is_joined():
+    from rclpy.node import Node
+
+    initialized_here = not rclpy.ok()
+    if initialized_here:
+        rclpy.init()
+    bridge = HexArmBridge()
+    entered = threading.Event()
+    release = threading.Event()
+    ticks = []
+    def slow_diagnostic():
+        entered.set()
+        release.wait(1.0)
+    bridge._publish_diagnostics = slow_diagnostic
+    try:
+        bridge._stream_node = Node("diagnostic_isolation_test", context=bridge.context)
+        bridge._diag_timer = bridge._stream_node.create_timer(.005, lambda: ticks.append(1))
+        bridge._start_streaming()
+        assert entered.wait(.5)
+        count = len(ticks)
+        time.sleep(.04)
+        assert len(ticks) >= count + 3
+        release.set()
+        bridge._destroy_ros_entities()
+        assert bridge._diagnostic_thread is None
+        assert bridge._stream_thread is None
+    finally:
+        release.set()
+        bridge.destroy_node()
+        if initialized_here and rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_high_rate_snapshot_does_not_format_diagnostics():
+    now = time.monotonic()
+    snapshot = _ready_snapshot(now)
+    forbidden = SimpleNamespace(publish=lambda _: pytest.fail("stream published diagnostics"))
+    bridge = SimpleNamespace(_latch_runtime_gate_if_needed=lambda: False,
+        _lock=threading.RLock(), _snapshot=snapshot, _runtime_gate_latched=False,
+        _state_pub=None, _driver_pub=None, _diag_pub=forbidden)
+    HexArmBridge._publish_snapshot(bridge)
+
+
+def test_transport_trace_is_bounded_and_drains_after_overflow(tmp_path):
+    from hex_arm_bridge.trace import TransportTrace
+    import csv
+
+    release = threading.Event()
+    class PausedTrace(TransportTrace):
+        def _drain(self):
+            release.wait(1.)
+            super()._drain()
+    trace = PausedTrace(capacity=2, directory=str(tmp_path))
+    try:
+        for seq in range(20):
+            trace.emit("python_receive", seq, 42, 123)
+        assert trace._queue.qsize() == 2
+        assert trace.dropped == 18
+    finally:
+        release.set()
+        assert trace.close()
+    with next(tmp_path.glob("*.csv")).open() as source:
+        rows = list(csv.DictReader(source))
+    assert [row["stage"] for row in rows] == ["python_receive", "python_receive", "trace_dropped"]
+    assert int(rows[-1]["seq"]) == 18
+    assert all(int(row["timestamp_ns"]) > 0 for row in rows)
+
+
+def test_transport_trace_shutdown_wait_is_bounded(tmp_path):
+    from hex_arm_bridge.trace import TransportTrace
+
+    release = threading.Event()
+    class BlockedTrace(TransportTrace):
+        def _drain(self):
+            release.wait(1.)
+            super()._drain()
+    trace = BlockedTrace(directory=str(tmp_path))
+    worker = trace._thread
+    try:
+        assert worker.daemon
+        assert not trace.close(timeout_sec=.001)
+    finally:
+        release.set()
+        worker.join(1.)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("trace_enabled", [False, True])
+def test_command_header_correlation_is_opt_in(trace_enabled):
+    from sensor_msgs.msg import JointState
+
+    commands = []
+    events = []
+    trace = SimpleNamespace(enabled=trace_enabled,
+        emit=lambda *args: events.append(args))
+    bridge = SimpleNamespace(_lock=threading.RLock(),
+        _hardware_transition_lock=threading.RLock(), _hardware_active=True,
+        _session_id=42, _session=SimpleNamespace(put=lambda key, payload: commands.append(payload)),
+        _latch_runtime_gate_if_needed=lambda: False, _joint_names=list(JOINT_NAMES),
+        _trace=trace, _trace_seq=0, prefix="arm",
+        get_parameter=lambda name: SimpleNamespace(value=.01),
+        get_logger=lambda: SimpleNamespace(error=lambda error: pytest.fail(error)))
+    message = JointState()
+    message.name = list(JOINT_NAMES)
+    message.position = [0.] * 6
+    message.velocity = [0.] * 6
+    message.header.stamp = RosTime(sec=123, nanosec=456)
+    HexArmBridge._on_ros_command(bridge, message)
+    assert len(commands) == 1
+    command = pb.JointTrajectory.FromString(commands[0])
+    assert command.session_id == 42
+    assert command.t_from_start_ns == [10_000_000]
+    assert command.on_timeout == pb.TIMEOUT_BEHAVIOR_FAULT
+    assert command.HasField("header") == trace_enabled
+    if trace_enabled:
+        assert command.header.seq == 1
+        assert command.header.stamp_ns > 0
+        assert events == [("python_receive", 1, 42, 123_000_000_456),
+                          ("zenoh_put", 1, 42, 123_000_000_456)]
+    else:
+        assert events == []

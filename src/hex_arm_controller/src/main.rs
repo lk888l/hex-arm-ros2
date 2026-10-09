@@ -50,6 +50,7 @@ async fn main() -> Result<()> {
         )
         .init();
     let arguments = Arguments::parse();
+    hex_arm_controller::trace::init();
     if !arguments.validate_profile_only {
         hex_arm_controller::shutdown_report::write(
             arguments.shutdown_report.as_deref(),
@@ -123,7 +124,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    run_normal_control(&arguments, profile, dynamics).await
+    let result = run_normal_control(&arguments, profile, dynamics).await;
+    hex_arm_controller::trace::flush();
+    result
 }
 
 async fn shutdown_with_report(runtime: &ArmRuntime, path: Option<&std::path::Path>) -> Result<()> {
@@ -186,16 +189,18 @@ async fn run_normal_control(
         return combine_operation_and_cleanup("controller initialization", Err(error), shutdown);
     }
 
-    let protocol_tasks = match async {
+    let mut protocol_tasks = match tokio::select! {
+        signal = termination_signals.received() => Err(anyhow::anyhow!("API startup interrupted: {:?}", signal)),
+        result = async {
         let urdf_xml = std::fs::read_to_string(&profile.urdf_path).context("read URDF resource")?;
         protocol::serve(session, runtime.clone(), urdf_xml).await
-    }
-    .await
-    {
+        } => result,
+    } {
         Ok(tasks) => tasks,
         Err(error) => {
             runtime.begin_shutdown();
-            let shutdown = runtime.shutdown().await;
+            let shutdown =
+                shutdown_with_report(&runtime, arguments.shutdown_report.as_deref()).await;
             return combine_operation_and_cleanup("controller API startup", Err(error), shutdown);
         }
     };
@@ -207,6 +212,7 @@ async fn run_normal_control(
         signal = termination_signals.received() => signal.map(|signal| {
             tracing::info!(%signal, "controller termination signal received");
         }),
+        error = protocol_tasks.wait_for_failure() => Err(error),
         outcome = &mut control_task => {
             joined_control = Some(outcome);
             Err(anyhow::anyhow!("control loop exited unexpectedly"))
@@ -400,6 +406,50 @@ mod tests {
             "--validate-profile-only"
         ])
         .is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn api_startup_failure_still_writes_confirmed_disable_receipt() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let profile = Arc::new(
+            HardwareProfile::from_path_with_urdf(
+                manifest.join("test/firefly_y6.mock.yaml"),
+                Some(&manifest.join("../xpkg_urdf_firefly_y6/urdf/xpkg_urdf_firefly_y6.urdf")),
+            )
+            .unwrap(),
+        );
+        let dynamics = load_profile_dynamics(&profile).unwrap();
+        let runtime = Arc::new(ArmRuntime::new(
+            profile,
+            Arc::new(MockBackend::new()),
+            dynamics,
+        ));
+        runtime.initialize().await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let receipt = directory.path().join("driver-shutdown.json");
+        hex_arm_controller::shutdown_report::write(Some(&receipt), "starting", None).unwrap();
+        let mut config = zenoh::Config::default();
+        config
+            .insert_json5("scouting/multicast/enabled", "false")
+            .unwrap();
+        config.insert_json5("listen/endpoints", "[]").unwrap();
+        let session = zenoh::open(config).await.unwrap();
+        session.close().await.unwrap();
+        let operation = match protocol::serve(session, runtime.clone(), String::new()).await {
+            Ok(_) => panic!("closed transport accepted API startup"),
+            Err(error) => error,
+        };
+        runtime.begin_shutdown();
+        let cleanup = shutdown_with_report(&runtime, Some(&receipt)).await;
+        assert!(
+            combine_operation_and_cleanup("controller API startup", Err(operation), cleanup)
+                .is_err()
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+        assert_eq!(report["state"], "disabled_confirmed");
+        assert_eq!(report["pid"], std::process::id());
+        assert!(report["error"].is_null());
     }
 
     #[test]

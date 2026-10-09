@@ -11,6 +11,9 @@ export PYTHONDONTWRITEBYTECODE=1
 
 case "${level}" in
   unit|legacy)
+    python3 scripts/test-runtime-packaging.py
+    python3 scripts/test-transport-benchmark.py
+    bash scripts/test-supervised-real-launch.sh
     python3 scripts/test-shutdown-ack.py
     python3 scripts/test-read-cia402-state.py
     python3 scripts/test-calibrate-zero.py

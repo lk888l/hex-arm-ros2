@@ -150,6 +150,11 @@ new_real_launch_token() {
 run_supervised_real_launch() {
   local launch_token real_exec_pid real_exec_status wait_status second_wait_status
   local requested_signal relay_attempted relay_status trap_count wait_trap_count
+  local -a trace_environment=()
+
+  if [[ -n "${HEX_ARM_TRACE_DIR:-}" ]]; then
+    trace_environment=(-e "HEX_ARM_TRACE_DIR=${HEX_ARM_TRACE_DIR}")
+  fi
 
   command -v setsid >/dev/null || {
     echo "error: setsid is required for reliable host-to-container signal forwarding" >&2
@@ -215,6 +220,7 @@ run_supervised_real_launch() {
   # the shell trap remains the only Ctrl-C recipient. `-w` keeps this wrapper
   # alive until the original exec returns after container-side verification.
   setsid -w "${compose[@]}" exec -T \
+    "${trace_environment[@]}" \
     -e HEX_ARM_CAN_IFACE="${can_interface}" \
     -e HEX_ARM_CAN_SERIAL="${can_serial}" \
     -e HEX_ARM_CAN_CHANNEL="${can_channel}" \

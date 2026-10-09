@@ -357,6 +357,7 @@ MoveIt 检查碰撞，轨迹控制器检查跟踪误差，Rust 负责总线、�
 | [图形界面与命令行模拟](docs/gui_and_cli_simulation_cn.md) | GUI 排查、action 与 Python 示例 |
 | [Docker 开发环境](docs/docker_development_cn.md) | Compose、NVIDIA 安装与 WSL2 |
 | [运行架构与迁移](docs/architecture_refactor_cn.md) | 模块职责、构建与独立部署 |
+| [运行架构、测量与发布验证](docs/runtime_optimization_cn.md) | 状态竞争修复、通信采集及 MoveIt 升级契约 |
 | [当前实机状态与后续优化](docs/commissioning_cn.md) | 历史调试过程与后续计划 |
 | [旧版 CiA402 部署](docs/cia402_deployment_cn.md) | 升级前固件的部署与验收 |
 | [验收记录索引](docs/commissioning_evidence/README.md) | 各轮试验结果与原始证据 |

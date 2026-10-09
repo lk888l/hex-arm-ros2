@@ -156,6 +156,16 @@ hardware_interface::CallbackReturn HexArmSystem::on_configure(
     command_topic_, rclcpp::QoS(1).reliable());
   command_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(command_endpoint_);
+  // Keep names, vector sizes and capacities stable in the periodic write path.
+  command_publisher_->msg_.name = joint_names_;
+  command_publisher_->msg_.position.resize(joint_names_.size());
+  command_publisher_->msg_.velocity.resize(joint_names_.size());
+  command_publisher_->msg_.effort.assign(joint_names_.size(), 0.0);
+  try {
+    trace_.start();
+  } catch (const std::exception & error) {
+    RCLCPP_WARN(io_node_->get_logger(), "transport trace disabled: %s", error.what());
+  }
   activate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(activate_service_);
   deactivate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(deactivate_service_);
   stop_io_.store(false);
@@ -215,6 +225,7 @@ hardware_interface::CallbackReturn HexArmSystem::on_activate(
     return hardware_interface::CallbackReturn::ERROR;
   }
   active_.store(true);
+  activation_generation_.fetch_add(1, std::memory_order_relaxed);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -248,6 +259,11 @@ hardware_interface::return_type HexArmSystem::read(const rclcpp::Time &, const r
     hw_position_ = pending_position_;
     hw_velocity_ = pending_velocity_;
     hw_effort_ = pending_effort_;
+    if (trace_.enabled()) {
+      // Record the feedback actually copied by the controller cycle. DDS
+      // reception alone does not establish that this sample was consumed.
+      trace_.emit("cxx_read", 0, activation_generation_.load(), pending_state_stamp_ns_);
+    }
   }
   return hardware_interface::return_type::OK;
 }
@@ -267,20 +283,33 @@ hardware_interface::return_type HexArmSystem::write(const rclcpp::Time &, const 
     return hardware_interface::return_type::ERROR;
   }
 
+  const auto sequence = ++command_sequence_;
+  const auto stamp = io_node_->now();
+  const auto generation = activation_generation_.load(std::memory_order_relaxed);
+  trace_.emit("cxx_write", sequence, generation, stamp.nanoseconds());
   if (command_publisher_ && command_publisher_->trylock()) {
     auto & message = command_publisher_->msg_;
-    message.header.stamp = io_node_->now();
-    message.name = joint_names_;
-    message.position = command_position_;
-    message.velocity = command_velocity_;
-    message.effort.assign(joint_names_.size(), 0.0);
+    message.header.stamp = stamp;
+    std::copy(command_position_.begin(), command_position_.end(), message.position.begin());
+    std::copy(command_velocity_.begin(), command_velocity_.end(), message.velocity.begin());
     command_publisher_->unlockAndPublish();
+    // This is the realtime-publisher handoff, not completion of DDS delivery.
+    trace_.emit("cxx_publish", sequence, generation, stamp.nanoseconds());
+  } else {
+    skipped_command_publications_.fetch_add(1, std::memory_order_relaxed);
+    trace_.emit("cxx_skip", sequence, generation, stamp.nanoseconds());
   }
   return hardware_interface::return_type::OK;
 }
 
 void HexArmSystem::receive_state(sensor_msgs::msg::JointState::ConstSharedPtr message)
 {
+  std::int64_t source_stamp = 0;
+  if (trace_.enabled()) {
+    source_stamp = static_cast<std::int64_t>(message->header.stamp.sec) *
+      1000000000LL + message->header.stamp.nanosec;
+    trace_.emit("cxx_state_receive", 0, activation_generation_.load(), source_stamp);
+  }
   std::vector<double> position;
   std::vector<double> velocity;
   std::vector<double> effort;
@@ -295,6 +324,7 @@ void HexArmSystem::receive_state(sensor_msgs::msg::JointState::ConstSharedPtr me
     pending_position_ = std::move(position);
     pending_velocity_ = std::move(velocity);
     pending_effort_ = std::move(effort);
+    pending_state_stamp_ns_ = source_stamp;
     last_state_time_ = std::chrono::steady_clock::now();
     have_state_ = true;
   }
@@ -362,6 +392,9 @@ void HexArmSystem::stop_io_thread()
   if (executor_ && io_node_) {
     executor_->remove_node(io_node_);
   }
+  if (!trace_.stop() && io_node_) {
+    RCLCPP_WARN(io_node_->get_logger(), "transport trace drain timed out; incomplete CSV retained");
+  }
   deactivate_client_.reset();
   activate_client_.reset();
   command_publisher_.reset();
@@ -372,6 +405,7 @@ void HexArmSystem::stop_io_thread()
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     have_state_ = false;
+    pending_state_stamp_ns_ = 0;
   }
   state_condition_.notify_all();
 }

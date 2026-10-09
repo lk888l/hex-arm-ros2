@@ -397,3 +397,21 @@ def test_startup_event_requires_a_successful_profile_bound_report(tmp_path):
                for action in handler(SimpleNamespace(returncode=0), context))
     assert any(isinstance(action, EmitEvent) and isinstance(action.event, module.Shutdown)
                for action in handler(SimpleNamespace(returncode=1), context))
+
+
+def test_bridge_command_and_snapshot_period_follow_controller_rate(tmp_path):
+    module = _load_launch_module()
+    config = tmp_path / "controllers.yaml"
+    config.write_text("controller_manager: {ros__parameters: {update_rate: 250}}\n")
+    rate = module._controller_update_rate(config)
+    parameters = module._bridge_parameters({"robot_prefix": "test/arm"}, "tcp/localhost:7448", 30.0, rate)
+    assert parameters["command_period_sec"] == 0.004
+    assert parameters["stream_period_sec"] == parameters["command_period_sec"]
+    for invalid in ("0", "-1", "true", "2.5", "null"):
+        config.write_text("controller_manager: {ros__parameters: {update_rate: " + invalid + "}}\n")
+        try:
+            module._controller_update_rate(config)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"invalid controller rate was accepted: {invalid}")

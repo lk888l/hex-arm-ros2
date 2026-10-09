@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "build_image": "hex-arm-jazzy@sha256:2689cd5b16b4ee3b9347387b9d287e51aadc4ac79f242fdca87d0ca57796cd33",
+  "abi": {"moveit": "2.12.4", "rclcpp": "28.1.21"},
+  "review": "Installed ABI checked against the custom runtime's strict CMake constraints; local image identity read from docker image inspect. Run scripts/verify-moveit-upgrade.sh for each proposed replacement before changing this record."
+}

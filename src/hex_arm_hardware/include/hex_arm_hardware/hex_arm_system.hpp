@@ -15,6 +15,7 @@
 #include "realtime_tools/realtime_publisher.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "hex_arm_hardware/transport_trace.hpp"
 
 namespace hex_arm_hardware
 {
@@ -24,6 +25,8 @@ class HexArmSystem final : public hardware_interface::SystemInterface
 public:
   RCLCPP_SHARED_PTR_DEFINITIONS(HexArmSystem)
   ~HexArmSystem() override;
+  std::uint64_t skipped_command_publications() const
+  {return skipped_command_publications_.load(std::memory_order_relaxed);}
 
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareComponentInterfaceParams & params) override;
@@ -69,6 +72,8 @@ private:
   std::vector<double> pending_position_;
   std::vector<double> pending_velocity_;
   std::vector<double> pending_effort_;
+  // Trace-only identity, updated with the same lock as accepted feedback.
+  std::int64_t pending_state_stamp_ns_{0};
   std::chrono::steady_clock::time_point last_state_time_{};
   bool have_state_{false};
 
@@ -90,6 +95,10 @@ private:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr activate_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr deactivate_client_;
   std::atomic_bool active_{false};
+  std::atomic<std::uint64_t> skipped_command_publications_{0};
+  std::uint64_t command_sequence_{0};
+  std::atomic<std::uint64_t> activation_generation_{0};
+  TransportTrace trace_;
 };
 
 }  // namespace hex_arm_hardware
