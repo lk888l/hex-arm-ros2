@@ -8,13 +8,14 @@ Run the commands from the built and sourced container workspace `/workspaces/hex
 
 The dedicated `gravity_comp.launch.py` provides measured-pose gravity compensation with
 zero position stiffness and configurable joint damping. It starts no trajectory controller,
-MoveIt process or unfolding sequence. Stop other arm controllers before using it.
+MoveIt process or unfolding sequence. The ros2_control hardware remains INACTIVE
+and supplies feedback and diagnostics through the direct C++ transport. Stop other arm controllers before using it.
 ## Startup
 
-Build the three affected packages and source the workspace inside the container:
+Build the bringup dependency chain and source the workspace inside the container:
 
 ```bash
-./scripts/build.sh --packages-select hex_arm_controller hex_arm_bridge hex_arm_bringup
+./scripts/build.sh --packages-up-to hex_arm_bringup
 source install/setup.bash
 ros2 launch hex_arm_bringup gravity_comp.launch.py \
   hardware_profile:=/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.hand_guiding_full_range.local.yaml \

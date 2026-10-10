@@ -46,6 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir --break-system-packages eclipse-zenoh==1.9.0
+COPY scripts/install-zenoh-cpp.py /tmp/install-zenoh-cpp.py
+RUN python3 /tmp/install-zenoh-cpp.py --prefix /opt/hex-arm-zenoh
+ENV CMAKE_PREFIX_PATH=/opt/hex-arm-zenoh
 
 ENV RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \

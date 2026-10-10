@@ -25,7 +25,7 @@ class RuntimePackagingTest(unittest.TestCase):
         self.prefix = Path(self.directory.name) / "install"
         for relative in install.REQUIRED:
             self.write(relative)
-        self.write("lib/python3.12/site-packages/hex_arm_bridge/pb/robot_api_pb2.py")
+        self.write("lib/python3.12/site-packages/hex_arm_tools/pb/robot_api_pb2.py")
         self.write("share/hex_arm_moveit_config/config/joint_limits_commissioning.yaml")
         build_inputs = {"base_image": "reviewed-base"}
         self.write("share/hex_arm_runtime/build-manifest.json",
@@ -38,6 +38,11 @@ class RuntimePackagingTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value)
         return path
+
+    def test_removed_bridge_artifacts_rejected(self):
+        self.write("lib/hex_arm_bridge/hex_arm_bridge")
+        with self.assertRaisesRegex(RuntimeError, "removed bridge"):
+            install.check(self.prefix)
 
     def test_complete_install(self):
         install.check(self.prefix)

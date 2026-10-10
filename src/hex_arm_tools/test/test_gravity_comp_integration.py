@@ -12,8 +12,8 @@ from ament_index_python.packages import get_package_prefix
 import pytest
 import zenoh
 
-from hex_arm_bridge.gravity_comp import GravityCompClient
-from hex_arm_bridge.pb import robot_api_pb2 as pb
+from hex_arm_tools.gravity_comp import GravityCompClient
+from hex_arm_tools.pb import robot_api_pb2 as pb
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -39,7 +39,7 @@ def test_actual_ros_owner_shutdown_crash_and_freeze(tmp_path, owner_signal):
         port = sock.getsockname()[1]
     endpoint = f"tcp/127.0.0.1:{port}"
     driver_bin = Path(get_package_prefix("hex_arm_controller")) / "lib/hex_arm_controller/hex_arm_controller"
-    owner_bin = Path(get_package_prefix("hex_arm_bridge")) / "lib/hex_arm_bridge/hex_arm_gravity_comp"
+    owner_bin = Path(get_package_prefix("hex_arm_tools")) / "lib/hex_arm_tools/hex_arm_gravity_comp"
     report = tmp_path / "shutdown.json"
     driver = owner = session = subscriber = None
     states = queue.Queue()

@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "hex_arm_hardware/joint_mapping.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace hex_arm_hardware
@@ -82,10 +81,14 @@ hardware_interface::CallbackReturn HexArmSystem::on_init(
       joint_names_.push_back(joint.name);
     }
 
-    command_topic_ = parameter_or(info_, "command_topic", command_topic_);
-    state_topic_ = parameter_or(info_, "state_topic", state_topic_);
-    activate_service_ = parameter_or(info_, "activate_service", activate_service_);
-    deactivate_service_ = parameter_or(info_, "deactivate_service", deactivate_service_);
+    zenoh_options_.endpoint = parameter_or(info_, "zenoh_connect", zenoh_options_.endpoint);
+    zenoh_options_.prefix = parameter_or(info_, "robot_prefix", zenoh_options_.prefix);
+    zenoh_options_.command_period = parse_positive_parameter(info_, "command_period_sec", 0.01);
+    zenoh_options_.command_max_age = parse_positive_parameter(info_, "command_max_age_sec", 0.05);
+    zenoh_options_.startup_timeout = parse_positive_parameter(info_, "startup_timeout_sec", 30.0);
+    if (zenoh_options_.command_max_age > 0.05) {
+      throw std::invalid_argument("command_max_age_sec must not exceed 0.05 s");
+    }
     state_timeout_ = std::chrono::duration<double>(
       parse_positive_parameter(info_, "state_timeout_sec", state_timeout_.count()));
     activation_timeout_ = std::chrono::duration<double>(
@@ -103,9 +106,10 @@ hardware_interface::CallbackReturn HexArmSystem::on_init(
   hw_effort_.assign(count, 0.0);
   command_position_.assign(count, 0.0);
   command_velocity_.assign(count, 0.0);
-  pending_position_.assign(count, 0.0);
-  pending_velocity_.assign(count, 0.0);
-  pending_effort_.assign(count, 0.0);
+  zenoh_options_.joint_names = joint_names_;
+  zenoh_options_.state_timeout = state_timeout_.count();
+  zenoh_options_.service_timeout = service_timeout_.count();
+  RCLCPP_INFO(rclcpp::get_logger("HexArmSystem"), "communication: direct Zenoh");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -149,29 +153,19 @@ hardware_interface::CallbackReturn HexArmSystem::on_configure(
   executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
   executor_->add_node(io_node_);
 
-  state_subscription_ = io_node_->create_subscription<sensor_msgs::msg::JointState>(
-    state_topic_, rclcpp::SensorDataQoS(),
-    std::bind(&HexArmSystem::receive_state, this, std::placeholders::_1));
-  command_endpoint_ = io_node_->create_publisher<sensor_msgs::msg::JointState>(
-    command_topic_, rclcpp::QoS(1).reliable());
-  command_publisher_ =
-    std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(command_endpoint_);
-  // Keep names, vector sizes and capacities stable in the periodic write path.
-  command_publisher_->msg_.name = joint_names_;
-  command_publisher_->msg_.position.resize(joint_names_.size());
-  command_publisher_->msg_.velocity.resize(joint_names_.size());
-  command_publisher_->msg_.effort.assign(joint_names_.size(), 0.0);
   try {
     trace_.start();
+    direct_ = std::make_unique<ZenohTransport>(zenoh_options_, io_node_,
+      feedback_mailbox_, command_mailbox_, trace_);
   } catch (const std::exception & error) {
-    RCLCPP_WARN(io_node_->get_logger(), "transport trace disabled: %s", error.what());
+    RCLCPP_ERROR(io_node_->get_logger(), "transport configuration failed: %s", error.what());
+    stop_io_thread();
+    return hardware_interface::CallbackReturn::ERROR;
   }
-  activate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(activate_service_);
-  deactivate_client_ = io_node_->create_client<std_srvs::srv::Trigger>(deactivate_service_);
   stop_io_.store(false);
   executor_thread_ = std::thread([this]() {
       while (!stop_io_.load() && rclcpp::ok(io_node_->get_node_base_interface()->get_context())) {
-        executor_->spin_once(std::chrono::milliseconds(20));
+        executor_->spin_once(std::chrono::milliseconds(1));
       }
     });
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -181,18 +175,16 @@ hardware_interface::CallbackReturn HexArmSystem::on_cleanup(
   const rclcpp_lifecycle::State &)
 {
   active_.store(false);
+  const bool stopped = !direct_ || direct_->deactivate();
   stop_io_thread();
-  return hardware_interface::CallbackReturn::SUCCESS;
+  return stopped ? hardware_interface::CallbackReturn::SUCCESS : hardware_interface::CallbackReturn::ERROR;
 }
 
 hardware_interface::CallbackReturn HexArmSystem::on_shutdown(
   const rclcpp_lifecycle::State &)
 {
-  const bool was_active = active_.exchange(false);
-  bool stopped = true;
-  if (was_active && io_node_ && rclcpp::ok(io_node_->get_node_base_interface()->get_context())) {
-    stopped = call_safety_service(deactivate_client_, "shutdown", false);
-  }
+  active_.store(false);
+  const bool stopped = !direct_ || direct_->deactivate();
   stop_io_thread();
   return stopped ? hardware_interface::CallbackReturn::SUCCESS :
          hardware_interface::CallbackReturn::ERROR;
@@ -201,31 +193,25 @@ hardware_interface::CallbackReturn HexArmSystem::on_shutdown(
 hardware_interface::CallbackReturn HexArmSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
-  {
-    std::unique_lock<std::mutex> lock(state_mutex_);
-    const bool have_fresh_state = state_condition_.wait_for(
-      lock, activation_timeout_, [this]() {
-        // DDS matching must precede motor enable and the 100 ms watchdog.
-        return command_endpoint_ && command_endpoint_->get_subscription_count() > 0 &&
-               have_state_ &&
-               (std::chrono::steady_clock::now() - last_state_time_) <= state_timeout_;
-      });
-    if (!have_fresh_state) {
-      RCLCPP_ERROR(
-        io_node_->get_logger(),
-        "activation rejected: fresh six-joint feedback and matched command subscriber required within %.3f s",
-        activation_timeout_.count());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    command_position_ = pending_position_;
-    std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
+  FeedbackSnapshot snapshot;
+  const auto deadline = std::chrono::steady_clock::now() + activation_timeout_;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (feedback_mailbox_.load(snapshot) && snapshot.received_ns &&
+      static_cast<double>(monotonic_ns() - snapshot.received_ns) * 1e-9 <= state_timeout_.count()) {break;}
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
-  RCLCPP_INFO(io_node_->get_logger(), "Feedback fresh and command subscriber matched; requesting enable");
-  if (!call_safety_service(activate_client_, "activate")) {
+  if (!direct_ || !snapshot.received_ns || !state_is_fresh())
+  {
+    RCLCPP_ERROR(io_node_->get_logger(), "activation requires fresh feedback and command transport");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  std::copy(snapshot.position.begin(), snapshot.position.end(), command_position_.begin());
+  std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
+  const auto generation = activation_generation_.fetch_add(1) + 1;
+  if (!direct_->activate(generation)) {
     return hardware_interface::CallbackReturn::ERROR;
   }
   active_.store(true);
-  activation_generation_.fetch_add(1, std::memory_order_relaxed);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -233,7 +219,7 @@ hardware_interface::CallbackReturn HexArmSystem::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
   active_.store(false);
-  return call_safety_service(deactivate_client_, "deactivate", false) ?
+  return (!direct_ || direct_->deactivate()) ?
          hardware_interface::CallbackReturn::SUCCESS : hardware_interface::CallbackReturn::ERROR;
 }
 
@@ -241,143 +227,52 @@ hardware_interface::CallbackReturn HexArmSystem::on_error(
   const rclcpp_lifecycle::State &)
 {
   active_.store(false);
-  (void)call_safety_service(deactivate_client_, "error stop", false);
+  if (direct_) {(void)direct_->deactivate();}
   stop_io_thread();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::return_type HexArmSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
-  if (active_.load() && !state_is_fresh()) {
-    RCLCPP_ERROR_THROTTLE(
-      io_node_->get_logger(), *io_node_->get_clock(), 1000,
-      "feedback older than %.3f s", state_timeout_.count());
-    return hardware_interface::return_type::ERROR;
-  }
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (have_state_) {
-    hw_position_ = pending_position_;
-    hw_velocity_ = pending_velocity_;
-    hw_effort_ = pending_effort_;
-    if (trace_.enabled()) {
-      // Record the feedback actually copied by the controller cycle. DDS
-      // reception alone does not establish that this sample was consumed.
-      trace_.emit("cxx_read", 0, activation_generation_.load(), pending_state_stamp_ns_);
-    }
+  (void)feedback_mailbox_.load(read_snapshot_);
+  if (active_.load() && ((!read_snapshot_.received_ns ||
+    static_cast<double>(monotonic_ns() - read_snapshot_.received_ns) * 1e-9 > state_timeout_.count()) ||
+    (!direct_ || !direct_->allowed()))) {return hardware_interface::return_type::ERROR;}
+  if (read_snapshot_.received_ns) {
+    std::copy(read_snapshot_.position.begin(), read_snapshot_.position.end(), hw_position_.begin());
+    std::copy(read_snapshot_.velocity.begin(), read_snapshot_.velocity.end(), hw_velocity_.begin());
+    std::copy(read_snapshot_.effort.begin(), read_snapshot_.effort.end(), hw_effort_.begin());
+    trace_.emit("direct_read", read_snapshot_.sequence,
+      activation_generation_.load(), read_snapshot_.source_stamp_ns);
   }
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type HexArmSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
-  if (!active_.load()) {
-    return hardware_interface::return_type::OK;
-  }
-  if (!std::all_of(command_position_.begin(), command_position_.end(), [](double value) {
-      return std::isfinite(value);
+  if (!active_.load()) {return hardware_interface::return_type::OK;}
+  if ((!direct_ || !direct_->allowed()) ||
+    !std::all_of(command_position_.begin(), command_position_.end(), [](double value) {
+      return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
     }) || !std::all_of(command_velocity_.begin(), command_velocity_.end(), [](double value) {
-      return std::isfinite(value);
-    }))
-  {
-    RCLCPP_ERROR(io_node_->get_logger(), "non-finite controller command rejected");
-    return hardware_interface::return_type::ERROR;
-  }
-
-  const auto sequence = ++command_sequence_;
-  const auto stamp = io_node_->now();
-  const auto generation = activation_generation_.load(std::memory_order_relaxed);
-  trace_.emit("cxx_write", sequence, generation, stamp.nanoseconds());
-  if (command_publisher_ && command_publisher_->trylock()) {
-    auto & message = command_publisher_->msg_;
-    message.header.stamp = stamp;
-    std::copy(command_position_.begin(), command_position_.end(), message.position.begin());
-    std::copy(command_velocity_.begin(), command_velocity_.end(), message.velocity.begin());
-    command_publisher_->unlockAndPublish();
-    // This is the realtime-publisher handoff, not completion of DDS delivery.
-    trace_.emit("cxx_publish", sequence, generation, stamp.nanoseconds());
-  } else {
-    skipped_command_publications_.fetch_add(1, std::memory_order_relaxed);
-    trace_.emit("cxx_skip", sequence, generation, stamp.nanoseconds());
-  }
+      return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+    })) {return hardware_interface::return_type::ERROR;}
+  CommandSnapshot command;
+  std::copy(command_position_.begin(), command_position_.end(), command.position.begin());
+  std::copy(command_velocity_.begin(), command_velocity_.end(), command.velocity.begin());
+  command.sequence = ++command_sequence_;
+  command.generation = activation_generation_.load();
+  command.created_ns = monotonic_ns();
+  command_mailbox_.store(command);
+  trace_.emit("cxx_write", command.sequence, command.generation, command.created_ns);
   return hardware_interface::return_type::OK;
-}
-
-void HexArmSystem::receive_state(sensor_msgs::msg::JointState::ConstSharedPtr message)
-{
-  std::int64_t source_stamp = 0;
-  if (trace_.enabled()) {
-    source_stamp = static_cast<std::int64_t>(message->header.stamp.sec) *
-      1000000000LL + message->header.stamp.nanosec;
-    trace_.emit("cxx_state_receive", 0, activation_generation_.load(), source_stamp);
-  }
-  std::vector<double> position;
-  std::vector<double> velocity;
-  std::vector<double> effort;
-  if (!reorder_joint_state(*message, joint_names_, position, velocity, effort)) {
-    RCLCPP_ERROR_THROTTLE(
-      io_node_->get_logger(), *io_node_->get_clock(), 1000,
-      "invalid or incomplete joint feedback rejected");
-    return;
-  }
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    pending_position_ = std::move(position);
-    pending_velocity_ = std::move(velocity);
-    pending_effort_ = std::move(effort);
-    pending_state_stamp_ns_ = source_stamp;
-    last_state_time_ = std::chrono::steady_clock::now();
-    have_state_ = true;
-  }
-  state_condition_.notify_all();
-}
-
-bool HexArmSystem::call_safety_service(
-  const rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr & client,
-  const std::string & operation, bool wait_for_discovery)
-{
-  if (!client || !io_node_) {
-    return false;
-  }
-  const auto context = io_node_->get_node_base_interface()->get_context();
-  const auto deadline = std::chrono::steady_clock::now() + service_timeout_;
-  while (rclcpp::ok(context) && !client->service_is_ready()) {
-    // Discovery belongs to activation. A vanished stop service cannot
-    // acknowledge disable; fail promptly so the independent Rust owner and
-    // supervisor can finish shutdown, including lifecycle error recovery.
-    if (!wait_for_discovery || std::chrono::steady_clock::now() >= deadline) {
-      RCLCPP_ERROR(io_node_->get_logger(), "%s service unavailable", operation.c_str());
-      return false;
-    }
-    client->wait_for_service(std::chrono::milliseconds(20));
-  }
-  if (!rclcpp::ok(context)) {
-    return false;
-  }
-  auto future = client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
-  while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
-    // SIGINT stops the ROS executor as well. Waiting the full RPC deadline
-    // here can deadlock controller-manager teardown until SIGKILL escalation.
-    const bool service_gone = !client->service_is_ready();
-    if (!rclcpp::ok(context) || service_gone || std::chrono::steady_clock::now() >= deadline) {
-      client->remove_pending_request(future);
-      if (rclcpp::ok(context)) {
-        RCLCPP_ERROR(io_node_->get_logger(), "%s service %s", operation.c_str(),
-          service_gone ? "disappeared while waiting" : "timed out");
-      }
-      return false;
-    }
-  }
-  const auto response = future.get();
-  if (!response->success) {
-    RCLCPP_ERROR(io_node_->get_logger(), "%s rejected: %s", operation.c_str(), response->message.c_str());
-  }
-  return response->success;
 }
 
 bool HexArmSystem::state_is_fresh() const
 {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  return have_state_ && (std::chrono::steady_clock::now() - last_state_time_) <= state_timeout_;
+  FeedbackSnapshot snapshot;
+  return feedback_mailbox_.load(snapshot) && snapshot.received_ns &&
+         static_cast<double>(monotonic_ns() - snapshot.received_ns) * 1e-9 <= state_timeout_.count();
 }
 
 void HexArmSystem::stop_io_thread()
@@ -392,22 +287,15 @@ void HexArmSystem::stop_io_thread()
   if (executor_ && io_node_) {
     executor_->remove_node(io_node_);
   }
+  direct_.reset();
   if (!trace_.stop() && io_node_) {
     RCLCPP_WARN(io_node_->get_logger(), "transport trace drain timed out; incomplete CSV retained");
   }
-  deactivate_client_.reset();
-  activate_client_.reset();
-  command_publisher_.reset();
-  command_endpoint_.reset();
-  state_subscription_.reset();
   executor_.reset();
   io_node_.reset();
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    have_state_ = false;
-    pending_state_stamp_ns_ = 0;
-  }
-  state_condition_.notify_all();
+  feedback_mailbox_.reset();
+  command_mailbox_.reset();
+  read_snapshot_ = FeedbackSnapshot{};
 }
 
 }  // namespace hex_arm_hardware

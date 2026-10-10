@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(hex_arm_bridge VERSION 0.1.0 LANGUAGES CXX)
+project(hex_arm_tools VERSION 0.1.0 LANGUAGES CXX)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
@@ -26,12 +26,11 @@ add_custom_target(${PROJECT_NAME}_protobuf ALL DEPENDS "${generated_python}")
 ament_python_install_package(${PROJECT_NAME})
 install(FILES "${generated_python}"
   DESTINATION "${PYTHON_INSTALL_DIR}/${PROJECT_NAME}/pb")
-install(PROGRAMS scripts/hex_arm_bridge scripts/hex_arm_gravity_comp
+install(PROGRAMS scripts/hex_arm_gravity_comp
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(bridge_contract test/test_bridge_contract.py TIMEOUT 60)
   ament_add_pytest_test(gravity_comp_client test/test_gravity_comp.py TIMEOUT 30)
   ament_add_pytest_test(gravity_comp_integration test/test_gravity_comp_integration.py TIMEOUT 60)
 endif()

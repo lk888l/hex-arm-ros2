@@ -7,7 +7,7 @@ import signal
 import threading
 import time
 
-from hex_arm_bridge.pb import robot_api_pb2 as pb
+from hex_arm_tools.pb import robot_api_pb2 as pb
 
 
 def validate_damping(values):

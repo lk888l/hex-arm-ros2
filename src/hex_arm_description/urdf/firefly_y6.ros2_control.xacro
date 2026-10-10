@@ -1,17 +1,18 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="firefly_y6_ros2_control" params="backend initial_positions state_timeout_sec:=0.100 activation_timeout_sec:=5.0">
+  <xacro:macro name="firefly_y6_ros2_control" params="backend initial_positions state_timeout_sec:=0.100 activation_timeout_sec:=5.0 zenoh_connect:='tcp/127.0.0.1:7448' robot_prefix:='hexmeow/ubuntu/firefly_y6_meow' command_period_sec:=0.01 startup_timeout_sec:=30.0">
     <ros2_control name="FireflyY6System" type="system">
       <hardware>
         <xacro:if value="${backend == 'real'}">
           <plugin>hex_arm_hardware/HexArmSystem</plugin>
-          <param name="command_topic">/hex_arm/internal/command</param>
-          <param name="state_topic">/hex_arm/internal/state</param>
-          <param name="activate_service">/hex_arm_bridge/activate_hardware</param>
-          <param name="deactivate_service">/hex_arm_bridge/deactivate_hardware</param>
+          <param name="zenoh_connect">${zenoh_connect}</param>
+          <param name="robot_prefix">${robot_prefix}</param>
+          <param name="command_period_sec">${command_period_sec}</param>
+          <param name="startup_timeout_sec">${startup_timeout_sec}</param>
+          <param name="command_max_age_sec">0.05</param>
           <param name="state_timeout_sec">${state_timeout_sec}</param>
           <param name="activation_timeout_sec">${activation_timeout_sec}</param>
-          <!-- Must exceed the bridge's 5 s serialized six-axis transition timeout. -->
+          <!-- Must exceed the driver's 5 s serialized six-axis transition timeout. -->
           <param name="service_timeout_sec">10.0</param>
         </xacro:if>
         <xacro:if value="${backend == 'mock'}">

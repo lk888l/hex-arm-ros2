@@ -306,8 +306,7 @@ MoveIt executes through the standard `control_msgs/action/FollowJointTrajectory`
 ```text
 MoveIt
   -> ros2_control / firefly_arm_controller (100 Hz)
-  -> hex_arm_hardware (C++)
-  -> hex_arm_bridge (Python, ROS <-> Zenoh / Protobuf)
+  -> hex_arm_hardware (C++, non-realtime Zenoh / Protobuf transport)
   -> hex_arm_controller (Rust, 500 Hz)
   -> SocketCAN / CAN-FD / Meow MIT motors
 ```
@@ -317,6 +316,9 @@ interpolation, coordinate conversion, gravity compensation, and low-level protec
 See [architecture and migration (Chinese)](docs/architecture_refactor_cn.md) for module ownership,
 CiA402 support, and legacy tool builds.
 
+The control path uses direct C++ Zenoh exclusively; the Python bridge has been removed. See
+[direct transport setup and recovery (Chinese)](docs/zenoh_direct_transport_cn.md).
+
 ### Test levels
 
 Choose checks appropriate to the change, in a built and sourced container:
@@ -324,7 +326,7 @@ Choose checks appropriate to the change, in a built and sourced container:
 | Command | Scope |
 |---|---|
 | `./scripts/test.sh unit` | Hardware-free unit tests |
-| `./scripts/test.sh protocol` | Mock motors, Zenoh, and the ROS bridge |
+| `./scripts/test.sh protocol` | C++ direct plugin, Zenoh, and Rust mock fault scenarios |
 | `./scripts/test.sh mock` | Trajectory actions and controller lifecycle |
 | `./scripts/test.sh gz` | Headless Gazebo trajectories |
 | `python3 src/hex_arm_moveit_config/test/test_moveit_mock.py` | Headless MoveIt planning, collisions, and mock execution |
@@ -373,6 +375,7 @@ for action gating and shutdown log details.
 | [Docker development](docs/docker_development.md) | Compose, NVIDIA installation, and WSL2 |
 | [Architecture and migration (Chinese)](docs/architecture_refactor_cn.md) | Module ownership, builds, and standalone deployment |
 | [Runtime measurements and release validation (Chinese)](docs/runtime_optimization_cn.md) | State ownership, transport tracing, and MoveIt upgrade contract |
+| [Direct C++ Zenoh transport (Chinese)](docs/zenoh_direct_transport_cn.md) | Direct transport, bounded snapshots, command freshness, and full plugin benchmarks |
 | [Hardware state and next steps](docs/commissioning.md) | Historical tuning and development plan |
 | [Legacy CiA402 deployment (Chinese)](docs/cia402_deployment_cn.md) | Deployment and qualification before the firmware upgrade |
 | [Commissioning records](docs/commissioning_evidence/README.md) | Trial results and supporting evidence |

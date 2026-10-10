@@ -96,7 +96,7 @@ def test_public_launch_defaults_to_plan_only() -> None:
     )
     assert declarations["zenoh_connect"].description == (
         "Optional explicit Zenoh endpoint. Empty uses the deterministic "
-        "controller-to-bridge loopback endpoint tcp/127.0.0.1:7448."
+        "controller-to-client loopback endpoint tcp/127.0.0.1:7448."
     )
 
 
@@ -166,6 +166,15 @@ def test_plan_only_config_does_not_configure_a_controller_manager() -> None:
     assert execution["moveit_controller_manager"] == (
         "moveit_simple_controller_manager/MoveItSimpleControllerManager"
     )
+
+
+def test_moveit_cannot_publish_a_competing_hardware_description() -> None:
+    # ros2_control loads the first /robot_description message it receives.
+    # Only bringup's RSP has the selected transport, endpoint and profile prefix.
+    for enabled in (False, True):
+        config = _module()._build_moveit_config(enabled).to_dict()
+        assert config["publish_robot_description"] is False
+        assert config["publish_robot_description_semantic"] is True
 
 
 def test_execution_launch_builds_only_the_strict_semantic_model(monkeypatch) -> None:

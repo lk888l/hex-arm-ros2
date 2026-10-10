@@ -21,6 +21,27 @@ def write_trace(directory, name, rows):
 
 
 class TransportAnalysis(unittest.TestCase):
+    def test_direct_chain_preserves_sequence_and_counts_repeated_read_age(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_trace(directory, "direct.csv", [
+                (1_000_000, 1, "cxx_write", 7, 2, 55),
+                (2_000_000, 1, "direct_put", 7, 2, 55),
+                (3_000_000, 2, "rust_accept", 7, 1, 0),
+                (4_000_000, 2, "can_send", 7, 1, 0),
+                (5_000_000, 2, "rust_state_publish", 9, 0, 0),
+                (6_000_000, 1, "direct_state_receive", 9, 0, 77),
+                (7_000_000, 1, "direct_read", 9, 2, 77),
+                (17_000_000, 1, "direct_read", 9, 2, 77),
+            ])
+            report = benchmark.analyze_run(directory)
+            self.assertTrue(report["coverage"]["end_to_end"])
+            self.assertTrue(report["coverage"]["feedback_consumed"])
+            self.assertEqual(report["latencies"]["cxx_write->rust_accept"]["max_ms"], 2.)
+            self.assertEqual(report["latencies"]["cxx_write->can_send"]["max_ms"], 3.)
+            self.assertEqual(report["latencies"]["feedback_age_at_read"]["count"], 2)
+            self.assertEqual(report["latencies"]["feedback_age_at_read"]["max_ms"], 12.)
+
     def test_first_command_consumption_and_send_uses_shared_seq(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

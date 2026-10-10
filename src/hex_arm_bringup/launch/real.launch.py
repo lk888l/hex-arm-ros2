@@ -20,14 +20,13 @@ from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.events import Shutdown
 from launch.logging import launch_config
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import LifecycleNode, Node
-from launch_ros.event_handlers import OnStateTransition
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 from hex_arm_bringup.startup_event import StartupVerified
 
 
 DEFAULT_ZENOH_DIRECT_ENDPOINT = "tcp/127.0.0.1:7448"
-DEFAULT_BRIDGE_STARTUP_TIMEOUT_SEC = 30.0
+DEFAULT_HARDWARE_STARTUP_TIMEOUT_SEC = 30.0
 
 
 def _zenoh_routes(requested_connect):
@@ -56,20 +55,6 @@ def _controller_update_rate(controllers_path):
     if type(rate) is not int or rate <= 0:
         raise RuntimeError("controller_manager update_rate must be a positive integer")
     return rate
-
-
-def _bridge_parameters(profile, zenoh_connect, startup_timeout_sec, update_rate=100):
-    return {
-        "robot_prefix": profile["robot_prefix"],
-        "zenoh_connect": zenoh_connect,
-        "required_api_major": 0,
-        "command_period_sec": 1.0 / update_rate,
-        "stream_period_sec": 1.0 / update_rate,
-        # One deadline covers API discovery plus the first fresh state.  The
-        # six-axis CAN initialization measured about 16.3 s on the real arm,
-        # so the launch default deliberately leaves a conservative margin.
-        "startup_timeout_sec": startup_timeout_sec,
-    }
 
 
 def _shutdown_after_failure(step):
@@ -126,15 +111,6 @@ def _shutdown_actions(reason):
     return [LogInfo(msg=f"ERROR: {reason}"), EmitEvent(event=Shutdown(reason=reason))]
 
 
-def _guarded_shutdown(reason):
-    def _handler(context):
-        if context.is_shutdown:
-            return []
-        return _shutdown_actions(reason)
-
-    return OpaqueFunction(function=_handler)
-
-
 def _real_nodes(context):
     profile_path = Path(LaunchConfiguration("hardware_profile").perform(context))
     if not profile_path.is_file():
@@ -177,12 +153,12 @@ def _real_nodes(context):
         raise RuntimeError("enable transient allowance requires explicit Meow activation")
     if align_folded and (motor_protocol != "meow" or not activate_hardware):
         raise RuntimeError("align_folded requires explicit Meow activation")
-    controller_zenoh_args, bridge_zenoh_connect = _zenoh_routes(
+    controller_zenoh_args, client_zenoh_connect = _zenoh_routes(
         LaunchConfiguration("zenoh_connect").perform(context)
     )
-    bridge_startup_timeout_sec = _positive_seconds(
-        LaunchConfiguration("bridge_startup_timeout_sec").perform(context),
-        "bridge_startup_timeout_sec",
+    hardware_startup_timeout_sec = _positive_seconds(
+        LaunchConfiguration("hardware_startup_timeout_sec").perform(context),
+        "hardware_startup_timeout_sec",
     )
 
     if (profile.get("schema_version") != 3
@@ -209,7 +185,10 @@ def _real_nodes(context):
     real_commands = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers_real.yaml"])
     update_rate = _controller_update_rate(controllers.perform(context))
     description = {"robot_description": Command([
-        FindExecutable(name="xacro"), " ", xacro_file, " backend:=real controllers_file:=", controllers
+        FindExecutable(name="xacro"), " ", xacro_file, " backend:=real controllers_file:=", controllers,
+        " zenoh_connect:=", client_zenoh_connect,
+        " robot_prefix:=", profile["robot_prefix"], " command_period_sec:=", str(1.0 / update_rate),
+        " startup_timeout_sec:=", str(hardware_startup_timeout_sec),
     ])}
     controller_executable = PathJoinSubstitution(
         [
@@ -239,12 +218,6 @@ def _real_nodes(context):
         output="screen",
         emulate_tty=True,
     )
-    bridge = LifecycleNode(
-        package="hex_arm_bridge", executable="hex_arm_bridge", name="hex_arm_bridge",
-        namespace="", autostart=True,
-        parameters=[_bridge_parameters(
-            profile, bridge_zenoh_connect, bridge_startup_timeout_sec, update_rate
-        )], output="screen")
     control = Node(
         package="controller_manager", executable="ros2_control_node",
         parameters=[
@@ -269,6 +242,7 @@ def _real_nodes(context):
             cmd=[
                 FindExecutable(name="python3"), startup_script,
                 "--profile", str(profile_path), "--allow-motion", "--activate-controllers",
+                "--hardware-startup-timeout-sec", str(hardware_startup_timeout_sec + 5.0),
                 *(["--hold-current"] if motor_protocol == "cia402" else []),
                 *(["--cia402-sequence", startup_sequence] if startup_sequence else []),
                 *(["--moveit", "--return-to-start", "--deactivate-after"] if startup_trial else []),
@@ -281,80 +255,27 @@ def _real_nodes(context):
             output="screen",
         )
 
-    startup_handlers = [
-        RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge,
-            start_state="configuring",
-            goal_state="unconfigured",
-            entities=[_guarded_shutdown("hex_arm_bridge configuration failed")],
-        )),
-        RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge,
-            start_state="activating",
-            goal_state="inactive",
-            entities=[_guarded_shutdown("hex_arm_bridge activation failed")],
-        )),
-        RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge,
-            goal_state="errorprocessing",
-            entities=[_guarded_shutdown("hex_arm_bridge entered error processing")],
-        )),
+    # The direct plugin owns the control session, services and diagnostics.
+    handlers = [
         RegisterEventHandler(OnProcessExit(
-            target_action=controller,
-            on_exit=_shutdown_after_exit("hex_arm_controller"),
-        )),
+            target_action=controller, on_exit=_shutdown_after_exit("hex_arm_controller"))),
         RegisterEventHandler(OnProcessExit(
-            target_action=bridge,
-            on_exit=_shutdown_after_exit("hex_arm_bridge"),
-        )),
+            target_action=control, on_exit=_shutdown_after_exit("ros2_control_node"))),
     ]
-
     if activate_hardware:
-        startup_handlers.extend([
-            RegisterEventHandler(OnStateTransition(
-                target_lifecycle_node=bridge,
-                goal_state="active",
-                entities=[
-                    LogInfo(msg="hex_arm_bridge is active: explicit hardware activation requested"),
-                    control,
-                ],
-            )),
-            RegisterEventHandler(OnProcessStart(
-                target_action=control,
-                on_start=[startup],
-            )),
+        handlers.extend([
+            RegisterEventHandler(OnProcessStart(target_action=control, on_start=[startup])),
             RegisterEventHandler(OnProcessExit(
-                target_action=startup,
-                on_exit=_after_startup(report, profile_path, readiness_token),
-            )),
-            RegisterEventHandler(OnProcessExit(
-                target_action=control,
-                on_exit=_shutdown_after_exit("ros2_control_node"),
-            )),
+                target_action=startup, on_exit=_after_startup(report, profile_path, readiness_token))),
         ])
-    else:
-        startup_handlers.append(RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge,
-            goal_state="active",
-            entities=[LogInfo(msg=(
-                "OBSERVE MODE: ros2_control, hardware activation, and trajectory controllers "
-                "remain stopped; RViz follows /hex_arm/internal/state"
-            ))],
-        )))
-
-    rviz_config = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "rviz", "firefly_y6.rviz"])
-    return [
-        *startup_handlers,
-        controller, bridge,
-        Node(
-            package="robot_state_publisher",
-            executable="robot_state_publisher",
-            parameters=[description],
-            remappings=[("joint_states", "/hex_arm/internal/state")],
-        ),
-        Node(package="rviz2", executable="rviz2", arguments=["-d", rviz_config],
+    return [*handlers, controller, control,
+        Node(package="robot_state_publisher", executable="robot_state_publisher",
+             parameters=[description], remappings=[("joint_states", "/hex_arm/internal/state")]),
+        Node(package="rviz2", executable="rviz2", arguments=["-d", PathJoinSubstitution([
+            FindPackageShare("hex_arm_bringup"), "rviz", "firefly_y6.rviz"])],
              condition=IfCondition(LaunchConfiguration("use_rviz"))),
     ]
+
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -374,10 +295,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("align_folded", default_value="false", choices=["true", "false"],
                               description="Explicit bounded Meow base/wrist alignment before unfolding"),
         DeclareLaunchArgument(
-            "bridge_startup_timeout_sec",
-            default_value=str(DEFAULT_BRIDGE_STARTUP_TIMEOUT_SEC),
+            "hardware_startup_timeout_sec",
+            default_value=str(DEFAULT_HARDWARE_STARTUP_TIMEOUT_SEC),
             description=(
-                "Deadline for the bridge to discover the initialized API and receive fresh state. "
+                "Deadline for the direct transport to discover the initialized API and receive fresh state. "
                 "This must cover all six real-drive initialization steps."
             ),
         ),

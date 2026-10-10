@@ -4,6 +4,10 @@
   <xacro:arg name="controllers_file" default=""/>
   <xacro:arg name="state_timeout_sec" default="0.100"/>
   <xacro:arg name="initial_positions_file" default=""/>
+  <xacro:arg name="zenoh_connect" default="tcp/127.0.0.1:7448"/>
+  <xacro:arg name="robot_prefix" default="hexmeow/ubuntu/firefly_y6_meow"/>
+  <xacro:arg name="command_period_sec" default="0.01"/>
+  <xacro:arg name="startup_timeout_sec" default="30.0"/>
   <xacro:property name="initial_positions" value="${xacro.load_yaml('$(arg initial_positions_file)')['initial_positions'] if '$(arg initial_positions_file)' else dict(joint_1=0.0, joint_2=0.0, joint_3=0.0, joint_4=0.0, joint_5=0.0, joint_6=0.0)}"/>
 
   <!-- Geometry, inertials, joint origins, axes, and limits remain owned by the
@@ -12,7 +16,10 @@
   <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.ros2_control.xacro"/>
 
   <xacro:if value="${'$(arg backend)' != 'view'}">
-    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)" initial_positions="${initial_positions}"/>
+    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)" initial_positions="${initial_positions}"
+      zenoh_connect="$(arg zenoh_connect)"
+      robot_prefix="$(arg robot_prefix)" command_period_sec="$(arg command_period_sec)"
+      startup_timeout_sec="$(arg startup_timeout_sec)"/>
   </xacro:if>
 
   <xacro:if value="${'$(arg backend)' == 'gz'}">
