@@ -73,4 +73,9 @@ def test_mock_flag_reaches_driver_and_no_trajectory_stack_is_started(tmp_path):
     names = {perform_substitutions(context, normalize_to_list_of_substitutions(node.node_executable))
              for node in _walk_nodes(actions)}
     assert "hex_arm_gravity_comp" in names
-    assert not names.intersection({"ros2_control_node", "spawner", "move_group"})
+    assert "ros2_control_node" in names
+    assert not names.intersection({"spawner", "move_group", "hex_arm_bridge"})
+    observer = next(node for node in _walk_nodes(actions) if node.node_package == "controller_manager")
+    from launch_ros.utilities import evaluate_parameters
+    parameters = evaluate_parameters(context, observer._Node__parameters)
+    assert parameters[-1]["hardware_components_initial_state.inactive"] == ("FireflyY6System",)

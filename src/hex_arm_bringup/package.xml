@@ -10,7 +10,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>gz_ros2_control</exec_depend>
-  <exec_depend>hex_arm_bridge</exec_depend>
+  <exec_depend>hex_arm_tools</exec_depend>
   <exec_depend>hex_arm_controller</exec_depend>
   <exec_depend>hex_arm_description</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>

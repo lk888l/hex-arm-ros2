@@ -79,7 +79,7 @@ Kd 按 J1～J6 排列，单位为关节侧 Nm·s/rad；仅在退出阶段生效�
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install --packages-select hex_arm_controller hex_arm_bridge hex_arm_bringup \
+colcon build --symlink-install --packages-up-to hex_arm_bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DHEX_ARM_BUILD_COMMISSIONING=OFF
 source install/setup.bash
 ```

@@ -293,8 +293,7 @@ MoveIt 通过 `/firefly_arm_controller/follow_joint_trajectory` 的标准
 ```text
 MoveIt
   -> ros2_control / firefly_arm_controller (100 Hz)
-  -> hex_arm_hardware (C++)
-  -> hex_arm_bridge (Python, ROS <-> Zenoh / Protobuf)
+  -> hex_arm_hardware (C++, 非实时模块直连 Zenoh / Protobuf)
   -> hex_arm_controller (Rust, 500 Hz)
   -> SocketCAN / CAN-FD / Meow MIT 电机
 ```
@@ -303,6 +302,10 @@ MoveIt 检查碰撞，轨迹控制器检查跟踪误差，Rust 负责总线、�
 重力补偿及底层保护。模块职责、CiA402 与历史工具构建见
 [运行架构与迁移](docs/architecture_refactor_cn.md)。
 
+控制链路只使用 C++ Zenoh 直连，旧 Python bridge 已移除。
+构建依赖、实时邮箱及故障恢复说明见
+[C++ Zenoh 直连后端](docs/zenoh_direct_transport_cn.md)。
+
 ### 测试级别
 
 根据改动选择测试，在已构建并加载环境的容器中执行：
@@ -310,7 +313,7 @@ MoveIt 检查碰撞，轨迹控制器检查跟踪误差，Rust 负责总线、�
 | 命令 | 范围 |
 |---|---|
 | `./scripts/test.sh unit` | 无硬件单元测试 |
-| `./scripts/test.sh protocol` | mock 电机、Zenoh 与 ROS 桥接 |
+| `./scripts/test.sh protocol` | C++ 直连插件、Zenoh 与 Rust mock 故障场景 |
 | `./scripts/test.sh mock` | 轨迹 action 与控制器生命周期 |
 | `./scripts/test.sh gz` | 无界面 Gazebo 轨迹 |
 | `python3 src/hex_arm_moveit_config/test/test_moveit_mock.py` | 无界面 MoveIt 规划、碰撞检查和模拟执行 |
@@ -358,6 +361,7 @@ MoveIt 检查碰撞，轨迹控制器检查跟踪误差，Rust 负责总线、�
 | [Docker 开发环境](docs/docker_development_cn.md) | Compose、NVIDIA 安装与 WSL2 |
 | [运行架构与迁移](docs/architecture_refactor_cn.md) | 模块职责、构建与独立部署 |
 | [运行架构、测量与发布验证](docs/runtime_optimization_cn.md) | 状态竞争修复、通信采集及 MoveIt 升级契约 |
+| [C++ Zenoh 直连后端](docs/zenoh_direct_transport_cn.md) | 后端切换、实时快照、命令新鲜度与完整插件基准 |
 | [当前实机状态与后续优化](docs/commissioning_cn.md) | 历史调试过程与后续计划 |
 | [旧版 CiA402 部署](docs/cia402_deployment_cn.md) | 升级前固件的部署与验收 |
 | [验收记录索引](docs/commissioning_evidence/README.md) | 各轮试验结果与原始证据 |

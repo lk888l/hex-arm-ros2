@@ -13,6 +13,7 @@ case "${level}" in
   unit|legacy)
     python3 scripts/test-runtime-packaging.py
     python3 scripts/test-transport-benchmark.py
+    python3 scripts/test-direct-transport.py
     bash scripts/test-supervised-real-launch.sh
     python3 scripts/test-shutdown-ack.py
     python3 scripts/test-read-cia402-state.py
@@ -34,7 +35,7 @@ case "${level}" in
       --packages-select \
         hex_arm_msgs \
         hex_arm_description \
-        hex_arm_bridge \
+        hex_arm_tools \
         hex_arm_hardware \
         hex_arm_bringup \
         hex_arm_moveit_runtime \

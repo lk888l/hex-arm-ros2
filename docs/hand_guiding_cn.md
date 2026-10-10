@@ -6,7 +6,7 @@
 
 专用 `gravity_comp.launch.py` 从当前实测姿态进入手扶拖动：`Kp=0`、目标速度为零，
 输出为经过 profile 比例及限幅处理的重力矩，加上 `−Kd × 实测速度` 阻尼。
-它不执行折叠展开、位置保持或轨迹跟踪，也不启动 MoveIt / ros2_control。
+它不执行折叠展开、位置保持或轨迹跟踪，也不启动 MoveIt 或轨迹控制器；ros2_control 的硬件保持 INACTIVE，仅通过 C++ 直连提供反馈和诊断。
 松手后阻尼会使运动减速，但不会锁定位置；重力模型、载荷和补偿比例有误差时仍会漂移。
 
 ## 启动
@@ -14,7 +14,7 @@
 先停止其他机械臂控制程序。在容器工作区构建并加载新入口：
 
 ```bash
-./scripts/build.sh --packages-select hex_arm_controller hex_arm_bridge hex_arm_bringup
+./scripts/build.sh --packages-up-to hex_arm_bringup
 source install/setup.bash
 ros2 launch hex_arm_bringup gravity_comp.launch.py \
   hardware_profile:=/workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.hand_guiding_full_range.local.yaml \

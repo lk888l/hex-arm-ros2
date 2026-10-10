@@ -51,7 +51,7 @@ def test_ready_verification_precedes_damping(tmp_path, monkeypatch, scenario):
             events.append("execute_ready")
             return {"ok": True}
         def create_client(self, _, name):
-            assert name == "/hex_arm_bridge/damped_stop"
+            assert name == "/hex_arm/damped_stop"
             def call(_):
                 assert "ready_verified" in events
                 events.append("damping")

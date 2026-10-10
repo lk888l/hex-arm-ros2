@@ -36,6 +36,39 @@ def test_nearly_zero_j6_does_not_add_a_preparation_phase():
     assert len(client.startup_steps(profile(), q, [0.0] * 6)) == 3
 
 
+def test_direct_cold_start_waits_for_inactive_and_fresh_feedback(monkeypatch):
+    from types import SimpleNamespace as NS
+    clock = [100.0]
+    calls = []
+    component = NS(name="FireflyY6System", plugin_name="hex_arm_hardware/HexArmSystem", state=NS(id=2))
+    future = NS(done=lambda: clock[0] >= 100.1, result=lambda: NS(component=[component]))
+    fake = NS(positions={}, received_at=0.0,
+        hardware=NS(service_is_ready=lambda: clock[0] >= 100.06,
+                    call_async=lambda request: (calls.append("list") or future)))
+    def spin(node, **kwargs):
+        clock[0] += .02
+        if clock[0] >= 100.2:
+            fake.positions = dict.fromkeys(client.JOINTS, 0.0)
+            fake.received_at = clock[0]
+    monkeypatch.setattr(client.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(client.rclpy, "ok", lambda: True)
+    monkeypatch.setattr(client.rclpy, "spin_once", spin)
+    client.Probe.wait_for_inactive_hardware(fake, 1.)
+    assert clock[0] >= 100.2
+    assert calls and set(calls) == {"list"}  # no actuator or controller-load requests
+
+
+def test_direct_cold_start_timeout_never_activates(monkeypatch):
+    from types import SimpleNamespace as NS
+    clock = [100.0]
+    fake = NS(hardware=NS(service_is_ready=lambda: False), positions={})
+    monkeypatch.setattr(client.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(client.rclpy, "ok", lambda: True)
+    monkeypatch.setattr(client.rclpy, "spin_once", lambda *a, **k: clock.__setitem__(0, clock[0] + .02))
+    with pytest.raises(RuntimeError, match="startup deadline"):
+        client.Probe.wait_for_inactive_hardware(fake, .1)
+
+
 @pytest.mark.parametrize("axis,value", [(0, 0.1), (1, -1.35), (5, math.nan), (5, 2.8)])
 def test_j6_permission_does_not_accept_wrong_posture_or_invalid_feedback(axis, value):
     q = client.FOLDED.copy()

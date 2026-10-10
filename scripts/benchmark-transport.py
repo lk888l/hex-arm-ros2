@@ -7,9 +7,9 @@ Inside the sourced ROS container:
   python3 scripts/benchmark-transport.py analyze /tmp/transport
 
 Defaults are 30 s warmup, 300 s sampling and three independent runs. The run
-fixture always passes --mock and the impossible-hardware mock profile. It
-exercises the Python bridge and Rust controller; it does not claim C++ or CAN
-coverage. Analyze can also consume traces captured from a complete stack.
+fixture always passes --mock and the impossible-hardware mock profile. It loads
+the installed C++ plugin with direct Zenoh, a 100 Hz control loop and Rust mock.
+No automatic fixture opens CAN. Analyze also supports archived bridge traces.
 """
 from __future__ import annotations
 
@@ -21,8 +21,10 @@ import math
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -45,6 +47,12 @@ PAIRS = (
     ("python_state_publish", "cxx_read", "source"),
     ("cxx_state_receive", "cxx_read", "source"),
     ("gate_wait_begin", "gate_wait_end", "span"),
+    ("cxx_write", "direct_put", "seq"),
+    ("direct_put", "rust_accept", "seq"),
+    ("rust_state_publish", "direct_state_receive", "seq"),
+    ("rust_state_publish", "direct_read", "seq"),
+    ("direct_state_receive", "direct_read", "seq"),
+    ("control_cycle", "control_cycle_end", "seq"),
 )
 
 
@@ -115,6 +123,22 @@ def analyze_run(directory: Path, begin_ns=0, end_ns=2**63 - 1):
             matched_cxx_sources.add(source_stamp)
     latencies["cxx_write->can_send"] = {**distribution(full_path),
         "unmatched_start_count": len(cxx_by_source) - len(matched_cxx_sources)}
+    direct = bool(stages["direct_put"])
+    # A direct command preserves its write sequence through Protobuf.
+    for finish in ("rust_accept", "can_send"):
+        samples = []
+        if direct:
+            starts, ends = indices[("cxx_write", "seq")], indices[(finish, "seq")]
+            samples = [(ends[key] - starts[key]) / 1e6 for key in starts.keys() & ends.keys()
+                       if ends[key] >= starts[key]]
+        else:
+            ends = indices[(finish, "seq")]
+            for row in stages["python_receive"]:
+                start, end = cxx_by_source.get(row["source_stamp_ns"]), ends.get(row["seq"])
+                if start is not None and end is not None and end >= start:
+                    samples.append((end - start) / 1e6)
+        latencies["cxx_write->" + finish] = {**distribution(samples),
+            "unmatched_start_count": max(0, len(cxx_by_source) - len(samples))}
     # Feedback has independent Rust and ROS identities. A received DDS frame
     # may be replaced before read(), so keep delivery and consumption separate.
     feedback_matches = {}
@@ -136,6 +160,17 @@ def analyze_run(directory: Path, begin_ns=0, end_ns=2**63 - 1):
             latencies[key] = {**distribution(feedback),
                               "unmatched_start_count": len(starts) - len(feedback_seen)}
             feedback_matches[key] = bool(feedback)
+    # Include *every* read, including repeated consumption of the same sample.
+    # First-consumption latency alone conceals feedback aging during a stall.
+    published = indices[("rust_state_publish", "seq")]
+    ros_to_seq = {row["source_stamp_ns"]: row["seq"] for row in stages["python_state_publish"]}
+    feedback_ages = []
+    for row in stages["direct_read"] if direct else stages["cxx_read"]:
+        seq = row["seq"] if direct else ros_to_seq.get(row["source_stamp_ns"])
+        origin = published.get(seq)
+        if origin is not None and row["timestamp_ns"] >= origin:
+            feedback_ages.append((row["timestamp_ns"] - origin) / 1e6)
+    latencies["feedback_age_at_read"] = distribution(feedback_ages)
     spacing = {}
     for stage, items in sorted(stages.items()):
         # Per-process spacing avoids a merged stream hiding a stall in one owner.
@@ -154,14 +189,20 @@ def analyze_run(directory: Path, begin_ns=0, end_ns=2**63 - 1):
                          "max_silent_interval_ms": max(gaps + boundary_gaps, default=None)}
     cxx_present = bool(stages["cxx_write"])
     can_present = bool(stages["can_send"])
+    cycles = [row["timestamp_ns"] for row in stages["control_cycle"]]
+    cycle_jitter = distribution([abs((b - a) / 1e6 - 10.) for a, b in zip(cycles, cycles[1:])])
     return {"files": len(files), "clock": "Linux CLOCK_MONOTONIC; ROS stamps are keys only",
             "coverage": {"cxx": cxx_present, "python": bool(stages["python_receive"]),
                          "rust": bool(stages["rust_accept"]), "can": can_present,
-                         "end_to_end": bool(full_path),
-                         "feedback_end_to_end": feedback_matches["rust_state_publish->cxx_state_receive"],
-                         "feedback_received": feedback_matches["rust_state_publish->cxx_state_receive"],
-                         "feedback_consumed": feedback_matches["rust_state_publish->cxx_read"]},
+                         "end_to_end": bool(latencies["cxx_write->can_send"]["count"]),
+                         "direct_zenoh": direct,
+                         "feedback_end_to_end": (bool(stages["direct_state_receive"]) if direct else
+                                                 feedback_matches["rust_state_publish->cxx_state_receive"]),
+                         "feedback_received": (bool(stages["direct_state_receive"]) if direct else
+                                               feedback_matches["rust_state_publish->cxx_state_receive"]),
+                         "feedback_consumed": bool(feedback_ages)},
             "latencies": latencies, "stage_spacing": spacing,
+            "control_cycle_absolute_jitter": cycle_jitter,
             "command_publish_skipped": skipped, "trace_records_dropped": dropped,
             "negative_pairs": {key: value for key, value in negative_pairs.items() if value}}
 
@@ -200,176 +241,210 @@ def load_fixture(workspace):
     return module
 
 
-def run_once(args, directory):
+class TcpFaultProxy:
+    """Local test-only TCP cut; the Rust process and control loop keep running."""
+    def __init__(self, endpoint):
+        if not endpoint.startswith("tcp/127.0.0.1:"):
+            raise ValueError("disconnect fixture requires a loopback TCP endpoint")
+        self.target = ("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))
+        self.lock = threading.Lock()
+        self.connections = set()
+        self.paused = threading.Event()
+        self.closed = threading.Event()
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen()
+        self.listener.settimeout(.1)
+        self.endpoint = f"tcp/127.0.0.1:{self.listener.getsockname()[1]}"
+        self.worker = threading.Thread(target=self.accept, daemon=True)
+        self.worker.start()
+
+    def accept(self):
+        while not self.closed.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            try:
+                if self.paused.is_set():
+                    client.close()
+                    continue
+                server = socket.create_connection(self.target, timeout=.2)
+                server.settimeout(None)
+            except OSError:
+                client.close()
+                continue
+            with self.lock:
+                self.connections.update((client, server))
+            for source, destination in ((client, server), (server, client)):
+                threading.Thread(target=self.forward, args=(source, destination), daemon=True).start()
+
+    def forward(self, source, destination):
+        try:
+            while not self.closed.is_set() and not self.paused.is_set():
+                data = source.recv(65536)
+                if not data:
+                    break
+                destination.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for connection in (source, destination):
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+                with self.lock:
+                    self.connections.discard(connection)
+
+    def cut(self):
+        self.paused.set()
+        with self.lock:
+            for connection in self.connections:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def close(self):
+        self.closed.set()
+        self.cut()
+        self.listener.close()
+        self.worker.join(timeout=.5)
+
+
+def run_plugin_once(args, directory):
+    """Actual plugin -> direct Zenoh -> Rust mock, with a 100 Hz C++ loop."""
     import rclpy
     from hex_arm_msgs.srv import DiscoverMotors
-    from lifecycle_msgs.msg import Transition
-    from std_srvs.srv import Trigger
     fixture = load_fixture(args.workspace)
     directory.mkdir(parents=True, exist_ok=False)
-    environment = dict(os.environ, HEX_ARM_TRACE_DIR=str(directory.resolve()))
-    # A unique ROS domain prevents accidental association with another stack.
-    environment["ROS_DOMAIN_ID"] = str(args.domain_id)
+    environment = dict(os.environ, HEX_ARM_TRACE_DIR=str(directory.resolve()),
+                       ROS_DOMAIN_ID=str(args.domain_id))
     os.environ["ROS_DOMAIN_ID"] = str(args.domain_id)
-    controller = bridge = probe = None
-    workers = []
-    logs = []
-    # Use the same bounded asynchronous trace writer as the bridge so the
-    # workload generator does not add periodic filesystem I/O to the baseline.
-    trace_spec = importlib.util.spec_from_file_location("benchmark_trace",
-        args.workspace / "src/hex_arm_bridge/hex_arm_bridge/trace.py")
-    trace_module = importlib.util.module_from_spec(trace_spec)
-    trace_spec.loader.exec_module(trace_module)
-    os.environ["HEX_ARM_TRACE_DIR"] = str(directory.resolve())
-    source_trace = trace_module.TransportTrace()
-    metadata = {"scenario": args.scenario, "repetition": directory.name,
-                "fixture": "mock driver + Python bridge; C++ plugin/CAN absent",
-                "warmup_sec": args.warmup, "duration_sec": args.duration,
-                "fault_gap_sec": args.fault_gap, "passed": False}
+    processes, logs, workers = [], [], []
+    probe = plugin = controller = proxy = None
+    endpoint = args.endpoint
+    metadata = {"backend": "zenoh", "scenario": args.scenario,
+                "fixture": "installed C++ plugin + Rust mock; CAN absent",
+                "warmup_sec": args.warmup, "duration_sec": args.duration, "passed": False}
+    driver_command = [str(args.workspace / "install/hex_arm_controller/lib/hex_arm_controller/hex_arm_controller"),
+                      "--profile", str(args.workspace / "src/hex_arm_controller/test/firefly_y6.mock.yaml"),
+                      "--mock", "--zenoh-listen", args.endpoint]
+
+    def launch(name, command):
+        log = (directory / (name + ".log")).open("w")
+        logs.append(log)
+        process = subprocess.Popen(command, env=environment, stdout=log, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        processes.append(process)
+        return process
+
     try:
-        for name, command in (
-            ("controller", [str(args.workspace / "install/hex_arm_controller/lib/hex_arm_controller/hex_arm_controller"),
-                            "--profile", str(args.workspace / "src/hex_arm_controller/test/firefly_y6.mock.yaml"),
-                            "--mock", "--zenoh-listen", args.endpoint]),
-            ("bridge", [str(args.workspace / "install/hex_arm_bridge/lib/hex_arm_bridge/hex_arm_bridge"),
-                        "--ros-args", "-p", f"robot_prefix:={fixture.PREFIX}",
-                        "-p", f"zenoh_connect:={args.endpoint}"])):
-            log = (directory / (name + ".log")).open("w")
-            logs.append(log)
-            process = subprocess.Popen(command, env=environment, stdout=log,
-                                       stderr=subprocess.STDOUT, start_new_session=True)
-            if name == "controller":
-                controller = process
-            else:
-                bridge = process
+        controller = launch("controller", driver_command)
+        if args.scenario == "disconnect":
+            proxy = TcpFaultProxy(args.endpoint)
+            endpoint = proxy.endpoint
         rclpy.init()
-        probe = fixture.BridgeProbe()
-        if not probe.change_state.wait_for_service(timeout_sec=15.):
-            raise RuntimeError("mock lifecycle bridge unavailable")
-        probe.transition(Transition.TRANSITION_CONFIGURE)
-        probe.transition(Transition.TRANSITION_ACTIVATE)
-        deadline = time.monotonic() + 5.
-        while (probe.hold is None or probe.driver is None or
-               probe.publisher.get_subscription_count() == 0) and time.monotonic() < deadline:
+        probe = fixture.TransportProbe()
+        plugin = launch("plugin", [str(args.workspace / "install/hex_arm_hardware/lib/hex_arm_hardware/transport_probe"),
+            endpoint, fixture.PREFIX, str(args.duration), str(args.warmup), args.scenario])
+        deadline = time.monotonic() + 25.
+        while time.monotonic() < deadline:
             rclpy.spin_once(probe, timeout_sec=.01)
-        if probe.hold is None or probe.driver is None:
-            raise RuntimeError("mock six-joint state unavailable")
-        # Replace only the fixture's source timer; the actual bridge/Rust paths run unchanged.
-        probe.command_timer.cancel()
-        reference = list(probe.hold.position)
-        moving = args.scenario == "trajectory"
-        started_at = time.monotonic()
-        def publish():
-            if moving:
-                phase = (time.monotonic() - started_at) * math.pi / 4
-                probe.hold.position[0] = reference[0] + .03 * math.sin(phase)
-                probe.hold.velocity[0] = .03 * math.pi / 4 * math.cos(phase)
-            probe.hold.header.stamp = probe.get_clock().now().to_msg()
-            source_stamp = probe.hold.header.stamp.sec * 1_000_000_000 + probe.hold.header.stamp.nanosec
-            source_trace.emit("generator_publish", source_stamp_ns=source_stamp)
-            probe.publisher.publish(probe.hold)
-        probe.command_timer = probe.create_timer(.01, publish)
-        if not probe.activate.wait_for_service(timeout_sec=5.):
-            raise RuntimeError("mock activate service unavailable")
-        result = fixture._spin_future(probe, probe.activate.call_async(Trigger.Request()), 10.)
-        if not result.success:
-            raise RuntimeError("mock enable failed: " + result.message)
-        if args.scenario == "diagnostic":
-            from diagnostic_msgs.msg import DiagnosticArray
-            from sensor_msgs.msg import JointState
-            for _ in range(8):
-                probe.create_subscription(DiagnosticArray, "/diagnostics", lambda _: None, 10)
-                probe.create_subscription(JointState, "/hex_arm/internal/state", lambda _: None,
-                    fixture.QoSProfile(depth=1, reliability=fixture.ReliabilityPolicy.BEST_EFFORT))
+            output = (directory / "plugin.log").read_text()
+            ready = [line for line in output.splitlines() if line.startswith("PLUGIN_ACTIVE_NS=")]
+            if ready:
+                active_ns = int(ready[0].split("=")[1])
+                break
+            if plugin.poll() is not None:
+                raise RuntimeError("plugin failed to activate: " + output[-3000:])
+        else:
+            raise RuntimeError("plugin activation deadline exceeded")
+        metadata["sample_begin_ns"] = active_ns + int(args.warmup * 1e9)
+        metadata["sample_end_ns"] = metadata["sample_begin_ns"] + int(args.duration * 1e9)
+        inject_ns = metadata["sample_begin_ns"] + int(args.duration * .5e9)
         if args.scenario == "cpu":
             for _ in range(args.cpu_workers):
-                workers.append(subprocess.Popen([sys.executable, "-c", "while True: pass"],
-                                               start_new_session=True,
-                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        manager = None
-        pending = None
-        next_request = time.monotonic()
-        if args.scenario == "management":
-            manager = probe.create_client(DiscoverMotors, "/hex_arm/discover_motors")
-        warmup_end = time.monotonic() + args.warmup
-        while time.monotonic() < warmup_end:
+                workers.append(launch("cpu-" + str(len(workers)), [sys.executable, "-c", "while True: pass"]))
+        if args.scenario == "diagnostic":
+            from diagnostic_msgs.msg import DiagnosticArray
+            for _ in range(8):
+                probe.create_subscription(DiagnosticArray, "/diagnostics", lambda _: None, 10)
+        manager = (probe.create_client(DiscoverMotors, "/hex_arm/discover_motors")
+                   if args.scenario == "management" else None)
+        next_request, pending, injected = time.monotonic(), None, False
+        deadline = time.monotonic() + args.warmup + args.duration + 15.
+        while plugin.poll() is None and time.monotonic() < deadline:
             rclpy.spin_once(probe, timeout_sec=.005)
-            if probe.driver.fault_latched:
-                raise RuntimeError("mock watchdog/fault during warmup: " + probe.driver.fault_reason)
-        metadata["sample_begin_ns"] = time.monotonic_ns()
-        sample_end = time.monotonic() + args.duration
-        inject_at = time.monotonic() + args.duration / 2.
-        injected = False
-        while time.monotonic() < sample_end:
-            rclpy.spin_once(probe, timeout_sec=.005)
-            if controller.poll() is not None or bridge.poll() is not None:
-                raise RuntimeError("mock process exited during measurement")
             if manager is not None and time.monotonic() >= next_request and (pending is None or pending.done()):
-                if pending is not None:
-                    response = pending.result()
-                    if not response.success:
-                        raise RuntimeError("cached discovery rejected: " + response.message)
-                request = DiscoverMotors.Request()
-                request.refresh = False
-                pending = manager.call_async(request)
+                if pending is not None and not pending.result().success:
+                    raise RuntimeError("cached discovery failed")
+                pending = manager.call_async(DiscoverMotors.Request())
                 next_request = time.monotonic() + .1
-            if args.scenario in ("stopped-command", "delay-recovery") and not injected and time.monotonic() >= inject_at:
+            if not injected and time.monotonic_ns() >= inject_ns:
                 injected = True
-                old_stamp = probe.hold.header.stamp
-                probe.command_timer.cancel()
-                metadata["fault_injected_ns"] = time.monotonic_ns()
-                if args.scenario == "delay-recovery":
-                    wait_until = time.monotonic() + args.fault_gap
-                    while time.monotonic() < wait_until:
-                        rclpy.spin_once(probe, timeout_sec=.005)
-                    probe.hold.header.stamp = old_stamp
-                    probe.publisher.publish(probe.hold)
-                    metadata["old_command_replayed_ns"] = time.monotonic_ns()
-                    probe.command_timer.reset()
-            fault_scenario = args.scenario in ("stopped-command", "delay-recovery")
-            if not fault_scenario and probe.driver.fault_latched:
-                raise RuntimeError("mock watchdog/fault during sampling: " + probe.driver.fault_reason)
-        metadata["sample_end_ns"] = time.monotonic_ns()
-        metadata["final_fault_latched"] = probe.driver.fault_latched
-        metadata["final_fault_code"] = probe.driver.fault_code
-        if args.scenario == "stopped-command" or (args.scenario == "delay-recovery" and args.fault_gap >= .15):
-            if not probe.driver.fault_latched or probe.driver.fault_code != 0x1003:
-                raise RuntimeError("command outage did not retain the fail-closed watchdog fault")
-        if args.scenario == "delay-recovery" and args.fault_gap < .1:
-            metadata["interpretation"] = "Short-gap stale source stamps are observational only; no source-stamp freshness contract exists."
-        result = fixture._spin_future(probe, probe.deactivate.call_async(Trigger.Request()), 10.)
-        if not result.success:
-            raise RuntimeError("mock disable failed: " + result.message)
+                if args.scenario in ("stopped-command", "delay-recovery", "disconnect", "restart"):
+                    metadata["fault_injected_ns"] = inject_ns
+                if args.scenario == "disconnect":
+                    proxy.cut()
+                    try:
+                        until = time.monotonic() + .3
+                        while time.monotonic() < until:
+                            rclpy.spin_once(probe, timeout_sec=.005)
+                    finally:
+                        proxy.paused.clear()
+                elif args.scenario == "restart":
+                    stop_process(controller)
+                    controller = launch("controller-restarted", driver_command)
+        if plugin.poll() is None:
+            raise RuntimeError("plugin did not exit within bounded shutdown window")
+        if plugin.returncode != 0:
+            raise RuntimeError("plugin failed: " + (directory / "plugin.log").read_text()[-4000:])
+        metadata["publications_received"] = dict(probe.received)
+        if not all(probe.received.values()):
+            raise RuntimeError("direct diagnostic publications missing: " + str(probe.received))
+        metadata["final_fault_latched"] = bool(probe.driver and probe.driver.fault_latched)
+        metadata["final_fault_code"] = probe.driver.fault_code if probe.driver else None
+        if args.scenario in ("stopped-command", "delay-recovery", "reactivate"):
+            if not probe.driver or not probe.driver.fault_latched or probe.driver.fault_code != 0x1003:
+                raise RuntimeError("stopped writer did not trigger Rust watchdog")
         metadata["passed"] = True
     except BaseException as error:
         metadata["error"] = str(error)
         raise
     finally:
-        metadata.setdefault("sample_end_ns", time.monotonic_ns())
+        if controller is not None and controller.poll() is None:
+            os.killpg(controller.pid, signal.SIGCONT)
+        for process in reversed(processes):
+            stop_process(process)
+        if proxy is not None:
+            proxy.close()
         if probe is not None:
             probe.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-        for worker in workers:
-            stop_process(worker)
-        stop_process(bridge)
-        stop_process(controller)
         for log in logs:
             log.close()
-        source_trace.close()
-        unsafe_replay = False
-        if (metadata["passed"] and args.scenario == "delay-recovery" and args.fault_gap >= .15):
-            after_replay = analyze_run(directory, begin_ns=metadata["old_command_replayed_ns"],
-                                       end_ns=metadata["sample_end_ns"])
-            metadata["accepted_commands_after_replay"] = after_replay["stage_spacing"].get(
-                "rust_accept", {}).get("samples", 0)
-            unsafe_replay = metadata["accepted_commands_after_replay"] != 0
-            if unsafe_replay:
-                metadata["passed"] = False
-                metadata["error"] = "commands were accepted after the timed-out source resumed"
         (directory / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
-        if unsafe_replay:
-            raise RuntimeError(metadata["error"])
+    if args.scenario == "reactivate":
+        marker = next(line for line in (directory / "plugin.log").read_text().splitlines()
+                      if line.startswith("PLUGIN_REACTIVATED_NS="))
+        metadata["fault_injected_ns"] = int(marker.split("=")[1])
+        metadata["reactivated_ns"] = metadata["fault_injected_ns"]
+    if "fault_injected_ns" in metadata:
+        grace_ns = 0 if args.scenario == "reactivate" else 150_000_000
+        after = analyze_run(directory, metadata["fault_injected_ns"] + grace_ns,
+                            metadata["sample_end_ns"])
+        accepted = after["stage_spacing"].get("rust_accept", {}).get("samples", 0)
+        metadata["accepted_commands_after_fault"] = accepted
+        metadata["passed"] = accepted == 0
+        (directory / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        if accepted:
+            raise RuntimeError("commands resumed after fault without explicit reactivation")
 
 
 def positive(value):
@@ -388,22 +463,21 @@ def main():
     run = subparsers.add_parser("run", help="start isolated MOCK processes and workload")
     run.add_argument("--workspace", type=Path, default=Path(__file__).resolve().parents[1])
     run.add_argument("--output", type=Path, required=True)
-    run.add_argument("--scenario", choices=("baseline", "trajectory", "diagnostic", "management", "cpu", "stopped-command", "delay-recovery"), default="baseline")
+    run.add_argument("--scenario", choices=("baseline", "trajectory", "diagnostic", "management", "cpu", "stopped-command", "delay-recovery", "disconnect", "restart", "reactivate", "reactivate-stream"), default="baseline")
     run.add_argument("--warmup", type=float, default=30.)
     run.add_argument("--duration", type=positive, default=300.)
     run.add_argument("--repetitions", type=int, default=3)
     run.add_argument("--cpu-workers", type=int, default=2)
-    run.add_argument("--fault-gap", type=positive, default=.25)
     run.add_argument("--domain-id", type=int, default=73)
     run.add_argument("--endpoint", default="tcp/127.0.0.1:7459")
     args = parser.parse_args()
     if args.operation == "run":
         if not math.isfinite(args.warmup) or args.warmup < 0 or args.repetitions < 1 or args.cpu_workers < 1:
             parser.error("warmup must be nonnegative; repetitions and CPU workers must be positive")
-        if args.scenario in ("stopped-command", "delay-recovery") and args.duration < max(1., 2*args.fault_gap + .5):
-            parser.error("fault scenarios require duration >= max(1, 2*fault-gap + 0.5) seconds")
+        if args.scenario in ("stopped-command", "delay-recovery") and args.duration < 1.0:
+            parser.error("fault scenarios require duration >= 1 second")
         for repetition in range(1, args.repetitions + 1):
-            run_once(args, args.output / f"{args.scenario}-{repetition}")
+            run_plugin_once(args, args.output / f"{args.scenario}-{repetition}")
         report = analyze(args.output)
         destination = args.output / "report.json"
     else:

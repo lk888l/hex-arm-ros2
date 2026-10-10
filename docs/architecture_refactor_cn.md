@@ -2,6 +2,7 @@
 
 本文保留第一阶段迁移及当时的验收记录。第二阶段的并发修复、模块拆分、
 性能采集和发布契约见 [运行优化说明](runtime_optimization_cn.md)。
+当前已删除 Python bridge，使用 [C++ Zenoh 直连](zenoh_direct_transport_cn.md)；下文架构图为历史状态。
 
 ## 本次已实现的范围
 
@@ -24,7 +25,7 @@
   仅观察模式仍可保持全程失能。
 - 增加原子 JSON 停机回执与独立 Docker 安装产物。
 
-当前生产链路仍是 MoveIt → JTC / ros2_control → C++ 硬件插件 →
+该阶段的生产链路是 MoveIt → JTC / ros2_control → C++ 硬件插件 →
 Python 适配进程 → Zenoh → 独立 Rust 驱动 → CAN-FD。
 Python 尚未移出高频路径；没有宣称已降低通信延迟或周期抖动。
 

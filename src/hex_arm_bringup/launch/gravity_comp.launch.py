@@ -9,9 +9,8 @@ from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.logging import launch_config
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import LifecycleNode, Node
-from launch_ros.event_handlers import OnStateTransition
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 
@@ -65,13 +64,19 @@ def _nodes(context):
         "--shutdown-report", str(Path(launch_config.log_dir) / "hand-guiding-shutdown.json"),
         *(["--mock"] if mock else []),
     ], output="screen", emulate_tty=True)
-    # The existing bridge is an observer here: only the dedicated owner below
-    # acquires a session. No ros2_control hardware component is launched.
-    bridge = LifecycleNode(package="hex_arm_bridge", executable="hex_arm_bridge",
-        name="hex_arm_bridge", namespace="", autostart=True,
-        parameters=[{"robot_prefix": profile["robot_prefix"], "zenoh_connect": endpoint,
-                     "required_api_major": 0, "startup_timeout_sec": 30.0}], output="screen")
-    owner = Node(package="hex_arm_bridge", executable="hex_arm_gravity_comp",
+    # Direct transport supplies observations while the hardware stays INACTIVE.
+    # The standalone hand-guiding client is the only session owner in this mode.
+    controllers = PathJoinSubstitution([FindPackageShare("hex_arm_bringup"), "config", "controllers.yaml"])
+    description = {"robot_description": Command([
+        FindExecutable(name="xacro"), " ", PathJoinSubstitution([
+            FindPackageShare("hex_arm_description"), "urdf", "firefly_y6.urdf.xacro"]),
+        " backend:=real zenoh_connect:=", endpoint, " robot_prefix:=", profile["robot_prefix"],
+    ])}
+    observer = Node(package="controller_manager", executable="ros2_control_node",
+        parameters=[description, controllers, {"hardware_components_initial_state": {
+            "inactive": ["FireflyY6System"], "shutdown_on_initial_state_failure": True,
+        }}], output="screen")
+    owner = Node(package="hex_arm_tools", executable="hex_arm_gravity_comp",
         name="hex_arm_gravity_comp", parameters=[{
             "robot_prefix": profile["robot_prefix"], "zenoh_connect": endpoint,
             "damping": damping, "startup_timeout_sec": 30.0,
@@ -83,22 +88,12 @@ def _nodes(context):
         return [EmitEvent(event=Shutdown(reason=f"hand-guiding process exited ({event.returncode})"))]
 
     handlers = [RegisterEventHandler(OnProcessExit(target_action=process, on_exit=stopped))
-                for process in (driver, bridge, owner)]
-    for start, goal in (("configuring", "unconfigured"), ("activating", "inactive")):
-        handlers.append(RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge, start_state=start, goal_state=goal,
-            entities=[EmitEvent(event=Shutdown(reason="hand-guiding observer initialization failed"))])))
-    handlers.append(RegisterEventHandler(OnStateTransition(
-        target_lifecycle_node=bridge, goal_state="errorprocessing",
-        entities=[EmitEvent(event=Shutdown(reason="hand-guiding observer failed"))])))
-    if activate:
-        handlers.append(RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=bridge, goal_state="active", entities=[owner])))
-    else:
+                for process in (driver, observer, owner)]
+    if not activate:
         handlers.append(LogInfo(msg="OBSERVE ONLY: pass activate_hardware:=true to start hand guiding"))
-    return [*handlers, driver, bridge,
+    return [*handlers, driver, observer, *([owner] if activate else []),
         Node(package="robot_state_publisher", executable="robot_state_publisher",
-             parameters=[{"robot_description": Path(urdf).read_text(encoding="utf-8")}],
+             parameters=[description],
              remappings=[("joint_states", "/hex_arm/internal/state")]),
         Node(package="rviz2", executable="rviz2", arguments=["-d", PathJoinSubstitution([
             FindPackageShare("hex_arm_bringup"), "rviz", "firefly_y6.rviz"])],

@@ -11,7 +11,10 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
-  <depend>realtime_tools</depend>
+  <depend>hex_arm_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>libprotobuf-dev</depend>
+  <build_depend>protobuf-compiler</build_depend>
   <depend>sensor_msgs</depend>
   <depend>std_srvs</depend>
   <test_depend>ament_cmake_gtest</test_depend>

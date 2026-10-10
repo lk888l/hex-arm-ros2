@@ -174,7 +174,7 @@ def main():
             return
         report["phase"] = "damping"
         report["damping_started_at"] = time.monotonic()
-        client = node.create_client(Trigger, "/hex_arm_bridge/damped_stop")
+        client = node.create_client(Trigger, "/hex_arm/damped_stop")
         if not client.wait_for_service(timeout_sec=2.0):
             raise RuntimeError("Rust damping service unavailable")
         node.monitor_motion = False  # Rust now owns monitoring through to disable.

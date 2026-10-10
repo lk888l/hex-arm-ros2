@@ -62,17 +62,17 @@ def installed_artifacts(prefix):
     result = {}
     artifacts = {
         "hex_arm_controller": ["lib/hex_arm_controller/hex_arm_controller"],
-        "hex_arm_hardware": ["lib/libhex_arm_hardware.so"],
+        "hex_arm_hardware": ["lib/libhex_arm_hardware.so", "lib/libzenohc.so"],
         "hex_arm_moveit_runtime": ["lib/hex_arm_moveit_runtime/hex_arm_move_group",
                                     "lib/libhex_arm_moveit_tem_shutdown.so"],
-        "hex_arm_bridge": [],
+        "hex_arm_tools": [],
     }
     for package, names in artifacts.items():
         candidates = [prefix, prefix / package, prefix.parent / package]
         package_prefix = next((path for path in candidates if (path / "share" / package).is_dir()), candidates[1])
         paths = [package_prefix / name for name in names]
-        if package == "hex_arm_bridge":
-            paths += sorted(package_prefix.glob("lib/python*/site-packages/hex_arm_bridge/**/*.py"))
+        if package == "hex_arm_tools":
+            paths += sorted(package_prefix.glob("lib/python*/site-packages/hex_arm_tools/**/*.py"))
         for path in paths:
             if path.is_file():
                 result[f"{package}/{path.relative_to(package_prefix)}"] = file_record(path)["sha256"]

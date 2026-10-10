@@ -292,6 +292,27 @@ class Probe(Node):
             raise RuntimeError("MoveIt did not acknowledge the verified startup execution handoff")
         return True
 
+    def wait_for_inactive_hardware(self, timeout_sec):
+        """Read-only cold-start gate, including six-axis CAN initialization."""
+        if not math.isfinite(timeout_sec) or timeout_sec <= 0:
+            raise ValueError("hardware startup timeout must be finite and positive")
+        deadline = time.monotonic() + timeout_sec
+        pending = None
+        while rclpy.ok() and time.monotonic() < deadline:
+            if pending is None and self.hardware.service_is_ready():
+                pending = self.hardware.call_async(ListHardwareComponents.Request())
+            rclpy.spin_once(self, timeout_sec=0.02)
+            if pending is not None and pending.done():
+                components = pending.result().component
+                pending = None
+                inactive = any(c.name == "FireflyY6System" and
+                    "hex_arm_hardware" in c.plugin_name and c.state.id == 2 for c in components)
+                if inactive and len(self.positions) == 6 and time.monotonic() - self.received_at <= .1:
+                    return
+        if pending is not None:
+            self.hardware.remove_pending_request(pending)
+        raise RuntimeError("fresh INACTIVE hardware unavailable before startup deadline")
+
     def activate_controllers(self, *, startup_ready=False):
         # Resolve all DDS services and configure plugins while motors are disabled.
         for endpoint in (self.hardware, self.load_controller, self.configure_controller,
@@ -656,6 +677,8 @@ def main():
     parser.add_argument("--moveit", action="store_true")
     parser.add_argument("--activate-controllers", action="store_true",
                         help="Prepare controllers, then enable hardware and run the protocol startup path")
+    parser.add_argument("--hardware-startup-timeout-sec", type=float,
+                        help="Wait for fresh INACTIVE hardware before preparing controllers")
     parser.add_argument("--hold-current", action="store_true",
                         help="Verify a stationary measured-pose hold before activating trajectories")
     parser.add_argument("--cia402-sequence", type=Path,
@@ -712,6 +735,8 @@ def main():
     hardware_verified = False
     try:
         if args.activate_controllers:
+            if args.hardware_startup_timeout_sec is not None:
+                node.wait_for_inactive_hardware(args.hardware_startup_timeout_sec)
             node.activate_controllers(startup_ready=not args.hold_current)
         if not node.fjt.wait_for_server(timeout_sec=40.0) or not node.hardware.wait_for_service(timeout_sec=5.0):
             raise RuntimeError("active real ROS controllers are unavailable")

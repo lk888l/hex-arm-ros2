@@ -194,7 +194,10 @@ def _build_moveit_config(enable_execution: bool, hardware_profile=None, position
         .planning_pipelines(default_planning_pipeline="ompl", pipelines=["ompl"])
         .joint_limits(file_path=dynamics_file)
         .planning_scene_monitor(
-            publish_robot_description=True,
+            # Bringup's robot_state_publisher owns the hardware description.
+            # This planning model uses Xacro defaults, so publishing it on the
+            # same topic can race ros2_control into loading the wrong transport.
+            publish_robot_description=False,
             publish_robot_description_semantic=True,
         )
     )
@@ -308,7 +311,7 @@ def _launch_setup(context: LaunchContext):
         ),
         launch_arguments=_bringup_arguments(
             hardware_profile, zenoh_connect, enable_execution, startup_ready, startup_sequence,
-            startup_trial, align_folded, allow_enable_transient, readiness_token, startup_motion_limits
+            startup_trial, align_folded, allow_enable_transient, readiness_token, startup_motion_limits,
         ).items(),
     )
     move_group = Node(
@@ -415,7 +418,7 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="",
                 description=(
                     "Optional explicit Zenoh endpoint. Empty uses the deterministic "
-                    "controller-to-bridge loopback endpoint tcp/127.0.0.1:7448."
+                    "controller-to-client loopback endpoint tcp/127.0.0.1:7448."
                 ),
             ),
             DeclareLaunchArgument(

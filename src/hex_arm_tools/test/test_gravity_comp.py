@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hex_arm_bridge.gravity_comp import GravityCompClient, validate_damping
-from hex_arm_bridge.pb import robot_api_pb2 as pb
+from hex_arm_tools.gravity_comp import GravityCompClient, validate_damping
+from hex_arm_tools.pb import robot_api_pb2 as pb
 
 
 class FakeSession:

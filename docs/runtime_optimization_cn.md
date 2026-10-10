@@ -1,7 +1,8 @@
 # 运行架构、测量与发布验证
 
-本轮继续使用 Python bridge 和独立 Rust 驱动，保持已有增益、运动限值、反馈超时和 watchdog 阈值。
-这里记录第二阶段实现；第一阶段迁移记录见 [运行架构与迁移](architecture_refactor_cn.md)。
+当前控制链路仅保留 C++ Zenoh 直连；旧 Python bridge 已删除。
+直连实现、实时邮箱及恢复策略见 [C++ Zenoh 直连后端](zenoh_direct_transport_cn.md)。
+下文保留第二阶段架构说明；第一阶段迁移记录见 [运行架构与迁移](architecture_refactor_cn.md)。
 本轮验证结果及真机边界见 [2026-10-09 验证记录](commissioning_evidence/2026-10-09-runtime-optimization-validation.md)。
 
 ## 状态与并发边界
@@ -17,10 +18,9 @@ Rust 的 `ArmRuntime` 唯一拥有 `RuntimeData`、电机后端、模式串行�
 * 全部生产协议端点声明成功后才启动处理任务、报告 ready。主进程监护每个具名协议任务；异常退出关闭请求入口并进入统一停机。
 * 停机先等待控制和已接受的硬件操作，再确认后端失能，最后取消通信任务。不能提前取消正在执行硬件转换的 RPC。
 
-Python 的 `HexArmBridge` 是唯一会话与生命周期状态所有者。
-management/stream 方法借用该所有者，readiness/mapping 提供验证与映射。
-命令、关节状态、DriverState、运行门控保持原周期；诊断默认 5 Hz，由独立 worker 格式化，故障和状态变化会唤醒它。
-真实入口从 `controllers.yaml` 的 `controller_manager.update_rate` 同时导出命令时长与状态发布周期。
+C++ `ZenohTransport` 拥有控制会话、生命周期、命令新鲜度与驱动门控。
+`read()` / `write()` 通过有界原子邮箱交接数据；RPC、编解码和网络均在非实时线程。
+反馈直接写入邮箱，ROS 状态与诊断由独立线程发布。命令时长从 controller_manager 更新率导出。
 
 ## 性能采集
 
@@ -30,10 +30,10 @@ trace 收尾有时间上限，不允许磁盘阻塞无限延长停机。
 
 时间戳使用同机 Linux `CLOCK_MONOTONIC`。ROS stamp 只作关联键，不与 Rust 进程启动后的时间相减。
 跨时间命名空间或跨主机的日志不能直接合并作单向时延测量。
-trace 开启时使用既有 Protobuf Header 的序号关联源命令与反馈，默认 Header 行为不变；它不新增源命令新鲜度保护。
+trace 使用既有 Protobuf Header 的序号关联命令与反馈；客户端来源新鲜度由独立周期序号、激活代次与单调时间检查。
 
-正向采集覆盖 C++ write/发布交接、Python 接收/Zenoh put、Rust 解码/接受/消费、锁等待、Meow 邮箱与 SocketCAN send。
-反向采集覆盖 Rust 状态发布、Python 接收/ROS 发布、C++ 接收/读取。
+正向采集覆盖 C++ write/Zenoh put、Rust 解码/接受/消费、锁等待、Meow 邮箱与 SocketCAN send。
+反向采集覆盖 Rust 状态发布、C++ Zenoh 接收/读取。
 报告区分没有消费的目标、首次发送、重复发送、发布跳过、采集丢失和完整关联覆盖。
 SocketCAN send 返回表示入队完成，不能解释为真实总线发送或电机应用完成。
 
@@ -49,8 +49,9 @@ python3 scripts/benchmark-transport.py run \
 短时验证可设置 `--warmup 1 --duration 3 --repetitions 1`。
 报告包括 p50/p95/p99/max、每阶段间隔、最大连续空窗及覆盖信息。
 
-该自动 mock fixture 运行 Rust 驱动、Python bridge 和测试目标源，不运行 C++ 硬件插件，也不打开 CAN；
-报告会明确标记覆盖不足。完整栈可设置 `HEX_ARM_TRACE_DIR` 后采集，用下述入口分析：
+自动 mock fixture 默认通过 pluginlib 加载实际 C++ 硬件插件，并运行 Rust 驱动；
+只运行 Zenoh 直连，不再提供 `--backend` 开关。所有自动 fixture 都不打开 CAN。
+完整实机栈可设置 `HEX_ARM_TRACE_DIR` 后采集，用下述入口分析：
 
 ```bash
 python3 scripts/benchmark-transport.py analyze /absolute/path/to/trace \
@@ -58,7 +59,7 @@ python3 scripts/benchmark-transport.py analyze /absolute/path/to/trace \
 ```
 
 基准期间避免构建和无关负载；对比使用相同配置、轨迹、容差和环境。
-本轮没有将 C++ 直连 Zenoh 纳入默认运行链路，也不根据短测宣称性能提升。
+旧桥接对照数据保留在历史验证记录中，分析器仍支持读取归档 CSV。
 
 ## MoveIt 与发布契约
 

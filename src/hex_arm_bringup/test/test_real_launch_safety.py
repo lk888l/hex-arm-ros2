@@ -48,14 +48,14 @@ def _context(
     profile: Path,
     activate_hardware: str,
     zenoh_connect: str = "",
-    bridge_startup_timeout_sec: str = "30.0",
+    hardware_startup_timeout_sec: str = "30.0",
 ) -> LaunchContext:
     context = LaunchContext()
     context.launch_configurations.update(
         {
             "hardware_profile": str(profile),
             "zenoh_connect": zenoh_connect,
-            "bridge_startup_timeout_sec": bridge_startup_timeout_sec,
+            "hardware_startup_timeout_sec": hardware_startup_timeout_sec,
             "activate_hardware": activate_hardware,
             "use_rviz": "false",
         }
@@ -97,6 +97,7 @@ def test_real_launch_defaults_to_observation_only() -> None:
     activation = arguments["activate_hardware"]
     assert perform_substitutions(LaunchContext(), activation.default_value) == "false"
     assert perform_substitutions(LaunchContext(), arguments["startup_ready"].default_value) == "true"
+    assert "transport_backend" not in arguments
     assert set(activation.choices) == {"true", "false"}
 
 
@@ -123,14 +124,14 @@ def test_clean_critical_exit_is_not_mislabeled_as_an_error() -> None:
     assert "exit" in failed_actions[1].event.reason
 
 
-def test_observe_mode_contains_no_controller_manager_process(tmp_path: Path) -> None:
+def test_observe_mode_starts_only_inactive_direct_hardware(tmp_path: Path) -> None:
     module = _load_launch_module()
     context = _context(_profile(tmp_path), "false")
     actions = module._real_nodes(context)
     nodes = list(_walk_nodes(actions))
 
-    assert "controller_manager" not in {node.node_package for node in nodes}
-    assert {"hex_arm_bridge", "robot_state_publisher"} <= {
+    assert "controller_manager" in {node.node_package for node in nodes}
+    assert {"controller_manager", "robot_state_publisher"} <= {
         node.node_package for node in nodes
     }
     controller_processes = [
@@ -184,7 +185,16 @@ def test_empty_zenoh_route_is_a_self_contained_loopback_pair() -> None:
     )
 
 
-def test_real_bridge_startup_budget_covers_six_axis_initialization() -> None:
+def test_direct_transport_has_one_session_owner_even_in_observation(tmp_path: Path) -> None:
+    module = _load_launch_module()
+    for activate in ("false", "true"):
+        context = _context(_profile(tmp_path), activate)
+        nodes = list(_walk_nodes(module._real_nodes(context)))
+        assert not any(node.node_package == "hex_arm_bridge" for node in nodes)
+        assert sum(node.node_package == "controller_manager" for node in nodes) == 1
+
+
+def test_real_hardware_startup_budget_covers_six_axis_initialization() -> None:
     module = _load_launch_module()
     description = module.generate_launch_description()
     arguments = {
@@ -193,20 +203,14 @@ def test_real_bridge_startup_budget_covers_six_axis_initialization() -> None:
         if isinstance(action, DeclareLaunchArgument)
     }
 
-    timeout_argument = arguments["bridge_startup_timeout_sec"]
+    timeout_argument = arguments["hardware_startup_timeout_sec"]
     timeout = float(
         perform_substitutions(LaunchContext(), timeout_argument.default_value)
     )
-    assert timeout == module.DEFAULT_BRIDGE_STARTUP_TIMEOUT_SEC == 30.0
-    assert module._bridge_parameters(
-        {"robot_prefix": "test/firefly_y6"},
-        module.DEFAULT_ZENOH_DIRECT_ENDPOINT,
-        timeout,
-    )["startup_timeout_sec"] == 30.0
-
+    assert timeout == module.DEFAULT_HARDWARE_STARTUP_TIMEOUT_SEC == 30.0
     for invalid in ("0", "-1", "nan", "inf", "not-a-number"):
         try:
-            module._positive_seconds(invalid, "bridge_startup_timeout_sec")
+            module._positive_seconds(invalid, "hardware_startup_timeout_sec")
         except RuntimeError as error:
             assert "finite positive" in str(error)
         else:
@@ -217,10 +221,8 @@ def test_uncalibrated_profile_is_observable_but_cannot_activate(tmp_path: Path) 
     module = _load_launch_module()
     profile = _profile(tmp_path, calibrated=False)
 
-    actions = module._real_nodes(_context(profile, "false"))
-    assert "controller_manager" not in {
-        node.node_package for node in _walk_nodes(actions)
-    }
+    nodes = list(_walk_nodes(module._real_nodes(_context(profile, "false"))))
+    assert "controller_manager" in {node.node_package for node in nodes}
 
     try:
         module._real_nodes(_context(profile, "true"))
@@ -399,14 +401,13 @@ def test_startup_event_requires_a_successful_profile_bound_report(tmp_path):
                for action in handler(SimpleNamespace(returncode=1), context))
 
 
-def test_bridge_command_and_snapshot_period_follow_controller_rate(tmp_path):
+def test_command_period_follows_controller_rate(tmp_path):
     module = _load_launch_module()
     config = tmp_path / "controllers.yaml"
     config.write_text("controller_manager: {ros__parameters: {update_rate: 250}}\n")
     rate = module._controller_update_rate(config)
-    parameters = module._bridge_parameters({"robot_prefix": "test/arm"}, "tcp/localhost:7448", 30.0, rate)
-    assert parameters["command_period_sec"] == 0.004
-    assert parameters["stream_period_sec"] == parameters["command_period_sec"]
+    assert rate == 250
+    assert 1.0 / rate == 0.004
     for invalid in ("0", "-1", "true", "2.5", "null"):
         config.write_text("controller_manager: {ros__parameters: {update_rate: " + invalid + "}}\n")
         try:

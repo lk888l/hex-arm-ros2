@@ -5,8 +5,8 @@
     type="hex_arm_hardware::HexArmSystem"
     base_class_type="hardware_interface::SystemInterface">
     <description>
-      Six-axis Firefly Y6 SystemInterface. Blocking Zenoh and USB work is
-      delegated to a lifecycle bridge and the Rust motor process.
+      Six-axis Firefly Y6 SystemInterface with bounded realtime snapshots.
+      A non-realtime C++ Zenoh manager communicates directly with the Rust driver.
     </description>
   </class>
 </library>

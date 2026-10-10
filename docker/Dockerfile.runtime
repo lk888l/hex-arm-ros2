@@ -12,6 +12,7 @@ COPY src ./src
 COPY config ./config
 COPY scripts ./scripts
 COPY docker ./docker
+RUN python3 scripts/install-zenoh-cpp.py --prefix /opt/hex-arm-zenoh
 RUN [[ "$RELEASE_BUILD" == 0 || "$RELEASE_BUILD" == 1 ]] \
  && release_args=() \
  && if [[ "$RELEASE_BUILD" == 1 ]]; then release_args=(--release --review-file docker/release-base.json); fi \
@@ -20,6 +21,7 @@ RUN source /opt/ros/jazzy/setup.bash \
  && colcon build --merge-install --install-base /opt/hex-arm \
       --packages-up-to hex_arm_moveit_config --executor sequential \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+                   -DCMAKE_PREFIX_PATH=/opt/hex-arm-zenoh \
                    -DHEX_ARM_BUILD_COMMISSIONING=OFF \
  && python3 scripts/test-runtime-install.py /opt/hex-arm \
  && release_args=() \
