@@ -16,6 +16,106 @@ def profile():
     return yaml.safe_load((WORKSPACE / "config/hardware/firefly_y6.meow_mit.example.yaml").read_text())
 
 
+def test_measured_startup_retains_nearby_placement_and_nonzero_j6():
+    q = [-.12, -1.43, 1.43, .13, -.11, .217]
+    assert client.validate_measured_startup(profile(), q, [0.] * 6) == q
+    assert q != client.FOLDED and q != client.READY
+
+
+@pytest.mark.parametrize("axis", range(5))
+def test_measured_startup_placement_window_never_extends_past_point_fifteen(axis):
+    config = profile()
+    for joint in config["joints"]:
+        joint["limits"].update(position_lower_rad=-3., position_upper_rad=3.)
+    q = client.FOLDED.copy(); q[axis] += .15
+    assert client.validate_measured_startup(config, q, [0.] * 6) == q
+    q[axis] += .0001
+    with pytest.raises(RuntimeError, match="default placement window"):
+        client.validate_measured_startup(config, q, [0.] * 6)
+
+
+def test_measured_startup_only_bounds_existing_encoder_margin():
+    config = profile()
+    q = client.FOLDED.copy(); q[1] = -1.575; q[5] = .217
+    with pytest.raises(RuntimeError, match="profile allowance"):
+        client.validate_measured_startup(config, q, [0.] * 6)
+    config["joints"][1]["limits"]["measured_position_margin_rad"] = .01
+    reference = client.validate_measured_startup(config, q, [0.] * 6)
+    assert reference[1] == -1.57 and reference[5] == q[5] and q[1] == -1.575
+    q[1] = -1.5801
+    with pytest.raises(RuntimeError, match="profile allowance"):
+        client.validate_measured_startup(config, q, [0.] * 6)
+
+
+@pytest.mark.parametrize("fault", ["moving", "nan", "partial", "j6_limit"])
+def test_measured_startup_rejects_invalid_feedback_before_enable(fault):
+    q, dq = client.FOLDED.copy(), [0.] * 6
+    if fault == "moving": dq[4] = .0201
+    if fault == "nan": q[0] = math.nan
+    if fault == "partial": dq.pop()
+    if fault == "j6_limit": q[5] = 2.8
+    with pytest.raises(RuntimeError):
+        client.validate_measured_startup(profile(), q, dq)
+
+
+@pytest.mark.parametrize("protocol", ["meow", "cia402"])
+@pytest.mark.parametrize("hold_flag", [False, True])
+def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path, monkeypatch, protocol, hold_flag):
+    import hashlib
+    import json
+    import sys
+    from types import SimpleNamespace as NS
+    config = profile(); config.update(validated=True, calibrated=True)
+    config["bus"]["protocol"] = protocol
+    profile_path = tmp_path / "profile.yaml"; profile_path.write_text(yaml.safe_dump(config))
+    output = tmp_path / "startup.json"
+    argv = ["startup", "--profile", str(profile_path), "--allow-motion", "--activate-controllers",
+            "--moveit-ready-token", "a" * 32, "--output", str(output)]
+    if hold_flag: argv.append("--hold-current")
+    monkeypatch.setattr(sys, "argv", argv)
+    q = [-.12, -1.43, 1.43, .13, -.11, .217]
+    events = []
+    class FakeProbe:
+        def __init__(self, profile, **_):
+            self.profile = profile
+            self.steps, self.samples, self.commands, self.action_feedback = [], [], [], []
+            self.service_timeouts, self.sequence_path_checks = [], []
+            self.positions, self.velocity = dict(zip(client.JOINTS, q)), dict.fromkeys(client.JOINTS, 0.)
+            self.hold_reference = self.hold_samples_start = self.active_goal = None
+            self.hardware_activation_requested = False
+            self.fjt, self.hardware = NS(wait_for_server=lambda **_: True), NS(wait_for_service=lambda **_: True)
+        def q(self): return q.copy()
+        def activate_controllers(self):
+            events.append("enable_at_measured_position")
+            self.enable_position_q = self.q()
+            self.hold_reference = client.validate_measured_startup(self.profile, q, [0.] * 6)
+            self.hold_samples_start = len(self.samples)
+        def list_hardware_components(self):
+            return [NS(name="FireflyY6System", plugin_name="hex_arm_hardware/HexArmSystem", state=NS(label="active"))]
+        def spin_hold(self, reference, seconds, start, *args):
+            assert reference == q
+            events.append("verify_hold")
+            self.samples.append({"q": self.q(), "dq": [0.] * 6})
+            return client.measured_hold_metrics(reference, self.samples[start:])
+        def activate_trajectory_controller(self): events.append("trajectory_controller")
+        def unlock_moveit_after_hold(self, token):
+            assert token == "a" * 32 and events[-1] == "verify_hold"
+            events.append("unlock_moveit")
+            return True
+        def destroy_node(self): events.append("cleanup")
+    monkeypatch.setattr(client, "Probe", FakeProbe)
+    monkeypatch.setattr(client.rclpy, "init", lambda: None)
+    monkeypatch.setattr(client.rclpy, "shutdown", lambda: None)
+    client.main()
+    report = json.loads(output.read_text())
+    assert report["passed"] and report["startup_mode"] == "measured_hold" and report["steps"] == []
+    assert report["measured_hold"]["reference_q"] == report["ready_hold"]["target"] == q
+    assert report["moveit_execution_unlocked"]
+    client.verified_measured_hold(config, report, hashlib.sha256(profile_path.read_bytes()).hexdigest())
+    assert events == ["enable_at_measured_position", "verify_hold", "trajectory_controller",
+                      "verify_hold", "verify_hold", "unlock_moveit", "cleanup"]
+
+
 @pytest.mark.parametrize("j6", [-2.7, -0.219, 0.497, 2.7])
 def test_j6_alignment_preserves_startup_order_and_quintic_limits(j6):
     config = profile()
@@ -102,6 +202,7 @@ def test_controller_configuration_completes_before_any_enable():
             return self.result
     system = NS(name="FireflyY6System", plugin_name="hex_arm_hardware/HexArmSystem", state=NS(id=2))
     fake = NS(
+        profile=profile(),
         hardware=Endpoint("list", NS(component=[system])),
         load_controller=Endpoint("load", NS(ok=True)),
         configure_controller=Endpoint("configure", NS(ok=True)),
@@ -134,11 +235,11 @@ def test_controller_configuration_completes_before_any_enable():
     events.clear()
     fake.configure_controller.result = NS(ok=True)
     fake.profile = profile()
-    bad = client.FOLDED.copy(); bad[1] = -1.35
+    bad = client.FOLDED.copy(); bad[1] += .151
     fake.q = lambda: bad
     fake.velocity = dict.fromkeys(client.JOINTS, 0.0)
     fake.check_point = lambda q: None
-    with pytest.raises(RuntimeError, match="folded reference"):
+    with pytest.raises(RuntimeError, match="default placement window"):
         client.Probe.activate_controllers(fake, startup_ready=True)
     assert all(event[0] not in ("enable", "activate_group") for event in events)
     assert not fake.hardware_activation_requested

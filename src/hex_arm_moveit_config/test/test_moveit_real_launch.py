@@ -87,6 +87,7 @@ def test_public_launch_defaults_to_plan_only() -> None:
         context, declarations["enable_execution"].default_value
     ) == "false"
     assert declarations["enable_execution"].choices == ["true", "false"]
+    assert perform_substitutions(context, declarations["position_limits"].default_value) == "hardware"
     assert perform_substitutions(context, declarations["dynamics_limits"].default_value) == "commissioning"
     assert declarations["dynamics_limits"].choices == ["commissioning", "hardware", "custom"]
     assert perform_substitutions(context, declarations["startup_ready"].default_value) == "true"
@@ -109,7 +110,7 @@ def test_one_switch_gates_hardware_and_moveit_execution() -> None:
         assert arguments["activate_hardware"] == expected
         assert arguments["startup_ready"] == expected
         if enabled:
-            with pytest.raises(RuntimeError, match="protocol startup procedure"):
+            with pytest.raises(RuntimeError, match="verified measured-pose hold"):
                 module._bringup_arguments("/tmp/profile.yaml", "", enabled, False)
         else:
             assert module._bringup_arguments("/tmp/profile.yaml", "", False, False)["startup_ready"] == "false"
@@ -515,15 +516,13 @@ def test_launch_forwards_the_selected_dynamic_configuration(monkeypatch):
     assert selected == [(True, "/tmp/validated.local.yaml", "hardware", "custom", "/tmp/dynamics.yaml")]
 
 
-def test_arm_bound_startup_recipe_is_forwarded_without_widening_execution_authority():
-    module = _module()
-    for enabled in (False, True):
-        args = module._bringup_arguments('/arm.yaml', '', enabled, True, '/arm-sequence.yaml')
-        assert args['startup_sequence'] == '/arm-sequence.yaml'
-        assert args['activate_hardware'] == str(enabled).lower()
-    with pytest.raises(RuntimeError, match='explicit execution'):
-        module._bringup_arguments('/arm.yaml', '', False, True, '/arm-sequence.yaml', True)
-    with pytest.raises(RuntimeError, match='arm-bound sequence'):
-        module._bringup_arguments('/arm.yaml', '', True, True, '', True)
-    args = module._bringup_arguments('/arm.yaml', '', True, True, '/arm-sequence.yaml', True)
-    assert args['startup_trial'] == args['activate_hardware'] == 'true'
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("arguments", [
+    {"startup_sequence": "/tmp/legacy-sequence.yaml"},
+    {"startup_trial": True},
+    {"align_folded": True},
+    {"startup_sequence": "/tmp/legacy-sequence.yaml", "startup_trial": True},
+])
+def test_real_moveit_cannot_restore_startup_motion(enabled, arguments):
+    with pytest.raises(RuntimeError, match="startup motion is disabled"):
+        _module()._bringup_arguments("/tmp/profile.yaml", "", enabled, **arguments)

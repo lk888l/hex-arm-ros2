@@ -16,9 +16,11 @@ import yaml
 def eligible(profile, startup_report):
     try:
         report = json.loads(Path(startup_report).read_text())
+        measured_startup = (report.get("startup_mode") == "measured_hold"
+                            and isinstance(report.get("measured_hold"), dict))
         qualified_stop = (profile.get("controller", {}).get("shutdown_damping") is not None
                           or (profile.get("bus", {}).get("protocol", "meow") == "meow"
-                              and bool(report.get("steps")))
+                              and (measured_startup or bool(report.get("steps"))))
                           or (profile.get("bus", {}).get("protocol", "meow") == "cia402"
                               and "sequence" in report and "measured_hold" in report))
         return (qualified_stop
@@ -122,7 +124,7 @@ def main():
         # TERM/HUP and the second interrupt retain the immediate disable path.
         if (len(signals) == 1 and signals[0] == signal.SIGINT
                 and args.scope == "moveit" and eligible(profile, startup_report)):
-            print("graceful exit: returning through the verified startup pose and stop sequence; second Ctrl+C disables immediately", flush=True)
+            print("graceful exit: returning through the shutdown ready pose and stop sequence; second Ctrl+C disables immediately", flush=True)
             helper = subprocess.Popen(stop_command(
                 profile, args.profile, startup_report, run_dir / "soft-stop.json"),
                 env=env, start_new_session=True)

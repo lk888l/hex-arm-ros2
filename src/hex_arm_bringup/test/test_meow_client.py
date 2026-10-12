@@ -34,6 +34,43 @@ def fixture(deployment=False):
     return profile, prior
 
 
+def measured_fixture():
+    profile, prior = fixture(deployment=True)
+    q = [-.12, -1.43, 1.43, .13, -.11, .217]
+    prior.update(startup_mode='measured_hold', steps=[],
+        measured_hold=dict(enable_position_q=q.copy(), reference_q=q.copy(), q=q.copy(),
+                           seconds=client.startup.measured_hold_duration(profile), samples=20,
+                           max_error_rad=[0.] * 6, max_velocity_rad_s=0., enable_transient_allowed=False),
+        ready_hold=dict(target=q.copy(), q=q.copy(), seconds=client.startup.READY_HOLD_SECONDS,
+                        samples=20, max_error_rad=[0.] * 6, max_velocity_rad_s=0.))
+    return profile, prior
+
+
+def test_measured_startup_preserves_fixed_ready_and_folded_shutdown_waypoints():
+    profile, prior = measured_fixture()
+    legacy_profile, legacy = fixture(deployment=True)
+    assert client.return_steps(profile, prior, 'exact') == client.return_steps(legacy_profile, legacy, 'exact')
+    assert prior['ready_hold']['target'] != client.startup.READY
+
+
+@pytest.mark.parametrize('fault', ['profile', 'motion', 'partial', 'raw_reference', 'ready_reference',
+                                   'failed_hold', 'moving_hold', 'no_samples', 'short_hold', 'rates'])
+def test_changed_or_unverified_measured_startup_never_authorizes_folded_return(fault):
+    profile, prior = measured_fixture()
+    if fault == 'profile': prior['profile_sha256'] = 'changed'
+    if fault == 'motion': prior['steps'] = [{}]
+    if fault == 'partial': prior['measured_hold']['reference_q'].pop()
+    if fault == 'raw_reference': prior['measured_hold']['enable_position_q'][0] += .02
+    if fault == 'ready_reference': prior['ready_hold']['target'] = client.startup.READY.copy()
+    if fault == 'failed_hold': prior['measured_hold']['max_error_rad'][0] = .0151
+    if fault == 'moving_hold': prior['ready_hold']['max_velocity_rad_s'] = .0201
+    if fault == 'no_samples': prior['ready_hold']['samples'] = 0
+    if fault == 'short_hold': prior['measured_hold']['seconds'] = 0.01
+    if fault == 'rates': prior['motion_limits']['joint_1']['velocity_rad_s'] = 100.
+    with pytest.raises((RuntimeError, ValueError)):
+        client.return_steps(profile, prior, 'exact')
+
+
 @pytest.mark.parametrize('deployment', [False, True])
 def test_return_reverses_verified_startup_at_normal_motion_rates(deployment):
     profile, prior = fixture(deployment)
@@ -160,6 +197,30 @@ def test_normal_exit_after_campaign_does_not_move_or_enable_again(monkeypatch):
         client.run(node, [], True, {})
 
 
+@pytest.mark.parametrize('free_axes', [[0., 0., 0.], [.1, -.1, .217]])
+def test_unmoved_folded_start_disables_without_an_unfolding_motion(monkeypatch, free_axes):
+    profile, prior = measured_fixture()
+    for joint in profile['joints']:
+        joint['limits']['measured_position_margin_rad'] = .01
+    q = client.startup.FOLDED.copy(); q[1] = -1.5704; q[2] = 1.579
+    for axis, value in zip((0, 4, 5), free_axes): q[axis] = value
+    events = []
+    components = [SimpleNamespace(name='FireflyY6System', plugin_name='hex_arm_hardware/HexArmSystem',
+                                 state=SimpleNamespace(id=3, label='active'))]
+    node = SimpleNamespace(profile=profile, q=lambda: q.copy(), driver=None,
+        list_hardware_components=lambda: components, check_live=lambda: events.append('healthy'),
+        wait_stationary=lambda: events.append('stationary'),
+        is_valid=lambda reference, contacts: events.append(('collision', reference.copy(), contacts)),
+        deactivate=lambda: events.append('disable'))
+    monkeypatch.setattr(client, 'warm_connections', lambda *args, **kwargs: None)
+    report = {'moveit': []}
+    client.run(node, client.return_steps(profile, prior, 'exact'), False, report)
+    assert events == ['healthy', 'stationary',
+                      ('collision', q, client.startup.FOLDED_CONTACTS), 'disable']
+    assert report['passed'] and report['deactivated'] and report['already_folded']
+    assert report['folded_q'] == q and report['moveit'] == []
+
+
 @pytest.mark.parametrize('campaign', [False, True])
 def test_shutdown_tolerance_covers_ready_and_folding_without_changing_campaign(monkeypatch, campaign):
     profile, prior = fixture()
@@ -168,7 +229,7 @@ def test_shutdown_tolerance_covers_ready_and_folding_without_changing_campaign(m
     planned, folded = [], []
     components = [SimpleNamespace(name='FireflyY6System', plugin_name='hex_arm_hardware/HexArmSystem',
                                  state=SimpleNamespace(id=3, label='active'))]
-    node = SimpleNamespace(q=lambda: q.copy(), driver=None, list_hardware_components=lambda: components,
+    node = SimpleNamespace(profile=profile, q=lambda: q.copy(), driver=None, list_hardware_components=lambda: components,
                            check_live=lambda: None, wait_stationary=lambda *args: None,
                            check_point=lambda q: None, is_valid=lambda *args: True,
                            sequence_path_checks=[], samples=[], deactivate=lambda: None,

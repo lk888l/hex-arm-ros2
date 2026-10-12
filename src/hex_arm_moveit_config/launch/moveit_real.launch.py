@@ -242,13 +242,11 @@ def _bringup_arguments(
     startup_motion_limits: str = "",
 ) -> dict[str, str]:
     if enable_execution and not startup_ready:
-        raise RuntimeError("real execution requires the protocol startup procedure")
+        raise RuntimeError("real execution requires the verified measured-pose hold")
     if allow_enable_transient and not enable_execution:
         raise RuntimeError("enable transient allowance requires explicit execution")
-    if align_folded and not enable_execution:
-        raise RuntimeError("folded alignment requires explicit execution")
-    if startup_trial and (not enable_execution or not startup_sequence):
-        raise RuntimeError("startup trial requires explicit execution and an arm-bound sequence")
+    if startup_sequence or startup_trial or align_folded:
+        raise RuntimeError("startup motion is disabled; startup_sequence, startup_trial and align_folded cannot request motion")
     return {
         "hardware_profile": hardware_profile,
         "zenoh_connect": zenoh_connect,
@@ -256,10 +254,7 @@ def _bringup_arguments(
         # execute only when the hardware and trajectory controller are active.
         "activate_hardware": "true" if enable_execution else "false",
         "startup_ready": "true" if enable_execution and startup_ready else "false",
-        **({"startup_sequence": startup_sequence} if startup_sequence else {}),
-        **({"startup_trial": "true"} if startup_trial else {}),
         **({"allow_enable_transient": "true"} if allow_enable_transient else {}),
-        **({"align_folded": "true"} if align_folded else {}),
         **({"moveit_ready_token": readiness_token} if readiness_token else {}),
         **({"startup_motion_limits": startup_motion_limits} if startup_motion_limits else {}),
         # The outer launch owns the single MoveIt-configured RViz process.
@@ -274,7 +269,7 @@ def _launch_setup(context: LaunchContext):
     startup_ready = _boolean_argument(context, "startup_ready")
     hardware_profile = LaunchConfiguration("hardware_profile").perform(context)
     zenoh_connect = LaunchConfiguration("zenoh_connect").perform(context)
-    position_limits = LaunchConfiguration("position_limits", default="commissioning").perform(context)
+    position_limits = LaunchConfiguration("position_limits", default="hardware").perform(context)
     dynamics_limits = LaunchConfiguration("dynamics_limits", default="commissioning").perform(context)
     planning_limits_file = LaunchConfiguration("planning_limits_file", default="").perform(context)
     startup_sequence = LaunchConfiguration("startup_sequence", default="").perform(context)
@@ -378,10 +373,10 @@ def _launch_setup(context: LaunchContext):
             )
         )
     if enable_execution:
-        # A startup trajectory controller is already active during the ten-second
-        # ready hold. The runtime gates its action servers; open the UI only after
-        # this exact startup process has also written its successful report.
-        actions.append(LogInfo(msg="MoveIt startup in progress: execution and RViz wait for verified hold"))
+        # The startup process only holds the measured pose. The runtime gates
+        # its action servers; open the UI after this exact process reports a
+        # successful stationary hold with the complete six-axis feedback.
+        actions.append(LogInfo(msg="MoveIt startup in progress: holding measured pose; execution and RViz wait for verified hold"))
         actions.append(RegisterEventHandler(EventHandler(
             matcher=lambda event: (isinstance(event, StartupVerified)
                                    and Path(event.profile) == Path(hardware_profile)
@@ -400,11 +395,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("allow_enable_transient", default_value="false", choices=["true", "false"],
                                   description="Explicit Meow enable/ramp allowance: 0.15 rad/s for 0.25 s, then 0.05; settle before trajectories"),
             DeclareLaunchArgument("align_folded", default_value="false", choices=["true", "false"],
-                                  description="Explicit bounded Meow base/wrist alignment"),
+                                  description="Retired startup alignment option; must be false"),
             DeclareLaunchArgument("startup_sequence", default_value="",
-                                  description="Optional arm-bound CiA402 unfolded startup recipe"),
+                                  description="Retired startup motion option; must be empty"),
             DeclareLaunchArgument("startup_trial", default_value="false", choices=["true", "false"],
-                                  description="Validate startup and MoveIt, return to entry, then disable"),
+                                  description="Retired startup motion option; must be false"),
             DeclareLaunchArgument(
                 "hardware_profile",
                 default_value="",
@@ -432,11 +427,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "position_limits",
-                default_value="commissioning",
+                default_value="hardware",
                 choices=["commissioning", "hardware"],
                 description=(
-                    "commissioning retains the original narrow position window; hardware uses "
-                    "the selected hardware profile intersected with URDF travel. "
+                    "hardware uses the selected hardware profile intersected with URDF travel "
+                    "so the measured placement pose is available to planning; commissioning "
+                    "selects the original narrow position window. "
                     "Select planning speed/acceleration separately with dynamics_limits."
                 ),
             ),
@@ -456,8 +452,8 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 choices=["true", "false"],
                 description=(
-                    "Required for execution: Meow runs the verified J2 -> J4 -> J3 fold exit; "
-                    "CiA402 verifies and holds the measured pose."
+                    "Required for execution: read and hold the existing six-axis pose, verify "
+                    "stationary feedback, then enable MoveIt execution and RViz."
                 ),
             ),
             DeclareLaunchArgument(

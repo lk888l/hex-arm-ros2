@@ -101,10 +101,12 @@ hardware_interface::CallbackReturn HexArmSystem::on_init(
   }
 
   const auto count = joint_names_.size();
-  hw_position_.assign(count, 0.0);
-  hw_velocity_.assign(count, 0.0);
-  hw_effort_.assign(count, 0.0);
-  command_position_.assign(count, 0.0);
+  // No initial pose is authoritative until the real transport reports it.
+  const auto unknown = std::numeric_limits<double>::quiet_NaN();
+  hw_position_.assign(count, unknown);
+  hw_velocity_.assign(count, unknown);
+  hw_effort_.assign(count, unknown);
+  command_position_.assign(count, unknown);
   command_velocity_.assign(count, 0.0);
   zenoh_options_.joint_names = joint_names_;
   zenoh_options_.state_timeout = state_timeout_.count();
@@ -205,6 +207,12 @@ hardware_interface::CallbackReturn HexArmSystem::on_activate(
     RCLCPP_ERROR(io_node_->get_logger(), "activation requires fresh feedback and command transport");
     return hardware_interface::CallbackReturn::ERROR;
   }
+  // Seed both the state interfaces and the hold reference from the same
+  // measured snapshot before enabling commands or trajectory controllers.
+  std::copy(snapshot.position.begin(), snapshot.position.end(), hw_position_.begin());
+  std::copy(snapshot.velocity.begin(), snapshot.velocity.end(), hw_velocity_.begin());
+  std::copy(snapshot.effort.begin(), snapshot.effort.end(), hw_effort_.begin());
+  read_snapshot_ = snapshot;
   std::copy(snapshot.position.begin(), snapshot.position.end(), command_position_.begin());
   std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
   const auto generation = activation_generation_.fetch_add(1) + 1;

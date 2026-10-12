@@ -1,4 +1,4 @@
-"""Shared folded-to-ready recipe. No ROS node or motor IO is created here."""
+"""Shared placement window and historical waypoints used by shutdown and commissioning."""
 import math
 from pathlib import Path
 
