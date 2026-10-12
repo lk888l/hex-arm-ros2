@@ -104,23 +104,27 @@ actual hardware and verify calibration; see [zero calibration (Chinese)](docs/ze
 ### 1. Check the entry posture
 
 Stop GUI MIT, gravity compensation, and other control entries. Run one hardware controller and
-one motion client at a time. After each power cycle, place the arm at the folded entry below
-before automatic startup. All values are radians:
+one motion client at a time. After each power cycle, start directly near the default placement
+below. All values are radians:
 
 | Posture | J1 | J2 | J3 | J4 | J5 | J6 |
 |---|---:|---:|---:|---:|---:|---:|
 | Folded entry `folded_position_rad` | 0 | **−1.570** | **1.570** | 0 | 0 | 0 |
-| Startup result `startup_ready` | 0 | −1.350 | 1.430 | −0.300 | 0 | 0 |
+| Shutdown return pose `startup_ready` | 0 | −1.350 | 1.430 | −0.300 | 0 | 0 |
 
-Absolute encoders check the entry posture. Startup follows **J2 → J4 → J3**:
-J2 to −1.350 (8 s), J4 to −0.300 (10 s), and J3 to 1.430 (6 s).
+Startup reads all six absolute encoder positions, enables at that position, ramps gravity
+compensation, and verifies stationary holding before opening MoveIt execution and RViz.
+Startup sends no unfolding or alignment trajectory. RViz's Scene Robot displays live feedback.
+Shutdown continues to return to the fixed ready pose above before folding.
 The authoritative recipe is [startup.yaml](src/hex_arm_controller/config/startup.yaml).
 
-Folded placement allows **0.01 rad (about 0.57°)** of J2/J3 variation around the reference.
-The deployment profile also sets `measured_position_margin_rad: 0.01`, accepting J2 from
-−1.580 to −1.560 rad and J3 from 1.560 to 1.580 rad at startup. The activation hold and
-trajectory start bound small endpoint deviations to legal command positions. Actual feedback
-continues to drive gravity and fault checks; zero offsets and normal command limits retain their values.
+J1–J5 each allow **0.15 rad (about 8.59°)** of placement variation; J6 uses the hardware
+profile's position range. All six axes require fresh, stationary feedback within hardware bounds.
+The placement window also respects those bounds: the current deployment profile accepts J2
+from −1.580 to −1.420 rad and J3 from 1.420 to 1.580 rad. Its
+`measured_position_margin_rad: 0.01` permits the small feedback deviation beyond an endpoint.
+Legal measured positions become the hold target directly; endpoint deviations retain the
+driver's bounded hold target.
 
 ### 2. Launch MoveIt (complete host command)
 
@@ -136,11 +140,10 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   position_limits:=hardware \
   dynamics_limits:=custom \
   planning_limits_file:=/workspaces/hex_arm_ros2/src/hex_arm_moveit_config/config/joint_limits_deployment.yaml \
-  align_folded:=true \
   allow_enable_transient:=true
 ```
 
-This enables and automatically moves the arm; leave the terminal running.
+This enables and holds the arm at its measured position; leave the terminal running.
 Profile and planning YAML arguments use **absolute paths inside the container**.
 The supervisor verifies adapter serial and physical channel, forwards signals,
 retains audit logs, and verifies final disable.
@@ -150,21 +153,21 @@ retains audit logs, and verifies final disable.
 | `enable_execution:=true` | Enables hardware and permits trajectories after startup verification |
 | `position_limits:=hardware` | Intersects URDF and hardware profile position limits |
 | `dynamics_limits:=custom` + `planning_limits_file:=...` | Intersects production planning dynamics with hardware; velocity also respects the URDF cap |
-| `align_folded:=true` | Allows bounded base and wrist alignment at the folded entry |
 | `allow_enable_transient:=true` | Allows a brief velocity allowance during enable and gravity ramp, followed by stationary verification |
 
 Append `use_rviz:=false` for services without RViz. Without a graphical desktop, also set
 `HEX_ARM_HEADLESS=1` before both `up` and `real-launch`; the helper disables RViz automatically.
-For disabled observation and planning, set `enable_execution`, `align_folded`, and
-`allow_enable_transient` **all to `false`**.
+For disabled observation and planning, set `enable_execution` and
+`allow_enable_transient` **both to `false`**.
 
 ### 3. Wait for verification, then execute
 
-Startup movements are followed by a **3-second stationary ready hold**.
+Enable and gravity ramp are followed by a **3-second stationary hold at the measured position**.
 MoveIt execution actions remain unavailable during startup; RViz opens after verification.
 Wait for `MoveIt startup verified: execution available`, then select `arm` and the current start
 state in RViz for **Plan** / **Plan & Execute**. Headless clients also wait for this message.
-`startup_ready:=false` cannot bypass automatic hardware startup.
+`startup_ready:=false` cannot bypass measured-position hold verification. Legacy
+`align_folded:=true` and startup sequence arguments are rejected.
 
 The gray planned-path preview defaults to `0.05 s` per trajectory point with looping enabled.
 In the current RViz window, set **Displays → MotionPlanning → Planned Path → State Display Time = 0.05 s**
@@ -193,8 +196,8 @@ Gravity feedforward continuously uses the measured six-axis pose, including J2 f
 Limits and units:
 
 - Multiply GUI Rev/s and Rev/s² by `2π` to obtain ROS / MoveIt / Rust rad/s and rad/s².
-- Position and dynamics default to `commissioning`. Changing only positions or hardware speed still leaves the 0.1 rad/s and 0.1 rad/s² planning caps.
-- Meow unfolding, folded return, and preparatory alignment use this launch's MoveIt velocity and acceleration caps, with durations calculated from travel. Shutdown return-to-ready uses fixed 0.5/0.5 velocity and acceleration scaling. The startup stationary check lasts 3 seconds.
+- Real position limits default to the hardware/URDF intersection; dynamics default to `commissioning`. Raising hardware speed still leaves the 0.1 rad/s and 0.1 rad/s² planning caps unless dynamics are explicitly selected.
+- Meow folded return uses this launch's MoveIt velocity and acceleration caps, with durations calculated from travel. Shutdown return-to-ready uses fixed 0.5/0.5 velocity and acceleration scaling. Startup verifies stationary holding at the measured position for 3 seconds.
 - RViz velocity and acceleration scaling are additional multipliers; set both to 1.0 for full planning limits.
 - The old `replacement.local.yaml` retains narrow windows; use `moveit_deployment.local.yaml` from the command above.
 
@@ -209,8 +212,12 @@ See [replacement-arm deployment (Chinese)](docs/meow_replacement_deployment_cn.m
 
 ### 4. Normal shutdown
 
-The first **Ctrl+C** in the owning `real-launch` terminal returns through ready using MoveIt,
+The first **Ctrl+C** in the owning `real-launch` terminal returns from a working pose through ready using MoveIt,
 then performs the controlled **J3 → J4 → J2** folded return and confirms disable.
+If it remains at the folded endpoint after startup, shutdown verifies stationary feedback and disables directly.
+A pose still within the placement window with only known folded-model contacts uses the same axis order
+after checking the complete return path, holding J1/J5/J6 at their measured angles.
+Additional contacts or a failed path check request disable and report failure.
 Shutdown return-to-ready uses fixed **0.5/0.5** velocity and acceleration scaling.
 A second Ctrl+C or a fault requests immediate shutdown.
 Shutdown return and folding trajectories use a per-goal **0.1 rad position path tolerance**.

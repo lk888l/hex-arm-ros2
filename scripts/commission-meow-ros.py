@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify bounded Meow MoveIt round trips, or return a verified startup to folded.
+"""Verify bounded Meow MoveIt round trips, or return a verified hold to folded.
 
 Run against the active supervised launch that produced --startup-report.
 This client never enables hardware. A failure cancels motion and requests disable.
@@ -23,13 +23,21 @@ startup = shutdown.startup
 
 
 def return_steps(profile, prior, digest):
-    """Only reverse a successful, exact-profile, standard Meow startup."""
+    """Retain fixed folded-return waypoints for a verified current launch."""
     if (profile.get('bus', {}).get('protocol', 'meow') != 'meow'
             or not profile.get('validated') or not profile.get('calibrated')
             or prior.get('passed') is not True or prior.get('deactivated')
             or 'ready_hold' not in prior or prior.get('profile_sha256') != digest
             or not isinstance(prior.get('motion_limits'), dict)):
         raise RuntimeError('requires this active launch\'s successful, exact-profile Meow startup')
+    if prior.get('startup_mode') == 'measured_hold':
+        startup.verified_measured_hold(profile, prior, digest)
+        rates = startup.resolve_motion_limits(profile, prior['motion_limits'])
+        forward = startup.startup_steps(profile, startup.FOLDED, [0.] * 6, motion_limits=rates)
+        waypoints = [startup.folded_entry_command(profile, startup.FOLDED), *(s[1] for s in forward)]
+        return [(f'return_{forward[i][0]}', waypoints[i],
+                 startup.rest_to_rest_duration(waypoints[i + 1], waypoints[i], rates))
+                for i in (2, 1, 0)]
     records = prior.get('steps', [])
     if not records:
         raise RuntimeError('startup evidence contains no steps')
@@ -127,7 +135,8 @@ def planning_scaling(value):
     return value
 
 
-def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, acceleration_scaling=1.0):
+def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, acceleration_scaling=1.0,
+        startup_mode=None):
     warm_connections(node, check_live=False)
     components = node.list_hardware_components()
     if already_inactive(node, components):
@@ -145,6 +154,18 @@ def run(node, reverse, test_moveit, report, goals=None, velocity_scaling=1.0, ac
         None if goals or test_moveit else shutdown.SHUTDOWN_PATH_TOLERANCE_RAD)
     report['shutdown_path_tolerance_rad'] = shutdown.SHUTDOWN_PATH_TOLERANCE_RAD
     node.wait_stationary()
+    reference = (shutdown.already_folded_reference(node.profile, node.q())
+                 if not goals and not test_moveit else None)
+    if reference is not None:
+        node.is_valid(node.q(), startup.FOLDED_CONTACTS)
+        report.update(already_folded=True, folded_q=node.q())
+        node.monitor_motion = False
+        node.deactivate()
+        report.update(passed=True, deactivated=True)
+        return
+    if (not goals and not test_moveit and startup_mode == 'measured_hold'
+            and shutdown.measured_folded_reentry(node, report)):
+        return
     if any(abs(q-t) > startup.HOLD_POSITION_TOLERANCE_RAD
            for q, t in zip(node.q(), startup.READY)):
         report['return_to_ready'] = node.plan_and_execute(
@@ -235,7 +256,8 @@ def main():
                       campaign_sha256=hashlib.sha256(args.campaign.read_bytes()).hexdigest(),
                       requested_goals=goals)
     try:
-        run(node, reverse, args.test_moveit, report, goals, args.velocity_scaling, args.acceleration_scaling)
+        run(node, reverse, args.test_moveit, report, goals, args.velocity_scaling, args.acceleration_scaling,
+            startup_mode=prior.get('startup_mode'))
     except BaseException as error:
         report['error'] = str(error)
         report['failed_plan'] = getattr(node, 'last_plan_diagnostics', None)

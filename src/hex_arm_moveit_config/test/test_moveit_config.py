@@ -167,6 +167,10 @@ def test_rviz_uses_motion_planning_as_a_display_only() -> None:
     }
     assert "moveit_rviz_plugin/MotionPlanning" not in panel_classes
     assert "moveit_rviz_plugin/MotionPlanning" in display_classes
+    motion_planning = next(display for display in config["Visualization Manager"]["Displays"]
+                           if display["Class"] == "moveit_rviz_plugin/MotionPlanning")
+    assert motion_planning["Scene Robot"]["Robot Alpha"] == 1.0
+    assert motion_planning["Scene Robot"]["Show Robot Visual"] is True
 
 
 def test_mock_launch_uses_the_ordered_shutdown_runtime() -> None:

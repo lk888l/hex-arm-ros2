@@ -37,13 +37,13 @@ MoveIt intersects the model, commissioning and hardware limits; its J2 lower bou
 
 ## Start and stop
 
-After each power cycle and before automatic startup, place the arm at
-`[0,-1.570,1.570,0,0,0]` rad: **J2=−1.570 and J3=1.570**, with the other joints
-nominally zero. Automatic startup ends at `[0,-1.350,1.430,-0.300,0,0]` rad,
-where **J3=1.430**. Both postures and the motion durations are defined by
-[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml). Entry checks happen before enable:
-stationary feedback, profile bounds, placement differences up to 0.03 rad on J1/J5 and 0.01 rad on J2/J3/J4.
-J6 is aligned within its selected bounds when needed; existing encoder offsets are retained.
+After each power cycle, start directly near the default placement
+`[0,-1.570,1.570,0,0,0]` rad. J1–J5 each allow 0.15 rad of placement variation
+within hardware bounds; J6 holds its measured angle within its position limits.
+Startup checks complete, fresh, stationary six-axis feedback before enabling at that position
+and ramping gravity compensation. `[0,-1.350,1.430,-0.300,0,0]` rad remains the shutdown
+return pose. Placement, tolerances and shutdown waypoints are defined by
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml).
 
 From a graphical host terminal in the repository:
 
@@ -54,12 +54,11 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-Startup moves J2 to −1.350 in 8 s, J4 to −0.300 in 10 s, then J3 to 1.430 in 6 s.
-Other joints finish at zero; J2/J3/J4 keep measured positions until their turn.
-This fixed folded exit follows the operator-verified physical path. MoveIt execution uses strict collision checking.
+Startup sends no unfolding or alignment trajectory. After enable and gravity ramp, it verifies
+stationary holding at the measured position, then opens MoveIt execution and RViz with live feedback.
 
-Wait for `startup_ready reached and verified; controller continues holding`, then select `arm` and the current
-start state in RViz. Real execution requires ordered startup; `startup_ready:=false` cannot
+Wait for `Measured pose held; controller continues holding`, then select `arm` and the current
+start state in RViz. Real execution requires measured-position hold verification; `startup_ready:=false` cannot
 bypass it. Omitting `enable_execution:=true` selects disabled observation/planning.
 
 With the newly configured local damping profile, the first Ctrl-C can move the arm back to

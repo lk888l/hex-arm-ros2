@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Activate a prepared ROS stack and verify the selected startup path.
+"""Activate a prepared ROS stack and verify a measured-position hold.
 
 Run only with a supervised real launch and its exact reduced hardware profile.
-Meow aligns J6 when needed, then follows the verified J2, J4, J3 sequence.
-CiA402 holds its measured pose and verifies the hold before enabling the
-trajectory controller. This client never changes calibration.
+Both protocols hold their measured pose before enabling the trajectory
+controller and MoveIt. The fixed folded/ready recipe remains available for
+shutdown and legacy report validation. This client never changes calibration.
 """
 import argparse
 from datetime import datetime, timezone
@@ -44,6 +44,7 @@ FOLDED = STARTUP_RECIPE["folded_position_rad"]
 READY = ready_position(STARTUP_RECIPE)
 # Small free-joint placement differences do not redefine encoder calibration.
 FOLDED_TOLERANCE = STARTUP_RECIPE["ros_folded_tolerance_rad"]
+LEGACY_FOLDED_TOLERANCE = [0.03, 0.01, 0.01, 0.01, 0.03]
 HOLD_POSITION_TOLERANCE_RAD = 0.015
 HOLD_VELOCITY_PEAK_RAD_S = 0.02
 READY_HOLD_SECONDS = 3.0
@@ -145,7 +146,7 @@ def cia402_steps(recipe, profile, positions, profile_sha256):
             or any(abs(a - b) > .01 for a, b in zip(positions, reference))):
         raise RuntimeError("CiA402 sequence requires its stationary entry pose within 0.01 rad")
     if any(abs(a - b) > tolerance for a, b, tolerance
-           in zip(reference[:5], FOLDED[:5], FOLDED_TOLERANCE)):
+           in zip(reference[:5], FOLDED[:5], LEGACY_FOLDED_TOLERANCE)):
         raise RuntimeError("CiA402 sequence entry must be the documented folded pose")
     raw = recipe.get("steps", [])
     # This first deployed recipe is deliberately limited to the tested order.
@@ -191,14 +192,86 @@ def folded_entry_command(profile, positions):
     return reference
 
 
+def validate_measured_startup(profile, positions, velocities):
+    """Accept nearby stationary placement and retain the driver's bounded hold."""
+    if (len(positions) != 6 or len(velocities) != 6
+            or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                   or not math.isfinite(v) for v in (*positions, *velocities))
+            or any(abs(v) > STARTUP_RECIPE["stopped_velocity_rad_s"] for v in velocities)):
+        raise RuntimeError("measured-pose activation requires finite, stationary six-axis feedback")
+    if any(abs(q - nominal) > tolerance + POSITION_EPSILON_RAD
+           for q, nominal, tolerance in zip(positions[:5], FOLDED[:5], FOLDED_TOLERANCE)):
+        raise RuntimeError(f"measured-pose activation requires the default placement window: {positions}")
+    if profile["bus"].get("protocol", "meow") == "meow":
+        # The hardware uses the same <=0.01 rad measurement allowance at an
+        # encoder boundary. Keep the raw reading in the report, while matching
+        # its bounded hold target; valid positions are never moved to a preset.
+        return folded_entry_command(profile, positions)
+    for q, joint in zip(positions, profile["joints"]):
+        limits = joint["limits"]
+        if not limits["position_lower_rad"] <= q <= limits["position_upper_rad"]:
+            raise RuntimeError(f"measured-pose feedback exceeds {joint['name']} profile authority: {q}")
+    return list(positions)
+
+
+def verified_measured_hold(profile, prior, digest):
+    """Validate current-launch hold evidence without treating it as fixed READY."""
+    if (prior.get("startup_mode") != "measured_hold" or prior.get("passed") is not True
+            or prior.get("deactivated") or prior.get("profile_sha256") != digest
+            or not profile.get("validated") or not profile.get("calibrated")
+            or prior.get("steps") != [] or not isinstance(prior.get("motion_limits"), dict)):
+        raise RuntimeError("requires this active launch's successful, exact-profile measured hold")
+    resolve_motion_limits(profile, prior["motion_limits"])
+    hold, ready = prior.get("measured_hold"), prior.get("ready_hold")
+    if not isinstance(hold, dict) or not isinstance(ready, dict):
+        raise RuntimeError("startup evidence contains no verified measured hold")
+    reference, measured = hold.get("reference_q", []), hold.get("enable_position_q", [])
+    if not isinstance(reference, list) or not isinstance(measured, list):
+        raise RuntimeError("startup evidence requires six-axis measured references")
+    expected = validate_measured_startup(profile, measured, [0.0] * 6)
+    if reference != expected or ready.get("target") != reference:
+        raise RuntimeError("startup hold reference does not match measured activation")
+    for record in (hold, ready):
+        q, errors, speed = record.get("q", []), record.get("max_error_rad", []), record.get("max_velocity_rad_s")
+        if (not isinstance(q, list) or not isinstance(errors, list)
+                or len(q) != 6 or len(errors) != 6
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                       for v in [*q, *errors])
+                or any(v < 0 or v > HOLD_POSITION_TOLERANCE_RAD for v in errors)
+                or any(abs(a-b) > HOLD_POSITION_TOLERANCE_RAD for a, b in zip(q, reference))
+                or isinstance(speed, bool) or not isinstance(speed, (int, float))
+                or not math.isfinite(speed) or speed < 0
+                or type(record.get("samples")) is not int or record["samples"] <= 0):
+            raise RuntimeError("startup evidence contains invalid measured hold feedback")
+    for record, minimum in ((hold, measured_hold_duration(profile)), (ready, READY_HOLD_SECONDS)):
+        seconds = record.get("seconds")
+        if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+                or not math.isfinite(seconds) or seconds < minimum):
+            raise RuntimeError("startup evidence contains an incomplete measured hold")
+    if type(hold.get("enable_transient_allowed")) is not bool:
+        raise RuntimeError("startup evidence contains an invalid enable transient allowance")
+    if (ready["max_velocity_rad_s"] > HOLD_VELOCITY_PEAK_RAD_S
+            or hold["max_velocity_rad_s"] > (.15 if hold["enable_transient_allowed"] else HOLD_VELOCITY_PEAK_RAD_S)):
+        raise RuntimeError("startup evidence exceeded its measured hold velocity limit")
+    if hold["enable_transient_allowed"]:
+        errors, speed = hold.get("settled_max_error_rad", []), hold.get("settled_max_velocity_rad_s")
+        if (not isinstance(errors, list) or len(errors) != 6
+                or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                       or not math.isfinite(v) or not 0 <= v <= HOLD_POSITION_TOLERANCE_RAD for v in errors)
+                or isinstance(speed, bool) or not isinstance(speed, (int, float))
+                or not math.isfinite(speed) or not 0 <= speed <= HOLD_VELOCITY_PEAK_RAD_S):
+            raise RuntimeError("startup evidence did not verify a stationary hold after enable")
+    return list(reference)
+
+
 def startup_steps(profile, positions, velocities, *, align_folded=False, motion_limits=None):
-    """Return bounded FJT goals; only J1–J5 define the folded entry posture."""
+    """Reconstruct the fixed legacy recipe for shutdown evidence and waypoints."""
     if (len(positions) != 6 or len(velocities) != 6
             or not all(math.isfinite(q) for q in positions)
             or any(not math.isfinite(v) or abs(v) > STARTUP_RECIPE["stopped_velocity_rad_s"]
                    for v in velocities)):
         raise RuntimeError("startup requires finite, stationary six-axis feedback")
-    tolerances = FOLDED_TOLERANCE
+    tolerances = LEGACY_FOLDED_TOLERANCE
     if align_folded:
         if profile["bus"].get("protocol", "meow") != "meow":
             raise RuntimeError("explicit folded alignment requires Meow")
@@ -337,31 +410,13 @@ class Probe(Node):
         while len(self.positions) < 6 and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.02)
         self.spin(1.0)
-        if startup_ready:
-            # Reject a wrong posture/path while motors are still disabled.
-            steps = startup_steps(
-                    self.profile, self.q(), [self.velocity[name] for name in JOINTS],
-                    align_folded=getattr(self, "align_folded", False),
-                    motion_limits=getattr(self, "motion_limits", None))
-            self.check_point(folded_entry_command(self.profile, self.q()))
-            for _, target, _ in steps:
-                self.check_point(target)
-            self.folded_entry_checked = True
-        else:
-            # CiA402 starts by holding the measured pose. Check the position
-            # window and stationary feedback before requesting motor torque.
-            self.check_point(self.q())
-            velocities = [self.velocity.get(name) for name in JOINTS]
-            if any(v is None or not math.isfinite(v)
-                   or abs(v) > STARTUP_RECIPE["stopped_velocity_rad_s"]
-                   for v in velocities):
-                raise RuntimeError("measured-pose activation requires stationary six-axis feedback")
-            self.hold_reference = self.q()
-            self.hold_samples_start = len(self.samples)
-            if getattr(self, "sequence", None) is not None:
-                steps = cia402_steps(self.sequence, self.profile, self.hold_reference, self.profile_sha256)
-                self.check_sequence_path(self.hold_reference, steps)
-        self.hold_reference = self.q()
+        self.enable_position_q = self.q()
+        self.hold_reference = validate_measured_startup(
+            self.profile, self.enable_position_q, [self.velocity.get(name) for name in JOINTS])
+        self.check_point(self.hold_reference)
+        if getattr(self, "sequence", None) is not None:
+            steps = cia402_steps(self.sequence, self.profile, self.hold_reference, self.profile_sha256)
+            self.check_sequence_path(self.hold_reference, steps)
         self.hold_samples_start = len(self.samples)
         print("Controllers loaded and configured; DDS ready while hardware INACTIVE", flush=True)
         request = SetHardwareComponentState.Request()
@@ -676,11 +731,11 @@ def main():
     parser.add_argument("--allow-motion", action="store_true", required=True)
     parser.add_argument("--moveit", action="store_true")
     parser.add_argument("--activate-controllers", action="store_true",
-                        help="Prepare controllers, then enable hardware and run the protocol startup path")
+                        help="Prepare controllers, then enable hardware while holding measured feedback")
     parser.add_argument("--hardware-startup-timeout-sec", type=float,
                         help="Wait for fresh INACTIVE hardware before preparing controllers")
     parser.add_argument("--hold-current", action="store_true",
-                        help="Verify a stationary measured-pose hold before activating trajectories")
+                        help="Compatibility option: stationary measured-pose holding is the default")
     parser.add_argument("--cia402-sequence", type=Path,
                         help="Arm-bound, commissioned J3/J4/J2 sequence; requires strict MoveIt")
     parser.add_argument("--return-to-start", action="store_true",
@@ -688,7 +743,7 @@ def main():
     parser.add_argument("--allow-enable-transient", action="store_true",
                         help="Bound Meow enable/ramp speeds to 0.15 for 0.25 s then 0.05 rad/s; require settled hold before trajectories")
     parser.add_argument("--align-folded", action="store_true",
-                        help="Explicitly align bounded Meow base/wrist placement before the fixed startup")
+                        help="Removed: automatic folded alignment is no longer permitted")
     parser.add_argument("--record-commands", action="store_true",
                         help="Optionally sample commands with best-effort QoS for diagnostics")
     parser.add_argument("--moveit-ready-token", default="",
@@ -705,12 +760,12 @@ def main():
         raise RuntimeError("MoveIt handoff requires controller activation and a per-launch token")
     if args.allow_enable_transient and (not args.activate_controllers or profile["bus"].get("protocol", "meow") != "meow"):
         raise RuntimeError("enable transient allowance requires explicit Meow activation")
-    if args.align_folded and (args.hold_current or profile["bus"].get("protocol", "meow") != "meow"):
-        raise RuntimeError("--align-folded requires the fixed Meow startup")
-    if not profile["calibrated"] or (not args.hold_current and profile["bus"].get("protocol", "meow") != "meow"):
-        raise RuntimeError("requires a calibrated profile; fixed startup requires Meow")
-    if args.hold_current and args.moveit and not args.cia402_sequence:
-        raise RuntimeError("--moveit requires the fixed ready sequence")
+    if args.align_folded:
+        raise RuntimeError("automatic folded alignment was removed; startup holds the measured position")
+    if not profile["calibrated"]:
+        raise RuntimeError("requires a calibrated profile")
+    if args.moveit and not args.cia402_sequence:
+        raise RuntimeError("startup holds the measured position; MoveIt trials require an explicit commissioned sequence")
     if args.cia402_sequence and (not args.hold_current or not args.activate_controllers):
         raise RuntimeError("CiA402 sequence requires measured-pose controller activation")
     if args.return_to_start and not args.cia402_sequence:
@@ -726,6 +781,7 @@ def main():
                  motion_limits=motion_limits)
     report = {"time": datetime.now(timezone.utc).isoformat(),
               "profile": str(args.profile), "profile_sha256": profile_sha256, "steps": node.steps,
+              "startup_mode": "commissioned_sequence" if sequence is not None else "measured_hold",
               "motion_limits": motion_limits,
               "hold_position_tolerance_rad": HOLD_POSITION_TOLERANCE_RAD,
               "hold_velocity_peak_rad_s": HOLD_VELOCITY_PEAK_RAD_S}
@@ -737,7 +793,7 @@ def main():
         if args.activate_controllers:
             if args.hardware_startup_timeout_sec is not None:
                 node.wait_for_inactive_hardware(args.hardware_startup_timeout_sec)
-            node.activate_controllers(startup_ready=not args.hold_current)
+            node.activate_controllers()
         if not node.fjt.wait_for_server(timeout_sec=40.0) or not node.hardware.wait_for_service(timeout_sec=5.0):
             raise RuntimeError("active real ROS controllers are unavailable")
         components = node.list_hardware_components()
@@ -750,7 +806,9 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.02)
         hold_reference = node.hold_reference
         if hold_reference is None:
-            hold_reference = node.q()
+            node.enable_position_q = node.q()
+            hold_reference = validate_measured_startup(
+                profile, node.enable_position_q, [node.velocity.get(name) for name in JOINTS])
         hold_samples_start = (
             node.hold_samples_start if node.hold_samples_start is not None else len(node.samples)
         )
@@ -762,6 +820,7 @@ def main():
             "enable_transient_allowed": args.allow_enable_transient,
             "enable_started_at": getattr(node, "enable_started_at", None),
             "seconds": hold_duration,
+            "enable_position_q": node.enable_position_q,
             "reference_q": hold_reference, "q": node.q(), "samples": len(held),
             "max_error_rad": max_error_rad, "max_velocity_rad_s": max_velocity_rad_s,
         }
@@ -780,71 +839,46 @@ def main():
             max_error_after_activation = max(errors_after)
             report["measured_hold"]["post_controller_max_error_rad"] = max_error_after_activation
             report["measured_hold"]["post_controller_max_velocity_rad_s"] = max_velocity_after_activation
-        if args.hold_current:
-            if sequence is not None:
-                steps = cia402_steps(sequence, profile, hold_reference, profile_sha256)
-                for label, target, duration in steps:
-                    node.direct_step(target, duration, label)
-                    node.is_valid(node.q())
-                ready = steps[-1][1]
-                start = len(node.samples)
-                errors, velocity = node.spin_hold(ready, READY_HOLD_SECONDS, start)
-                report["ready_hold"] = {"seconds": READY_HOLD_SECONDS, "target": ready, "q": node.q(),
-                                        "max_error_rad": errors, "max_velocity_rad_s": velocity}
-                report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
-                if args.moveit:
-                    if not (node.move_group.wait_for_server(timeout_sec=5.0)
-                            and node.trajectory_executor.wait_for_server(timeout_sec=5.0)):
-                        raise RuntimeError("MoveIt action servers unavailable")
-                    target = ready.copy(); target[1] += .015
-                    report["moveit"] = node.plan_and_execute(target)
-                    report["moveit_return"] = node.plan_and_execute(ready)
-                if args.return_to_start:
-                    previous = [hold_reference, *(step[1] for step in steps[:-1])]
-                    for index in reversed(range(len(steps))):
-                        label, _, duration = steps[index]
-                        node.direct_step(previous[index], duration, f"return_{label}")
-                        node.is_valid(node.q(), FOLDED_CONTACTS if index == 0 else frozenset())
-                    start = len(node.samples)
-                    errors, velocity = node.spin_hold(hold_reference, 1.0, start)
-                    report["returned_hold"] = {"max_error_rad": errors, "max_velocity_rad_s": velocity}
-            else:
-                report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
-        else:
-            steps = startup_steps(profile, node.q(), [node.velocity[name] for name in JOINTS],
-                                  align_folded=args.align_folded, motion_limits=node.motion_limits)
-            node.folded_entry_checked = True
-            # Check every target before sending the first motion command.
-            for _, target, _ in steps:
-                node.check_point(target)
+        if sequence is not None:
+            steps = cia402_steps(sequence, profile, hold_reference, profile_sha256)
             for label, target, duration in steps:
-                node.direct_step(target, duration, label, retime=True)
+                node.direct_step(target, duration, label)
+                node.is_valid(node.q())
+            ready = steps[-1][1]
             start = len(node.samples)
-            node.spin(READY_HOLD_SECONDS)
-            held = node.samples[start:]
-            report["ready_hold"] = {
-                "seconds": READY_HOLD_SECONDS, "samples": len(held), "last_q": node.q(),
-                "max_error_rad": [max(abs(s["q"][i] - READY[i]) for s in held) for i in range(6)],
-                "max_velocity_rad_s": max(abs(v) for s in held for v in s["dq"]),
-            }
-            print(json.dumps(report["ready_hold"]), flush=True)
-            try:
-                measured_hold_metrics(READY, held)
-            except RuntimeError as error:
-                raise RuntimeError(f"ready hold verification failed: {error}") from error
+            errors, velocity = node.spin_hold(ready, READY_HOLD_SECONDS, start)
+            report["ready_hold"] = {"seconds": READY_HOLD_SECONDS, "target": ready, "q": node.q(),
+                                    "max_error_rad": errors, "max_velocity_rad_s": velocity}
             report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
             if args.moveit:
                 if not (node.move_group.wait_for_server(timeout_sec=5.0)
-                        and node.trajectory_executor.wait_for_server(timeout_sec=5.0)
-                        and node.validity.wait_for_service(timeout_sec=5.0)):
-                    raise RuntimeError("MoveIt services unavailable")
-                target = READY.copy()
-                target[1] += 0.015
+                        and node.trajectory_executor.wait_for_server(timeout_sec=5.0)):
+                    raise RuntimeError("MoveIt action servers unavailable")
+                target = ready.copy(); target[1] += .015
                 report["moveit"] = node.plan_and_execute(target)
-                print(json.dumps(report["moveit"]), flush=True)
+                report["moveit_return"] = node.plan_and_execute(ready)
+            if args.return_to_start:
+                previous = [hold_reference, *(step[1] for step in steps[:-1])]
+                for index in reversed(range(len(steps))):
+                    label, _, duration = steps[index]
+                    node.direct_step(previous[index], duration, f"return_{label}")
+                    node.is_valid(node.q(), FOLDED_CONTACTS if index == 0 else frozenset())
+                start = len(node.samples)
+                errors, velocity = node.spin_hold(hold_reference, 1.0, start)
+                report["returned_hold"] = {"max_error_rad": errors, "max_velocity_rad_s": velocity}
+        else:
+            start = len(node.samples)
+            errors, velocity = node.spin_hold(hold_reference, READY_HOLD_SECONDS, start)
+            held = node.samples[start:]
+            report["ready_hold"] = {
+                "seconds": READY_HOLD_SECONDS, "samples": len(held), "target": list(hold_reference),
+                "q": node.q(), "max_error_rad": errors, "max_velocity_rad_s": velocity,
+            }
+            print(json.dumps(report["ready_hold"]), flush=True)
+            report["moveit_execution_unlocked"] = node.unlock_moveit_after_hold(args.moveit_ready_token)
         report["passed"] = True
         if not args.deactivate_after:
-            mode = "Measured pose held" if args.hold_current else "startup_ready reached and verified"
+            mode = "Commissioned sequence verified" if sequence is not None else "Measured pose held"
             print(f"{mode}; controller continues holding. Report: {args.output}", flush=True)
     except BaseException as error:
         report["passed"] = False

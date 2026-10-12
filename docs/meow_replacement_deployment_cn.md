@@ -39,14 +39,15 @@
   96°/s 的基础上再次提高 1/3，加速度仍为 0.2 Rev/s² 乘 `2π`。J2/J4 实测反馈速率额外允许 0.02 rad/s。
 - 位置范围：J1 ±2.86、J2 [−1.57,2.09]、J3/J4 ±1.57、J5 ±1.54、J6 ±2.79 rad。
   MoveIt 再与 URDF 取交集；规划和执行使用严格碰撞模型。
-- 折叠入口 J2/J3 各允许相对 ±1.570 rad 参考偏差 0.01 rad，配合本 profile
-  的 `measured_position_margin_rad: 0.01` 接受边界附近的静止反馈。Meow 使能时
-  的保持目标与首次轨迹起点收回到命令范围，后续回折使用已记录的合法保持参考。
-  ROS 初始零速度回显仅在首次运动前匹配该保持参考时接受；实际反馈和软零偏保留。
+- 默认摆放入口为 `[0,-1.570,1.570,0,0,0]` rad，J1～J5 各允许偏差 0.15 rad，
+  J6 按硬件位置范围检查并保持当前角度。入口同时受硬件限位及
+  `measured_position_margin_rad: 0.01` 约束；J2 有效范围为 [−1.580,−1.420]，
+  J3 为 [1.420,1.580] rad。启动读取实测六轴位置原地使能，不展开或自动对齐。
+  边界外至多 0.01 rad 的反馈偏差沿用合法保持目标限幅，图形显示仍取实际反馈。
 
 ## 动态限值与单位
 
-位置和动态分别选择，默认均为 `commissioning`。正式部署同时传入
+位置和动态分别选择，真机位置默认 `hardware`，动态默认 `commissioning`。正式部署同时传入
 `position_limits:=hardware dynamics_limits:=hardware`；此时速度为硬件 profile 与 URDF 的较小值，
 加速度来自硬件 profile，不再混入 commissioning 的 0.1 上限。启动日志打印最终 SI 限值。
 
@@ -140,16 +141,17 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   /workspaces/hex_arm_ros2/config/hardware/firefly_y6.meow.can2.moveit_deployment.local.yaml \
   enable_execution:=true position_limits:=hardware dynamics_limits:=custom \
   planning_limits_file:=/workspaces/hex_arm_ros2/src/hex_arm_moveit_config/config/joint_limits_deployment.yaml \
-  align_folded:=true allow_enable_transient:=true
+  allow_enable_transient:=true
 ```
 
 无界面场景追加 `use_rviz:=false`。测试容器内使用的 ROS_DOMAIN_ID 为 189；启动、验收、停止客户端必须相同。
-真机 RViz 现在会在启动验收完成后自动打开。启动动作和 3 秒 ready 静止验收期间，
+真机 RViz 会在当前位置保持验收完成后自动打开。使能、重力渐入和 3 秒静止验收期间，
 MoveIt 的 `/move_action` 与 `/execute_trajectory` 尚未开放；严格碰撞检查服务保持可用。
 验收通过后才开放执行，并校验本次启动报告、自动启动 RViz，避免提前执行新轨迹打断静止验收。
 无界面客户端应等待 `MoveIt startup verified: execution available`，
-并保存 `startup_ready reached and verified` 打印的 **本次** `startup-ready.json` 路径。
-使能瞬态许可、重力渐入、静止保持和完整 J2→J4→J3 顺序仍是强制前置检查。
+并保存 `Measured pose held; controller continues holding` 打印的 **本次** `startup-ready.json` 路径。
+使能瞬态许可、重力渐入和当前位置静止保持仍是前置检查。
+启动报告以 `startup_mode: measured_hold` 记录实际保持参考；固定 ready 位仅供关机返回。
 
 若启动失败后看到 `context is invalid` 等 ROS/RViz 退出日志，先查看 `startup-ready.json` 的
 `passed/error` 与 `driver-shutdown.json` 的 `disabled_confirmed`。监督入口会分别报告启动失败与
@@ -169,11 +171,14 @@ python3 scripts/commission-meow-ros.py --allow-motion \
 ```
 
 将示例路径替换为本次启动打印的完整路径；不要使用旧运行的报告。
-此工具核对配置 SHA256、成功启动步骤、真实硬件与新鲜反馈，必要时严格规划回 ready，
+此工具核对配置 SHA256、本次成功的当前位置保持验收、真实硬件与新鲜反馈，必要时严格规划回固定 ready，
 再检查固定回折路径，按 J3→J4→J2 使用本次 MoveIt 的正常速度、加速度上限回折，最后停止控制器并确认硬件 INACTIVE。
-开机展开、准备对齐和回折的时长均按各轴行程自动计算，正式部署使用 2.234021 rad/s、0.9375 rad/s²；
+回折的时长按各轴行程自动计算，正式部署使用 2.234021 rad/s、0.9375 rad/s²；
 关机返回 ready 固定使用 0.5/0.5 速度、加速度缩放。启动报告保存本次动态限值，关机时继续使用相同限值。
-更新后重新构建并重新启动工程；旧启动报告不再授权新的回折流程。开机后的静止验收为 3 秒。
+更新后重新构建并重新启动工程，使用本次启动报告。开机原地保持的静止验收为 3 秒。
+若开机后仍静止在折叠终点，关机直接确认静止并失能；其余位置保留返回 ready、J3→J4→J2 回折的流程。
+仍处于启动摆放窗口、且仅含已知折叠模型接触时，逐点预检完整路径后按 J3→J4→J2 直接回折，
+J1/J5/J6 保持实测角度；不会用限幅后的姿态掩盖实际反馈中的额外接触。
 出现失败会取消目标并请求失能，报告中的 `passed` 不会伪装为成功。
 同一时间只使用一个运动客户端；运行本工具期间不要在 RViz 或其他终端发送轨迹。
 
@@ -182,7 +187,7 @@ python3 scripts/commission-meow-ros.py --allow-motion \
 所有 MoveIt 轨迹维持严格碰撞检查；只有固定折叠路径允许文档中已有的两个模型接触对。
 `--campaign` 和 `--test-moveit` 的速度、加速度比例默认均为 1.0，可通过
 `--velocity-scaling` / `--acceleration-scaling` 单独调整；接受 (0,1] 的有限值。
-报告记录所用比例、规划时长及逐轴规划速度/加速度峰值。固定展开和回折同样按本次 MoveIt 动态限值自动计算时长。
+报告记录所用比例、规划时长及逐轴规划速度/加速度峰值。固定回折按本次 MoveIt 动态限值自动计算时长。
 
 工具确认控制器停止、ROS 硬件 INACTIVE 后，再退出监督启动进程。
 还须检查 `driver-shutdown.json` 为 `disabled_confirmed`，并在控制进程退出后独立读取六轴模式/故障；

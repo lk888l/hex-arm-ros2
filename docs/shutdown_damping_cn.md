@@ -7,8 +7,8 @@
 ## 操作入口
 
 使用 `scripts/docker-dev.sh real-launch moveit ... enable_execution:=true`，
-或独立生产 `compose.runtime.yaml`。只有本次启动完成自动 J2→J4→J3 并通过
-`startup_ready` 保持检查、且 profile 配置了 `controller.shutdown_damping`，才启用柔和退出。
+或独立生产 `compose.runtime.yaml`。只有本次启动读取当前位置、原地使能并通过
+静止保持检查，且 profile 配置了 `controller.shutdown_damping`，才启用柔和退出。
 
 在拥有 real-launch 的终端按**第一次 Ctrl+C 后，机械臂可能主动运动**：
 
@@ -24,10 +24,14 @@
    （每轴误差 ≤0.02 rad、速度 ≤0.02 rad/s）连续静止 `settle_sec`，才确认柔和阶段完成；
    随后执行并确认全轴 Disable，最后退出 ROS。
 
+若原地开机后仍停在折叠终点，退出时确认静止并直接失能，无需先返回 ready 再下落。
+仍位于启动摆放窗口、且只有已知折叠模型接触时，预检完整路径后按 J3→J4→J2 回折并失能，
+J1/J5/J6 保持当前位置。普通工作位置继续执行返回固定 ready 位和阻尼退出。
+
 安全启动位和折叠位均读取同一份
-[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml)，本功能不修改零偏或启动顺序。
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml)。取消开机轨迹后，关机仍使用这两组固定参考。
 **下落阶段是六轴阻尼，不是 J2→J3→J4 的主动折叠轨迹**；回安全位由 MoveIt 协调规划，
-不重放开机固定轨迹，也不绕过碰撞检查。环境障碍物仍需正确加入规划场景。
+环境障碍物仍需正确加入规划场景。
 
 回位失败、阻尼超时、反馈失效、越界、超速或电机故障都不会报告柔和退出成功，
 而是转入失能流程。**这时仍可能下落较快**；不能通过放宽安全门限掩盖失败。

@@ -23,6 +23,67 @@ SHUTDOWN_RETURN_VELOCITY_SCALING = 0.5
 SHUTDOWN_RETURN_ACCELERATION_SCALING = 0.5
 
 
+def already_folded_reference(profile, positions):
+    """Recognize folded structure without moving a placed base or free wrist."""
+    if (profile.get("bus", {}).get("protocol", "meow") != "meow"
+            or len(positions) != 6 or any(not math.isfinite(q) for q in positions)
+            or any(abs(positions[axis]-startup.FOLDED[axis]) > startup.HOLD_POSITION_TOLERANCE_RAD
+                   for axis in (1, 2, 3))):
+        return None
+    # J2/J3/J4 determine the folded support structure. J1/J5/J6 retain their
+    # measured placement, subject to the same hardware bounds and state-validity
+    # check as every stop. No shutdown endpoint tolerance is widened.
+    return startup.folded_entry_command(profile, positions)
+
+
+def measured_folded_reentry(node, report):
+    """Return a stationary startup-window contact pose through the original axis order."""
+    if node.profile.get("bus", {}).get("protocol", "meow") != "meow":
+        return False
+    try:
+        reference = startup.validate_measured_startup(
+            node.profile, node.q(), [node.velocity.get(name) for name in startup.JOINTS])
+    except RuntimeError:
+        return False
+    if not node.validity.wait_for_service(timeout_sec=2.0):
+        raise RuntimeError("strict MoveIt unavailable; measured folded return refused")
+    # A valid entry uses the existing MoveIt-to-READY stop. Only the documented
+    # folded contacts enter this bounded re-entry, with no planning-scene ACM edit.
+    if node.is_valid(node.q(), startup.FOLDED_CONTACTS):
+        return False
+    steps, previous = [], reference.copy()
+    for axis in (2, 3, 1):
+        target = previous.copy()
+        target[axis] = startup.FOLDED[axis]
+        duration = startup.rest_to_rest_duration(previous, target, node.motion_limits)
+        steps.append((f"return_startup_j{axis + 1}", target, duration))
+        for k in range(81):
+            q = [a+(b-a)*k/80 for a, b in zip(previous, target)]
+            node.check_point(q)
+            valid = node.is_valid(q, startup.FOLDED_CONTACTS)
+            node.sequence_path_checks.append({
+                "step": steps[-1][0], "q": q, "strict_valid": valid,
+                "measured_folded_reentry": True,
+            })
+        previous = target.copy()
+    # Complete the endpoint, position, collision and dynamics preflight before
+    # sending the first goal. Free axes retain the bounded measured hold target.
+    report["phase"] = "return_measured_to_folded"
+    report["folded_reentry_reference_q"] = reference.copy()
+    node.folded_entry_checked = True
+    for label, target, duration in steps:
+        node.direct_step(target, duration, label, retime=True)
+        node.wait_stationary(target)
+        node.is_valid(node.q(), startup.FOLDED_CONTACTS)
+    if already_folded_reference(node.profile, node.q()) is None:
+        raise RuntimeError("measured folded return did not reach the original folded structure tolerance")
+    report.update(measured_folded_reentry=True, folded_q=node.q())
+    node.monitor_motion = False
+    node.deactivate()
+    report.update(passed=True, deactivated=True, phase="disabled_confirmed")
+    return True
+
+
 class StopProbe(startup.Probe):
     def __init__(self, profile, record_commands=False, motion_limits=None):
         super().__init__(profile, record_commands=record_commands, motion_limits=motion_limits)
@@ -72,7 +133,10 @@ class StopProbe(startup.Probe):
         if not (d and d.mode == 2 and d.session_owned and d.profile_valid and d.calibrated
                 and d.all_motors_online and d.feedback_fresh and not d.fault_latched):
             raise RuntimeError("shutdown requires healthy active driver")
-        self.check_point(self.q())
+        if self.profile.get("bus", {}).get("protocol", "meow") == "meow":
+            self.check_point(startup.folded_entry_command(self.profile, self.q()))
+        else:
+            self.check_point(self.q())
 
     def wait(self, future, timeout):
         deadline = time.monotonic() + timeout
@@ -122,6 +186,9 @@ def main():
     if prior.get("passed") is not True or "ready_hold" not in prior or prior.get("deactivated"):
         raise RuntimeError("this launch has not completed verified startup")
     profile = yaml.safe_load(args.profile.read_text())
+    if prior.get("startup_mode") == "measured_hold":
+        startup.verified_measured_hold(
+            profile, prior, hashlib.sha256(args.profile.read_bytes()).hexdigest())
     sequence = None
     ready = startup.READY
     if profile.get("bus", {}).get("protocol", "meow") == "cia402":
@@ -134,7 +201,8 @@ def main():
     elif not profile.get("controller", {}).get("shutdown_damping"):
         raise RuntimeError("damping is not configured")
     rclpy.init()
-    node = StopProbe(profile)
+    node = (StopProbe(profile, motion_limits=prior["motion_limits"])
+            if prior.get("startup_mode") == "measured_hold" else StopProbe(profile))
     report = {"passed": False, "phase": "preflight",
               "shutdown_path_tolerance_rad": SHUTDOWN_PATH_TOLERANCE_RAD,
               "shutdown_damping": profile.get("controller", {}).get("shutdown_damping")}
@@ -147,6 +215,18 @@ def main():
         node.monitor_motion = True
         node.cancel_motion()
         node.wait_stationary()
+        folded_reference = already_folded_reference(profile, node.q())
+        if folded_reference is not None:
+            if not node.validity.wait_for_service(timeout_sec=2.0):
+                raise RuntimeError("strict MoveIt unavailable; folded stop refused")
+            node.is_valid(node.q(), startup.FOLDED_CONTACTS)
+            report.update(already_folded=True, folded_q=node.q())
+            node.monitor_motion = False
+            node.deactivate()
+            report.update(passed=True, phase="disabled_confirmed")
+            return
+        if prior.get("startup_mode") == "measured_hold" and measured_folded_reentry(node, report):
+            return
         report["phase"] = "return_to_ready"
         report["return_started_at"] = time.monotonic()
         if not all(abs(q - t) <= startup.HOLD_POSITION_TOLERANCE_RAD for q, t in zip(node.q(), ready)):

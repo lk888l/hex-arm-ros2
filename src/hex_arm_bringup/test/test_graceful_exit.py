@@ -114,3 +114,22 @@ def test_meow_normal_stop_uses_verified_folded_return(tmp_path):
                    {'passed': True, 'ready_hold': {}, 'steps': [{}], 'deactivated': True}):
         path.write_text(json.dumps(report))
         assert not graceful.eligible({'bus': {'protocol': 'meow'}}, path)
+
+
+def test_measured_startup_keeps_meow_normal_shutdown_available(tmp_path):
+    import json
+    profile = {'bus': {'protocol': 'meow'}}
+    path = tmp_path / 'startup.json'
+    report = {'passed': True, 'startup_mode': 'measured_hold',
+              'measured_hold': {'reference_q': [0, -1.5, 1.5, 0, 0, 0]},
+              'ready_hold': {'target': [0, -1.5, 1.5, 0, 0, 0]}, 'steps': []}
+    path.write_text(json.dumps(report))
+    assert graceful.eligible(profile, path)
+    for field in ('startup_mode', 'measured_hold', 'ready_hold'):
+        incomplete = report.copy()
+        incomplete.pop(field)
+        path.write_text(json.dumps(incomplete))
+        assert not graceful.eligible(profile, path)
+    for field, value in (('passed', False), ('deactivated', True), ('measured_hold', None)):
+        path.write_text(json.dumps({**report, field: value}))
+        assert not graceful.eligible(profile, path)

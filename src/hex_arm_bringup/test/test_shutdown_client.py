@@ -13,6 +13,158 @@ client = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(client)
 
 
+@pytest.mark.parametrize('axis', [1, 2, 3])
+def test_folded_structure_uses_existing_tolerance_and_preserves_free_axes(axis):
+    import yaml
+    profile = yaml.safe_load((ROOT / 'config/hardware/firefly_y6.meow_mit.example.yaml').read_text())
+    q = [.1, -1.57, 1.57, 0., -.1, .217]
+    q[axis] += -.0149 if axis == 2 else .0149
+    assert client.already_folded_reference(profile, q) == q
+    q[axis] += -.0002 if axis == 2 else .0002
+    assert client.already_folded_reference(profile, q) is None
+
+
+@pytest.mark.parametrize('case', ['contact_entry', 'outside_window', 'strict_valid', 'new_collision', 'cia402'])
+def test_folded_reentry_preserves_axis_order_and_preflights_before_motion(case):
+    import yaml
+    profile = yaml.safe_load((ROOT / 'config/hardware/firefly_y6.meow_mit.example.yaml').read_text())
+    q = [.1, -1.45, 1.46, .1, -.1, .217]
+    initial = q.copy()
+    if case == 'outside_window': q[0] = .151
+    if case == 'cia402': profile['bus']['protocol'] = 'cia402'
+    events, checks, motion = [], [], []
+    fake = NS(profile=profile, q=lambda: q.copy(), velocity=dict.fromkeys(client.startup.JOINTS, 0.),
+              motion_limits=client.startup.resolve_motion_limits(profile), sequence_path_checks=[],
+              validity=NS(wait_for_service=lambda **_: True),
+              deactivate=lambda: events.append('disable'))
+    fake.check_point = lambda position: client.startup.Probe.check_point(fake, position)
+    def check(position, allowed):
+        assert allowed == client.startup.FOLDED_CONTACTS
+        checks.append(position.copy())
+        if case == 'new_collision' and len(checks) == 20:
+            raise RuntimeError('strict MoveIt state rejected: new contact')
+        return case == 'strict_valid'
+    def move(target, duration, label, *, retime):
+        assert retime and len(fake.sequence_path_checks) == 243
+        motion.append((label, target.copy(), duration))
+        q[:] = target
+        events.append('motion')
+    def stationary(target):
+        assert q == target
+        events.append('stationary')
+    fake.is_valid, fake.direct_step, fake.wait_stationary = check, move, stationary
+    report = {}
+    if case == 'new_collision':
+        with pytest.raises(RuntimeError, match='new contact'):
+            client.measured_folded_reentry(fake, report)
+        assert not motion and not events
+    elif case == 'contact_entry':
+        assert client.measured_folded_reentry(fake, report)
+        assert [step[0] for step in motion] == ['return_startup_j3', 'return_startup_j4', 'return_startup_j2']
+        assert q == [.1, -1.57, 1.57, 0., -.1, .217]
+        assert all([target[axis] for axis in (0, 4, 5)] == [initial[axis] for axis in (0, 4, 5)]
+                   for _, target, _ in motion)
+        assert events == ['motion', 'stationary', 'motion', 'stationary', 'motion', 'stationary', 'disable']
+        assert report['passed'] and report['deactivated'] and report['measured_folded_reentry']
+    else:
+        assert not client.measured_folded_reentry(fake, report)
+        assert not motion and not events and not report
+        assert not checks if case in ('outside_window', 'cia402') else len(checks) == 1
+
+
+@pytest.mark.parametrize('free_axes', [[0., 0., 0.], [.1, -.1, .217]])
+@pytest.mark.parametrize('entry_kind', ['folded', 'contact_entry'])
+@pytest.mark.parametrize('raw_collision', [False, True])
+def test_folded_measured_start_stops_without_planning_or_damping(tmp_path, monkeypatch, free_axes, entry_kind, raw_collision):
+    import hashlib
+    import yaml
+    config = yaml.safe_load((ROOT / 'config/hardware/firefly_y6.meow_mit.example.yaml').read_text())
+    config.update(validated=True, calibrated=True)
+    config['controller']['shutdown_damping'] = {'unload_sec': 3}
+    for joint in config['joints']:
+        joint['limits']['measured_position_margin_rad'] = .01
+    profile = tmp_path / 'profile.yaml'; profile.write_text(yaml.safe_dump(config))
+    q = client.startup.FOLDED.copy(); q[1] = -1.5704; q[2] = 1.579
+    if entry_kind == 'contact_entry': q[1:4] = [-1.45, 1.46, .1]
+    if raw_collision: q[2] = 1.579
+    for axis, value in zip((0, 4, 5), free_axes): q[axis] = value
+    reference = client.startup.folded_entry_command(config, q)
+    launch_limits = client.startup.resolve_motion_limits(config)
+    for limits in launch_limits.values():
+        limits['velocity_rad_s'] *= .4
+        limits['acceleration_rad_s2'] *= .25
+    errors = [abs(a-b) for a, b in zip(q, reference)]
+    prior = dict(passed=True, startup_mode='measured_hold', steps=[],
+        profile_sha256=hashlib.sha256(profile.read_bytes()).hexdigest(),
+        motion_limits=launch_limits,
+        measured_hold=dict(enable_position_q=q.copy(), reference_q=reference.copy(), q=q.copy(),
+                           seconds=client.startup.measured_hold_duration(config), samples=20,
+                           max_error_rad=errors, max_velocity_rad_s=0., enable_transient_allowed=False),
+        ready_hold=dict(target=reference.copy(), q=q.copy(), seconds=client.startup.READY_HOLD_SECONDS,
+                        samples=20, max_error_rad=errors, max_velocity_rad_s=0.))
+    startup = tmp_path / 'startup.json'; startup.write_text(json.dumps(prior))
+    report = tmp_path / 'shutdown.json'
+    monkeypatch.setattr(sys, 'argv', ['shutdown', '--profile', str(profile),
+        '--startup-report', str(startup), '--output', str(report)])
+    events = []
+    class FakeProbe:
+        def __init__(self, _, **kwargs):
+            assert kwargs['motion_limits'] == launch_limits
+            self.profile, self.motion_limits = config, kwargs['motion_limits']
+            self.velocity, self.sequence_path_checks = dict.fromkeys(client.startup.JOINTS, 0.), []
+            self.previous = reference.copy()
+            self.positions = dict(zip(client.startup.JOINTS, q))
+            self.driver, self.active_goal = object(), None
+            self.validity = NS(wait_for_service=lambda **_: True)
+        def q(self): return q.copy()
+        def check_live(self): events.append('healthy')
+        def cancel_motion(self): events.append('cancel')
+        def wait_stationary(self, target=None):
+            if target is not None:
+                assert q == target
+            events.append('settled' if target is not None else 'stationary')
+        def check_point(self, target): client.startup.Probe.check_point(self, target)
+        def is_valid(self, actual_reference, contacts):
+            assert contacts == client.startup.FOLDED_CONTACTS
+            if entry_kind == 'folded': assert actual_reference == q
+            events.append('collision_checked')
+            if raw_collision and actual_reference[2] > config['joints'][2]['limits']['position_upper_rad']:
+                raise RuntimeError('strict MoveIt state rejected: raw link_2/link_5 contact')
+            return entry_kind != 'contact_entry'
+        def direct_step(self, target, duration, label, *, retime):
+            assert retime and len(self.sequence_path_checks) == 243
+            assert duration == client.startup.rest_to_rest_duration(self.previous, target, launch_limits)
+            self.previous, q[:] = target.copy(), target
+            events.append(label)
+        def deactivate(self): events.append('disable')
+        def destroy_node(self): events.append('cleanup')
+    monkeypatch.setattr(client, 'StopProbe', FakeProbe)
+    monkeypatch.setattr(client.rclpy, 'init', lambda: None)
+    monkeypatch.setattr(client.rclpy, 'shutdown', lambda: None)
+    if raw_collision:
+        # The clamped command is admissible, but actual feedback has an extra
+        # contact. Both stop paths must reject it before any movement or disable.
+        assert q[2] != reference[2]
+        with pytest.raises(RuntimeError, match='raw link_2/link_5 contact'):
+            client.main()
+        assert events == ['healthy', 'cancel', 'stationary', 'collision_checked', 'cleanup']
+        assert not json.loads(report.read_text())['passed']
+        return
+    client.main()
+    result = json.loads(report.read_text())
+    assert result['passed'] and result['folded_q'] == q
+    if entry_kind == 'folded':
+        assert result['already_folded']
+        assert events == ['healthy', 'cancel', 'stationary', 'collision_checked', 'disable', 'cleanup']
+    else:
+        assert result['measured_folded_reentry']
+        assert events[:3] == ['healthy', 'cancel', 'stationary']
+        assert events[3:247] == ['collision_checked'] * 244
+        assert [event for event in events if event.startswith('return_')] == [
+            'return_startup_j3', 'return_startup_j4', 'return_startup_j2']
+        assert events[-2:] == ['disable', 'cleanup']
+
+
 @pytest.mark.parametrize("scenario", ["return", "already_ready", "planning_failure", "damping_failure", "startup_incomplete"])
 def test_ready_verification_precedes_damping(tmp_path, monkeypatch, scenario):
     report = tmp_path / "result.json"
