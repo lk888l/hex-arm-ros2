@@ -137,7 +137,7 @@ def measured_hold_metrics(reference, samples, enable_started_at=None):
 def cia402_steps(recipe, profile, positions, profile_sha256):
     """Validate an arm-bound, short sequence without changing any calibration."""
     if (recipe.get("schema_version") != 1 or recipe.get("profile_sha256") != profile_sha256
-            or profile["bus"]["protocol"] != "cia402"):
+            or profile["bus"].get("protocol", "meow") != "cia402"):
         raise RuntimeError("CiA402 sequence requires its exact qualified hardware profile")
     reference = recipe.get("entry_position_rad", [])
     if (len(positions) != 6 or len(reference) != 6
@@ -174,7 +174,7 @@ def cia402_steps(recipe, profile, positions, profile_sha256):
 
 def folded_entry_command(profile, positions):
     """Bound a Meow entry hold using the profile's feedback-only allowance."""
-    if profile["bus"]["protocol"] != "meow" or len(positions) != 6:
+    if profile["bus"].get("protocol", "meow") != "meow" or len(positions) != 6:
         raise RuntimeError("folded entry margin requires six-axis Meow feedback")
     reference = []
     for q, joint in zip(positions, profile["joints"]):
@@ -200,7 +200,7 @@ def startup_steps(profile, positions, velocities, *, align_folded=False, motion_
         raise RuntimeError("startup requires finite, stationary six-axis feedback")
     tolerances = FOLDED_TOLERANCE
     if align_folded:
-        if profile["bus"]["protocol"] != "meow":
+        if profile["bus"].get("protocol", "meow") != "meow":
             raise RuntimeError("explicit folded alignment requires Meow")
         # J2/J3 still define the documented folded structure. Only explicitly
         # acknowledged placement of the base/wrist is aligned before unfolding.
@@ -703,11 +703,11 @@ def main():
     if args.moveit_ready_token and (not args.activate_controllers
                                    or not re.fullmatch(r"[0-9a-f]{32}", args.moveit_ready_token)):
         raise RuntimeError("MoveIt handoff requires controller activation and a per-launch token")
-    if args.allow_enable_transient and (not args.activate_controllers or profile["bus"]["protocol"] != "meow"):
+    if args.allow_enable_transient and (not args.activate_controllers or profile["bus"].get("protocol", "meow") != "meow"):
         raise RuntimeError("enable transient allowance requires explicit Meow activation")
-    if args.align_folded and (args.hold_current or profile["bus"]["protocol"] != "meow"):
+    if args.align_folded and (args.hold_current or profile["bus"].get("protocol", "meow") != "meow"):
         raise RuntimeError("--align-folded requires the fixed Meow startup")
-    if not profile["calibrated"] or (not args.hold_current and profile["bus"]["protocol"] != "meow"):
+    if not profile["calibrated"] or (not args.hold_current and profile["bus"].get("protocol", "meow") != "meow"):
         raise RuntimeError("requires a calibrated profile; fixed startup requires Meow")
     if args.hold_current and args.moveit and not args.cia402_sequence:
         raise RuntimeError("--moveit requires the fixed ready sequence")

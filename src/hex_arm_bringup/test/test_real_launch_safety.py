@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 
+import pytest
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, LogInfo
 from launch.utilities import perform_substitutions
@@ -252,10 +253,14 @@ def test_real_execution_selects_protocol_startup(tmp_path: Path) -> None:
     assert '"--hold-current"' in source
 
 
-def test_effective_moveit_dynamics_reach_the_startup_process_as_one_json_argument(tmp_path: Path):
+@pytest.mark.parametrize("explicit_protocol", [True, False])
+def test_effective_moveit_dynamics_reach_the_startup_process_as_one_json_argument(tmp_path: Path, explicit_protocol):
     import json
     module = _load_launch_module()
-    context = _context(_profile(tmp_path), "true")
+    profile = _profile(tmp_path)
+    if not explicit_protocol:
+        profile.write_text(profile.read_text().replace("bus: {protocol: meow}", "bus: {}"))
+    context = _context(profile, "true")
     rates = json.dumps({
         f"joint_{index}": {"velocity_rad_s": 1.2566370614359172, "acceleration_rad_s2": .6}
         for index in range(1, 7)
@@ -283,6 +288,7 @@ def test_effective_moveit_dynamics_reach_the_startup_process_as_one_json_argumen
     startup = next(command for command in commands if any(
         token.endswith('commission-startup-ros.py') for token in command))
     assert startup[startup.index('--motion-limits') + 1] == rates
+    assert '--hold-current' not in startup
 
 
 def test_real_launch_rejects_v1_and_missing_gravity_installation_data(

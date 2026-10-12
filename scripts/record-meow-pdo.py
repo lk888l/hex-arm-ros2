@@ -24,7 +24,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     profile = yaml.safe_load(args.profile.read_text())
-    if profile['bus']['protocol'] != 'meow' or args.interface != profile['bus']['interface']:
+    if profile['bus'].get('protocol', 'meow') != 'meow' or args.interface != profile['bus']['interface']:
         parser.error('requires a Meow profile bound to the selected interface')
     if not math.isfinite(args.seconds) or args.seconds <= 0:
         parser.error('--seconds must be finite and positive')

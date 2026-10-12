@@ -8,8 +8,8 @@ default-run = "hex_arm_controller"
 
 [features]
 default = []
-# CMake enables this for the production CiA402 backend; the historical
-# commissioning executable remains an independent CMake opt-in.
+# Legacy CiA402 requires an explicit opt-in (CMake HEX_ARM_ENABLE_CIA402=ON).
+# The historical commissioning executable remains an independent CMake opt-in.
 legacy = ["dep:hex-motor", "can-transport/gs_usb", "zenoh/default"]
 
 [[bin]]

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only folded-pose zero calibration for legacy CiA402 Firefly Y6 arms.
+"""Read-only J2-J5 folded-pose zero calibration for Meow Firefly Y6 arms.
 
 Requires Python 3, PyYAML and SocketCAN. Stop every other CAN controller first.
 The operator establishes the physical reference; encoders cannot establish it.
 Only SDO uploads are sent. Output profiles remain unvalidated/uncalibrated.
+J1/J6 directions and offsets are retained; all six drives must be disabled.
 """
 import argparse
 import copy
@@ -24,6 +25,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_PATH = ROOT / "src/hex_arm_controller/config/startup.yaml"
 JOINT_NAMES = tuple(f"joint_{i}" for i in range(1, 7))
+CALIBRATION_JOINT_NAMES = JOINT_NAMES[1:5]
 
 
 def script_module(name, filename):
@@ -33,7 +35,7 @@ def script_module(name, filename):
     return module
 
 
-reader = script_module("zero_cia402_reader", "read-cia402-state.py")
+reader = script_module("zero_meow_reader", "read-meow-state.py")
 binder = script_module("zero_can_binding", "bind-can-profile.py")
 
 
@@ -59,9 +61,11 @@ def prepare_profile(source, directions=None):
             or profile.get("joint_coordinate_version") != 2):
         raise ValueError("requires schema_version: 3 / joint_coordinate_version: 2; migrate v2 first")
     bus = profile.get("bus")
-    if (not isinstance(bus, dict) or bus.get("protocol", "cia402") != "cia402"
-            or bus.get("transport") != "socket_can"):
-        raise ValueError("requires a legacy CiA402 socket_can profile")
+    if (not isinstance(bus, dict) or bus.get("protocol", "meow") != "meow"
+            or bus.get("transport", "socket_can") != "socket_can"):
+        raise ValueError("requires a Meow socket_can profile")
+    bus.setdefault("protocol", "meow")
+    bus.setdefault("transport", "socket_can")
     if not isinstance(bus.get("expected_link"), dict):
         raise ValueError("profile requires bus.expected_link")
     for key in ("controller", "robot_prefix", "urdf_path", "gravity_vector_base_m_s2"):
@@ -70,8 +74,8 @@ def prepare_profile(source, directions=None):
     joints = profile.get("joints")
     if not isinstance(joints, list) or len(joints) != 6:
         raise ValueError("profile requires exactly six joints")
-    if directions is not None and len(directions) != 6:
-        raise ValueError("--directions requires six signs")
+    if directions is not None and len(directions) != 4:
+        raise ValueError("--directions requires four signs for J2-J5")
     nodes = set()
     for i, joint in enumerate(joints):
         if not isinstance(joint, dict) or joint.get("name") != JOINT_NAMES[i]:
@@ -86,10 +90,10 @@ def prepare_profile(source, directions=None):
             raise ValueError(f"{joint['name']}: invalid or conflicting node mapping")
         nodes.add(node)
         joint["node_id"] = node
-        if directions is not None:
-            joint["direction"] = directions[i]
+        if directions is not None and joint["name"] in CALIBRATION_JOINT_NAMES:
+            joint["direction"] = directions[i - 1]
         if type(joint.get("direction")) is not int or joint["direction"] not in (-1, 1):
-            raise ValueError(f"{joint['name']}: direction unknown; supply --directions with six verified +/-1 signs")
+            raise ValueError(f"{joint['name']}: direction unknown; verify the profile signs (--directions only overrides J2-J5)")
         if not finite_number(joint.get("zero_offset_rad")):
             raise ValueError(f"{joint['name']}: invalid zero_offset_rad")
         identity = joint.get("identity")
@@ -107,11 +111,12 @@ def prepare_profile(source, directions=None):
 
 
 def capture(bus, joints, samples, interval):
-    """Sample all axes in rounds, checking drive status throughout the capture."""
+    """Sample J2-J5 positions, checking all six drives throughout the capture."""
     records = []
     for joint in joints:
         node = joint["node_id"]
-        record = dict(node=node, identity={}, samples_rev=[], status_words=[], error_codes=[], errors=[])
+        record = dict(node=node, identity={}, samples_rev=[], modes=[], error_codes=[], errors=[],
+                      calibrate=joint["name"] in CALIBRATION_JOINT_NAMES)
         records.append(record)
         try:
             record["identity"] = {
@@ -126,11 +131,11 @@ def capture(bus, joints, samples, interval):
                 continue
             node = record["node"]
             try:
-                record["status_words"].append(reader.read_value(bus, node, 0x6041, 0, "<H"))
-                record["error_codes"].append(reader.read_value(bus, node, 0x603f, 0, "<H"))
-                if sample < samples:
-                    record["samples_rev"].append(reader.read_value(bus, node, 0x6064, 0, "<f"))
-                else:
+                record["modes"].append(reader.read_value(bus, node, 0x4402, 0, "<B"))
+                record["error_codes"].append(reader.read_value(bus, node, 0x453f, 0, "<H"))
+                if sample < samples and record["calibrate"]:
+                    record["samples_rev"].append(reader.read_value(bus, node, 0x4564, 0, "<i") / 2**24)
+                if sample == samples:
                     final_identity = {
                         key: reader.read_value(bus, node, 0x1018, sub, "<I")
                         for sub, key in enumerate(reader.IDENTITY_KEYS, 1)
@@ -154,8 +159,8 @@ def analyse(profile, records, reference, sample_count, max_span, replace_arm=Fal
             continue
         record = found[0]
         errors.extend(f"{name}: {error}" for error in record["errors"])
-        if (len(record["status_words"]) != sample_count + 1
-                or any((word & 0x6f) not in (0x40, 0x21, 0x23) for word in record["status_words"])):
+        if (len(record["modes"]) != sample_count + 1
+                or any(mode != 0 for mode in record["modes"])):
             errors.append(f"{name}: disabled state not confirmed throughout sampling")
         if len(record["error_codes"]) != sample_count + 1 or any(record["error_codes"]):
             errors.append(f"{name}: drive error or incomplete fault checks")
@@ -171,15 +176,17 @@ def analyse(profile, records, reference, sample_count, max_span, replace_arm=Fal
                 warnings.append(message + "; binding candidate to observed identity")
             else:
                 errors.append(message + "; use --replace-arm only when replacing/commissioning the arm")
+        if name not in CALIBRATION_JOINT_NAMES:
+            continue
         values = record["samples_rev"]
         if len(values) != sample_count or any(
-            not finite_number(value) or not -0.5 <= value < 0.5 for value in values
+            not finite_number(value) or not -128 <= value < 128 for value in values
         ):
-            errors.append(f"{name}: incomplete or noncanonical position samples (expected [-0.5,0.5) Rev)")
+            errors.append(f"{name}: incomplete or invalid Q8.24 position samples (expected [-128,128) Rev)")
             continue
         span = (max(values) - min(values)) * math.tau
         if span > max_span:
-            errors.append(f"{name}: encoder span {span:.9f} rad exceeds {max_span:.9f}; moving or wrap seam")
+            errors.append(f"{name}: encoder span {span:.9f} rad exceeds {max_span:.9f}; arm is not stationary")
         raw = statistics.median(values)
         direction = joint["direction"]
         before = direction * math.tau * raw + joint["zero_offset_rad"]
@@ -191,9 +198,9 @@ def analyse(profile, records, reference, sample_count, max_span, replace_arm=Fal
         issues = []
         if not lower <= ref <= upper:
             issues.append("folded reference lies outside retained command limits")
-        # Same 0.01 Rev guard and exclusive upper edge as profile.rs/single_turn.rs.
-        if motor_limits[0] < -0.49 or motor_limits[1] >= 0.49:
-            issues.append("retained limits with new offset touch the single-turn command seam")
+        # Meow uses signed Q8.24 multi-turn commands, matching profile.rs.
+        if motor_limits[0] < -128 or motor_limits[1] >= 128:
+            issues.append("retained limits with new offset exceed the Meow Q8.24 range [-128,128) Rev")
         warnings.extend(f"{name}: {issue}" for issue in issues)
         rows.append(dict(
             name=name, node_id=node, direction=direction, identity=identity,
@@ -209,39 +216,45 @@ def analyse(profile, records, reference, sample_count, max_span, replace_arm=Fal
     return rows, errors, warnings
 
 
-def candidate_profile(profile, rows, interface, binding):
+def candidate_profile(profile, rows, interface, binding, records):
+    if [row["name"] for row in rows] != list(CALIBRATION_JOINT_NAMES):
+        raise ValueError("exactly four ordered J2-J5 calibration rows required")
+    if (len(records) != 6 or {record["node"] for record in records}
+            != {joint["node_id"] for joint in profile["joints"]}):
+        raise ValueError("six identity records required")
     candidate = binder.bind_profile(profile, interface, binding)
     candidate.update(validated=False, calibrated=False)
-    for joint, row in zip(candidate["joints"], rows):
-        if joint["name"] != row["name"]:
-            raise ValueError("incomplete calibration rows")
+    offsets = {row["name"]: row["zero_offset_rad"] for row in rows}
+    identities = {record["node"]: record["identity"] for record in records}
+    for joint in candidate["joints"]:
+        identity = identities[joint["node_id"]]
         old_identity = joint["identity"]
-        joint["identity"] = dict(row["identity"])
+        joint["identity"] = dict(identity)
         # Do not assign an old model name to a different product.
-        if (old_identity["vendor_id"] == row["identity"]["vendor_id"]
-                and old_identity["product_code"] == row["identity"]["product_code"]
+        if (old_identity["vendor_id"] == identity["vendor_id"]
+                and old_identity["product_code"] == identity["product_code"]
                 and old_identity.get("model") not in (None, "", "UNVERIFIED")):
             joint["identity"]["model"] = old_identity["model"]
         else:
             joint["identity"]["model"] = (
-                f"CiA402 vendor=0x{row['identity']['vendor_id']:08x} "
-                f"product=0x{row['identity']['product_code']:08x} (model unverified)"
+                f"Meow vendor=0x{identity['vendor_id']:08x} "
+                f"product=0x{identity['product_code']:08x} (model unverified)"
             )
-        joint["zero_offset_rad"] = row["zero_offset_rad"]
-    if len(rows) != 6:
-        raise ValueError("six calibration rows required")
+        if joint["name"] in offsets:
+            joint["zero_offset_rad"] = offsets[joint["name"]]
     return candidate
 
 
 def write_candidate(path, candidate, report_path, report):
     header = (
-        "# Folded-pose SOFTWARE zero calibration; no drive objects were written.\n"
+        "# Meow J2-J5 folded-pose SOFTWARE zero calibration; no drive objects were written.\n"
+        "# J1/J6 directions and zero offsets are retained from the source profile.\n"
         "# Candidate only: direction, travel, tuning, gravity and payload need commissioning.\n"
         f"# Capture UTC: {report['time']}\n"
         f"# Evidence: {report_path}\n"
         f"# Source SHA256: {report['profile_sha256']}\n"
         f"# Reference SHA256: {report['reference_sha256']}\n"
-        f"# Encoder medians [Rev]: {[r['raw_position_rev'] for r in report['joints']]}\n"
+        f"# J2-J5 encoder medians [Rev]: {[r['raw_position_rev'] for r in report['joints']]}\n"
     )
     contents = header + yaml.safe_dump(candidate, sort_keys=False, allow_unicode=True)
     with path.open("x", encoding="utf-8") as stream:
@@ -249,7 +262,8 @@ def write_candidate(path, candidate, report_path, report):
 
 
 def print_report(report):
-    print("Reference q [rad]:", report["reference_position_rad"])
+    print("Meow software calibration: J2-J5 only; J1/J6 directions and offsets retained.")
+    print("J2-J5 reference q [rad]:", report["reference_position_rad"])
     print("Physical folded pose:", "operator confirmed" if report["pose_confirmed"] else "UNCONFIRMED (hypothetical offsets)")
     print("Raw Rev = encoder reading; before/after = software joint coordinates, not an independent pose measurement.")
     if report["mode"] == "check":
@@ -276,16 +290,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interface", required=True, help="e.g. can2")
     parser.add_argument("--profile", required=True, type=Path, help="schema v3 profile or example template")
-    parser.add_argument("--directions", nargs=6, type=int, metavar=("D1", "D2", "D3", "D4", "D5", "D6"),
-                        help="explicit verified signs; otherwise use profile signs; cannot infer from one pose")
-    parser.add_argument("--confirm-folded-pose", action="store_true", help="operator has physically established the default folded pose")
+    parser.add_argument("--directions", nargs=4, type=int, choices=(-1, 1), metavar=("D2", "D3", "D4", "D5"),
+                        help="verified J2-J5 signs; J1/J6 signs are retained; cannot infer from one pose")
+    parser.add_argument("--confirm-folded-pose", action="store_true", help="operator has physically established the J2-J5 folded reference")
     parser.add_argument("--replace-arm", action="store_true", help="bind new candidate to current motor identities")
     parser.add_argument("--output", type=Path, help="create a new *.local.yaml (requires confirmed pose)")
     parser.add_argument("--report", type=Path, help="new JSON evidence file; default with --output: <output>.calibration.json")
     parser.add_argument("--check", action="store_true", help="verify existing offsets at the confirmed folded pose")
     parser.add_argument("--tolerance-rad", type=float, default=0.005, help="--check absolute per-axis error tolerance (default 0.005)")
     parser.add_argument("--samples", type=int, default=21, help="samples per axis (default 21)")
-    parser.add_argument("--interval", type=float, default=0.05, help="seconds between complete six-axis rounds")
+    parser.add_argument("--interval", type=float, default=0.05, help="seconds between rounds (J2-J5 positions, six-axis disable checks)")
     parser.add_argument("--max-span-rad", type=float, default=0.001, help="max encoder spread per axis (default 0.001)")
     args = parser.parse_args(argv)
     try:
@@ -324,12 +338,13 @@ def main(argv=None):
         parser.exit(2, f"error: {error}\n")
 
     report = dict(
-        schema_version=1, time=datetime.now(timezone.utc).isoformat(),
+        schema_version=2, protocol="meow", time=datetime.now(timezone.utc).isoformat(),
         mode="check" if args.check else ("calibrate" if args.output else "preview"),
         interface=args.interface, adapter=binding, profile=str(args.profile),
         profile_sha256=hashlib.sha256(source_bytes).hexdigest(),
         reference_source=str(REFERENCE_PATH), reference_sha256=hashlib.sha256(REFERENCE_PATH.read_bytes()).hexdigest(),
-        reference_position_rad=reference, pose_confirmed=args.confirm_folded_pose,
+        calibration_joints=list(CALIBRATION_JOINT_NAMES), preserved_joints=["joint_1", "joint_6"],
+        reference_position_rad=reference[1:5], pose_confirmed=args.confirm_folded_pose,
         replace_arm=args.replace_arm, direction_override=args.directions,
         samples=args.samples, interval_sec=args.interval, max_span_rad=args.max_span_rad,
         tolerance_rad=args.tolerance_rad, nodes=[], joints=[], errors=[], warnings=[],
@@ -359,10 +374,10 @@ def main(argv=None):
             if abs(row["existing_reference_error_rad"]) > args.tolerance_rad:
                 report["errors"].append(f"{row['name']}: existing reference error "
                                         f"{row['existing_reference_error_rad']:+.9f} rad exceeds tolerance")
-    report["passed"] = len(rows) == 6 and not report["errors"]
+    report["passed"] = len(rows) == len(CALIBRATION_JOINT_NAMES) and not report["errors"]
     if args.output and report["passed"]:
         try:
-            candidate = candidate_profile(profile, rows, args.interface, binding)
+            candidate = candidate_profile(profile, rows, args.interface, binding, report["nodes"])
             write_candidate(args.output, candidate, args.report, report)
             report["candidate_written"] = str(args.output)
             report["candidate_sha256"] = hashlib.sha256(args.output.read_bytes()).hexdigest()

@@ -17,7 +17,9 @@ case "${level}" in
     bash scripts/test-supervised-real-launch.sh
     python3 scripts/test-shutdown-ack.py
     python3 scripts/test-read-cia402-state.py
+    python3 scripts/test-read-meow-state.py
     python3 scripts/test-calibrate-zero.py
+    python3 scripts/test-import-gui-mit-profile.py
     python3 scripts/test-commission-cia402.py
     python3 scripts/test-check-joint-direction.py
     python3 scripts/test-prepare-moveit-profile.py

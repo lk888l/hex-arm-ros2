@@ -125,9 +125,9 @@ def _real_nodes(context):
         raise RuntimeError("startup_ready must be 'true' or 'false'")
     if activate_hardware and startup_ready != "true":
         raise RuntimeError("real execution requires the protocol startup procedure; startup_ready cannot be disabled")
-    motor_protocol = profile.get("bus", {}).get("protocol")
+    motor_protocol = profile.get("bus", {}).get("protocol", "meow")
     if motor_protocol not in ("meow", "cia402"):
-        raise RuntimeError("real bringup requires an explicit meow or cia402 motor protocol")
+        raise RuntimeError("real bringup requires meow (default) or explicit legacy cia402 motor protocol")
     startup_sequence = LaunchConfiguration("startup_sequence", default="").perform(context)
     if startup_sequence and (motor_protocol != "cia402" or not Path(startup_sequence).is_file()):
         raise RuntimeError("startup_sequence requires CiA402 and an existing arm-bound recipe")

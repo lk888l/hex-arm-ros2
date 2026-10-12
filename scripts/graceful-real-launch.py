@@ -17,9 +17,9 @@ def eligible(profile, startup_report):
     try:
         report = json.loads(Path(startup_report).read_text())
         qualified_stop = (profile.get("controller", {}).get("shutdown_damping") is not None
-                          or (profile.get("bus", {}).get("protocol") == "meow"
+                          or (profile.get("bus", {}).get("protocol", "meow") == "meow"
                               and bool(report.get("steps")))
-                          or (profile.get("bus", {}).get("protocol") == "cia402"
+                          or (profile.get("bus", {}).get("protocol", "meow") == "cia402"
                               and "sequence" in report and "measured_hold" in report))
         return (qualified_stop
                 and report.get("passed") is True and "ready_hold" in report
@@ -29,7 +29,7 @@ def eligible(profile, startup_report):
 
 
 def stop_command(profile, profile_path, startup_report, output):
-    folded_meow = (profile.get("bus", {}).get("protocol") == "meow"
+    folded_meow = (profile.get("bus", {}).get("protocol", "meow") == "meow"
                    and profile.get("controller", {}).get("shutdown_damping") is None)
     script = "commission-meow-ros.py" if folded_meow else "commission-shutdown-ros.py"
     command = [sys.executable, str(Path(__file__).with_name(script)),

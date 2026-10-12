@@ -37,7 +37,7 @@ def source_profile():
 
 def records():
     return [dict(node=i + 1, identity={key: j["identity"][key] for key in cal.reader.IDENTITY_KEYS}, samples_rev=[PARK[i]] * 3,
-                 status_words=[0x250] * 4, error_codes=[0] * 4, errors=[])
+                 modes=[0] * 4, error_codes=[0] * 4, errors=[])
             for i, j in enumerate(source_profile()["joints"])]
 
 
@@ -74,12 +74,14 @@ class FakeBus:
         if index == 0x1018:
             value = self.source["joints"][node - 1]["identity"][cal.reader.IDENTITY_KEYS[sub - 1]]
             data = struct.pack("<I", value)
-        elif index == 0x6041:
-            data = struct.pack("<H", 0x237 if self.enabled else 0x250)
-        elif index == 0x603f:
+        elif index == 0x4402:
+            data = struct.pack("<B", 4 if self.enabled else 0)
+        elif index == 0x453f:
             data = struct.pack("<H", 0)
-        elif index == 0x6064:
-            data = struct.pack("<f", PARK[node - 1] + self.drift)
+        elif index == 0x4564:
+            if node not in (2, 3, 4, 5):
+                raise AssertionError("J1/J6 positions must not be sampled for calibration")
+            data = struct.pack("<i", round((PARK[node - 1] + self.drift) * 2**24))
         else:
             raise AssertionError(f"unexpected SDO index {index:#x}")
         payload = struct.pack("<BHB", 0x43 | ((4 - len(data)) << 2), index, sub) + data
@@ -87,6 +89,43 @@ class FakeBus:
 
 
 class CalibrationTest(unittest.TestCase):
+    def test_defaults_to_meow_and_rejects_legacy_protocol(self):
+        source = source_profile()
+        del source["bus"]["protocol"]
+        del source["bus"]["transport"]
+        prepared = cal.prepare_profile(source)
+        self.assertEqual(prepared["bus"]["protocol"], "meow")
+        self.assertEqual(prepared["bus"]["transport"], "socket_can")
+        source["bus"]["protocol"] = "cia402"
+        with self.assertRaisesRegex(ValueError, "Meow"):
+            cal.prepare_profile(source)
+
+    def test_j1_j6_coordinates_are_preserved_even_with_direction_override(self):
+        source = source_profile()
+        source["joints"][0].update(direction=1, zero_offset_rad=0.42)
+        source["joints"][5].update(direction=-1, zero_offset_rad=-0.73)
+        prepared = cal.prepare_profile(source, [1, -1, -1, -1])
+        rows, errors, _ = analyse(prepared)
+        self.assertEqual(errors, [])
+        candidate = cal.candidate_profile(prepared, rows, "can2", BINDING, records())
+        for i in (0, 5):
+            self.assertEqual(candidate["joints"][i], source["joints"][i])
+        self.assertEqual([j["direction"] for j in candidate["joints"][1:5]], [1, -1, -1, -1])
+        with self.assertRaisesRegex(ValueError, "four signs"):
+            cal.prepare_profile(source, SIGNS)
+        for invalid in (rows[:3], list(reversed(rows)), rows + [rows[0]]):
+            with self.assertRaisesRegex(ValueError, "four ordered"):
+                cal.candidate_profile(prepared, invalid, "can2", BINDING, records())
+
+    def test_meow_accepts_multi_turn_and_half_turn_positions_without_legacy_seam(self):
+        for value in (-2.25, -0.5, 0.5, 1.75):
+            data = records()
+            data[1]["samples_rev"] = [value] * 3
+            rows, errors, warnings = analyse(observations=data)
+            self.assertEqual(errors, [])
+            self.assertEqual(warnings, [])
+            self.assertAlmostEqual(rows[0]["position_after_rad"], REFERENCE[1])
+
     def test_reference_uses_current_joint_coordinate_version(self):
         self.assertEqual(cal.reference_pose(), REFERENCE)
         source = source_profile()
@@ -97,10 +136,11 @@ class CalibrationTest(unittest.TestCase):
     def test_reported_snapshot_maps_to_reference_and_displacements(self):
         rows, errors, _ = analyse()
         self.assertEqual(errors, [])
-        # Independently specified values for the user's six-axis snapshot.
-        expected = [0.036253094, 0.009140397, -0.023076502, 0.009191415, 0.011302565, -0.000345575]
-        for i, row in enumerate(rows):
-            self.assertAlmostEqual(row["zero_offset_rad"], expected[i], delta=0.000002)
+        # Independently specified values for J2-J5 from the folded snapshot.
+        expected = [0.009140397, -0.023076502, 0.009191415, 0.011302565]
+        self.assertEqual([r["name"] for r in rows], list(cal.CALIBRATION_JOINT_NAMES))
+        for i, row in enumerate(rows, 1):
+            self.assertAlmostEqual(row["zero_offset_rad"], expected[i - 1], delta=0.000002)
             self.assertAlmostEqual(row["position_after_rad"], REFERENCE[i], places=12)
             # A second pose must retain displacement and sign after calibration.
             displaced = SIGNS[i] * math.tau * (PARK[i] + 0.025) + row["zero_offset_rad"]
@@ -116,42 +156,44 @@ class CalibrationTest(unittest.TestCase):
 
     def test_template_requires_explicit_signs_and_replacement_identity(self):
         source = yaml.safe_load((ROOT / "config/hardware/firefly_y6.example.yaml").read_text())
+        for joint in source["joints"][1:5]:
+            joint["direction"] = 0
         with self.assertRaises(ValueError):
             cal.prepare_profile(source)
-        prepared = cal.prepare_profile(source, SIGNS)
+        prepared = cal.prepare_profile(source, SIGNS[1:5])
         self.assertEqual([j["node_id"] for j in prepared["joints"]], list(range(1, 7)))
         self.assertTrue(analyse(prepared)[1])
         rows, errors, _ = analyse(prepared, replace_arm=True)
         self.assertEqual(errors, [])
-        candidate = cal.candidate_profile(prepared, rows, "can2", BINDING)
+        candidate = cal.candidate_profile(prepared, rows, "can2", BINDING, records())
         self.assertEqual(candidate["joints"][0]["identity"]["serial_number"], 100)
         self.assertIn("unverified", candidate["joints"][0]["identity"]["model"])
 
     def test_rejects_motion_wrap_noncanonical_and_partial_samples(self):
         for values in ([0, 0.01, 0], [0.49999, -0.49999, 0.49999],
-                       [math.nan] * 3, [0.5] * 3, [-0.501] * 3, [0, 0]):
+                       [math.nan] * 3, [128.0] * 3, [-128.001] * 3, [0, 0]):
             with self.subTest(values=values):
                 data = records()
-                data[0]["samples_rev"] = values
+                data[1]["samples_rev"] = values
                 self.assertTrue(analyse(observations=data)[1])
 
     def test_checks_every_status_and_fault_including_last(self):
-        for field, value in (("status_words", 0x237), ("status_words", 0x218), ("error_codes", 0x1000)):
+        for field, value in (("modes", 4), ("modes", 0xff), ("error_codes", 0x1000)):
             for sample in (0, 1, 3):
                 data = records()
                 data[0][field][sample] = value
                 self.assertTrue(analyse(observations=data)[1])
 
     def test_missing_node_and_timeout_fail_without_losing_other_rows(self):
-        data = records()[1:]
+        data = [r for r in records() if r["node"] != 2]
         rows, errors, _ = analyse(observations=data)
-        self.assertEqual(len(rows), 5)
+        self.assertEqual(len(rows), 3)
         self.assertTrue(errors)
         bus = FakeBus(timeout_node=2)
         with patch.object(cal.time, "sleep"):
             data = cal.capture(bus, source_profile()["joints"], 3, 0.01)
         rows, errors, _ = analyse(observations=data)
-        self.assertEqual(len(rows), 5)
+        self.assertEqual(len(rows), 3)
         self.assertTrue(any("timeout" in error for error in errors))
 
     def test_replacement_is_explicit_and_invalid_identity_is_never_accepted(self):
@@ -166,7 +208,7 @@ class CalibrationTest(unittest.TestCase):
         source = source_profile()
         original = copy.deepcopy(source)
         rows, _, _ = analyse(source)
-        candidate = cal.candidate_profile(source, rows, "can2", BINDING)
+        candidate = cal.candidate_profile(source, rows, "can2", BINDING, records())
         self.assertFalse(candidate["validated"])
         self.assertFalse(candidate["calibrated"])
         self.assertEqual(source, original)
@@ -176,14 +218,14 @@ class CalibrationTest(unittest.TestCase):
 
     def test_incompatible_limits_are_visible_and_never_expanded(self):
         source = source_profile()
-        source["joints"][5]["limits"].update(position_lower_rad=2.06, position_upper_rad=2.16)
-        source["joints"][0]["limits"].update(position_lower_rad=-3.14, position_upper_rad=3.14)
+        source["joints"][1]["limits"].update(position_lower_rad=2.06, position_upper_rad=2.16)
+        source["joints"][2]["limits"].update(position_lower_rad=-129 * math.tau, position_upper_rad=129 * math.tau)
         rows, errors, warnings = analyse(source)
         self.assertEqual(errors, [])
-        self.assertTrue(any("joint_6" in w and "outside" in w for w in warnings))
-        self.assertTrue(any("joint_1" in w and "seam" in w for w in warnings))
-        candidate = cal.candidate_profile(source, rows, "can2", BINDING)
-        self.assertEqual(candidate["joints"][5]["limits"], source["joints"][5]["limits"])
+        self.assertTrue(any("joint_2" in w and "outside" in w for w in warnings))
+        self.assertTrue(any("joint_3" in w and "Q8.24" in w for w in warnings))
+        candidate = cal.candidate_profile(source, rows, "can2", BINDING, records())
+        self.assertEqual(candidate["joints"][1]["limits"], source["joints"][1]["limits"])
 
 
 class CommandLineTest(unittest.TestCase):
@@ -213,16 +255,23 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertFalse(report["deployment_validated"])
         self.assertFalse(candidate["calibrated"])
+        self.assertEqual(report["protocol"], "meow")
+        self.assertEqual(report["calibration_joints"], list(cal.CALIBRATION_JOINT_NAMES))
+        self.assertEqual(report["preserved_joints"], ["joint_1", "joint_6"])
+        self.assertEqual(len(report["joints"]), 4)
+        for i in (0, 5):
+            self.assertEqual(candidate["joints"][i], source_profile()["joints"][i])
         for frame in bus.sent:
             self.assertEqual(frame[8], 0x40)
             self.assertTrue(0x601 <= struct.unpack_from("=I", frame)[0] <= 0x606)
+            self.assertIn(struct.unpack_from("<H", frame, 9)[0], (0x1018, 0x4402, 0x453f, 0x4564))
         filters = bus.options[cal.socket.SOL_CAN_RAW, cal.socket.CAN_RAW_FILTER]
         for i, (can_id, mask) in enumerate(struct.iter_unpack("=II", filters), 1):
             self.assertEqual(can_id, 0x580 + i)
             self.assertEqual(mask, 0xc00007ff)  # Standard data frames, excluding error receive list.
         # Check the conversion as f32, as used by the real Rust controller.
         f32 = lambda x: struct.unpack("<f", struct.pack("<f", x))[0]
-        for joint, row, expected in zip(candidate["joints"], report["joints"], REFERENCE):
+        for joint, row, expected in zip(candidate["joints"][1:5], report["joints"], REFERENCE[1:5]):
             q = f32(f32(f32(joint["direction"] * f32(math.tau)) * f32(row["raw_position_rev"]))
                     + f32(joint["zero_offset_rad"]))
             self.assertAlmostEqual(q, expected, delta=2e-7)

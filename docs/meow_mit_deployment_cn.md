@@ -29,7 +29,12 @@ ROS 使用 rad、rad/s、Nm、Nm/rad、Nm·s/rad；电机位置/速度使用 Rev
 
 使用现有 `config/hardware/firefly_y6.meow.can2.local.yaml`。
 该文件保留本机身份、零偏、重力系数、增益、力矩权限、位置窗口及 CAN 适配器信息。
-`firefly_y6.meow_mit.example.yaml` 是其他设备建立配置的模板，不能直接替代本机标定。
+`firefly_y6.example.yaml` 和 `firefly_y6.meow_mit.example.yaml` 均为新版 Meow 模板，不能直接替代本机标定。
+构建、驱动配置、启动、手扶拖动、停机及状态/方向检查均默认使用 Meow；省略协议/传输字段时
+按 `meow` / `socket_can` 处理。旧版 CiA402 必须显式选择并启用 `HEX_ARM_ENABLE_CIA402=ON`。
+
+[软件零点校准](zero_calibration_cn.md)仅计算和复查 J2～J5，保留 J1/J6 的方向与零偏。
+离线 GUI 参数导入的 `--park-positions-rev` 同样只接受四个值，顺序为 M2 M3 M4 M5。
 
 ```bash
 HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \

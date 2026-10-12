@@ -14,10 +14,10 @@
   mock、离线校验、模型路径和停机回执参数。
 - 电机边界移入 `src/hex_arm_controller/src/motor/`；
   核心运行逻辑仍通过 `MotorBackend` 依赖接口，可注入 MockBackend。
-- 历史单轴诊断迁入 `src/tools/`。默认生产构建包含 CiA402 后端，但不安装
-  `hex_arm_commission`；后者仍需显式启用 `HEX_ARM_BUILD_COMMISSIONING`。
-- 生产 launch 使用本机 TCP 直连；当前默认构建也包含 CiA402 所需的
-  `legacy` Rust feature，保留完整传输能力。UDP 仍用于已有 mock 发现测试。
+- 历史单轴诊断迁入 `src/tools/`。当前默认构建使用 Meow，CiA402 后端需要
+  `HEX_ARM_ENABLE_CIA402=ON`；`hex_arm_commission` 另需 `HEX_ARM_BUILD_COMMISSIONING=ON`。
+- 生产 launch 使用本机 TCP 直连；CiA402 所需的 `legacy` Rust feature 仅在显式选择时启用。
+  UDP 仍用于已有 mock 发现测试。
 - `robot_api.proto` 只保留控制器包的一份；Rust 与 Python 都由它生成，
   不手工修改生成文件。没有改变既有消息字段或协议语义。
 - Meow 真机执行自动运行 J2 → J4 → J3；CiA402 真机执行从经过标定的当前姿态
@@ -77,8 +77,8 @@ Rust 在构建产物内嵌配置；ROS 从该包安装的配置读取。修改�
 
 ## 构建与旧命令迁移
 
-开发环境仍可用原有 `scripts/build.sh`，默认包含 Meow 和 CiA402 后端，
-但不安装 commissioning 二进制。`HEX_ARM_ENABLE_CIA402=OFF` 可构建仅 Meow 驱动。
+开发环境使用 `scripts/build.sh`，默认构建 Meow 驱动，不安装 commissioning 二进制。
+需要旧版固件时显式传入 `--cmake-args -DHEX_ARM_ENABLE_CIA402=ON`。
 
 ```bash
 # 容器内，无硬件测试

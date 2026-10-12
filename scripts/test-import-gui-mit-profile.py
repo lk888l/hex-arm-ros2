@@ -27,11 +27,11 @@ def source_profile():
 
 class ImportGuiMitProfileTest(unittest.TestCase):
     def test_maps_park_and_arbitrary_positions_in_both_directions(self):
-        parks = [0.2, -0.15, 0.44, -0.3, 0.02, 0.07]
+        parks = [-0.15, 0.44, -0.3, 0.02]
         converted = IMPORTER.import_profile(source_profile(), parks)
-        for i, joint in enumerate(converted["joints"]):
+        for i, joint in enumerate(converted["joints"][1:5], 1):
             for delta in (0.0, 0.01, -0.05):
-                q = joint["direction"] * math.tau * (parks[i] + delta) + joint["zero_offset_rad"]
+                q = joint["direction"] * math.tau * (parks[i - 1] + delta) + joint["zero_offset_rad"]
                 expected = IMPORTER.PARK_ANGLES_RAD[i] + IMPORTER.DIRECTIONS[i] * math.tau * delta
                 self.assertAlmostEqual(q, expected, places=12)
 
@@ -44,7 +44,7 @@ class ImportGuiMitProfileTest(unittest.TestCase):
         self.assertFalse(converted["calibrated"])
         bus = dict(converted["bus"])
         self.assertEqual(bus.pop("protocol"), "meow")
-        self.assertEqual(bus, source["bus"])
+        self.assertEqual(bus, {key: value for key, value in source["bus"].items() if key != "protocol"})
         self.assertEqual(converted["controller"]["loop_hz"], 500)
         for index, joint in enumerate(converted["joints"]):
             self.assertEqual(joint["identity"], source["joints"][index]["identity"])
@@ -56,7 +56,9 @@ class ImportGuiMitProfileTest(unittest.TestCase):
     def test_refuses_invalid_reference_and_node_mapping(self):
         for invalid in (math.nan, math.inf, -128.001, 128.0):
             with self.assertRaises(ValueError):
-                IMPORTER.import_profile(source_profile(), [invalid, 0, 0, 0, 0, 0])
+                IMPORTER.import_profile(source_profile(), [invalid, 0, 0, 0])
+        with self.assertRaises(ValueError):
+            IMPORTER.import_profile(source_profile(), [0] * 6)
         source = source_profile()
         source["joints"][1]["node_id"] = 3
         with self.assertRaises(ValueError):
@@ -70,6 +72,15 @@ class ImportGuiMitProfileTest(unittest.TestCase):
         self.assertFalse(converted["validated"])
         for old, new in zip(source["joints"], converted["joints"]):
             self.assertEqual(old["identity"], new["identity"])
+
+    def test_retains_j1_j6_directions_and_offsets(self):
+        source = source_profile()
+        source["joints"][0].update(direction=1, zero_offset_rad=0.42)
+        source["joints"][5].update(direction=-1, zero_offset_rad=-0.73)
+        converted = IMPORTER.import_profile(source, [1.25, -.25, -.05, 2.0])
+        for i in (0, 5):
+            for key in ("direction", "zero_offset_rad"):
+                self.assertEqual(converted["joints"][i][key], source["joints"][i][key])
 
     def test_exclusive_output_and_yaml_round_trip(self):
         converted = IMPORTER.import_profile(source_profile())

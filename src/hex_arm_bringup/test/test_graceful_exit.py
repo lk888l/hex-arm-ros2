@@ -105,6 +105,9 @@ def test_meow_normal_stop_uses_verified_folded_return(tmp_path):
     command = graceful.stop_command(profile, 'arm.yaml', path, 'stop.json')
     assert Path(command[1]).name == 'commission-meow-ros.py'
     assert '--allow-motion' in command
+    default_profile = {'bus': {}}
+    assert graceful.eligible(default_profile, path)
+    assert graceful.stop_command(default_profile, 'arm.yaml', path, 'stop.json') == command
     profile['controller'] = {'shutdown_damping': {}}
     assert Path(graceful.stop_command(profile, 'arm.yaml', path, 'stop.json')[1]).name == 'commission-shutdown-ros.py'
     for report in ({'passed': True, 'ready_hold': {}, 'steps': []},

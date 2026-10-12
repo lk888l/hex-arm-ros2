@@ -124,7 +124,7 @@ def main():
     profile = yaml.safe_load(args.profile.read_text())
     sequence = None
     ready = startup.READY
-    if profile.get("bus", {}).get("protocol") == "cia402":
+    if profile.get("bus", {}).get("protocol", "meow") == "cia402":
         digest = hashlib.sha256(args.profile.read_bytes()).hexdigest()
         if prior.get("profile_sha256") != digest or "sequence" not in prior:
             raise RuntimeError("CiA402 normal stop requires this launch's arm-bound startup evidence")

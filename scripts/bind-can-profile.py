@@ -43,10 +43,12 @@ def bind_profile(source, interface, binding):
             or result.get("joint_coordinate_version") != 2):
         raise ValueError("requires a schema v3 profile with joint_coordinate_version 2")
     bus = result.get("bus")
-    if not isinstance(bus, dict) or bus.get("transport") != "socket_can":
+    if not isinstance(bus, dict) or bus.get("transport", "socket_can") != "socket_can":
         raise ValueError("requires a socket_can profile")
     if not isinstance(bus.get("expected_link"), dict):
         raise ValueError("profile is missing expected_link timing requirements")
+    bus.setdefault("protocol", "meow")
+    bus.setdefault("transport", "socket_can")
     bus.update(interface=interface, channel=binding["channel"],
                adapter_vid=binding["vendor_id"], adapter_pid=binding["product_id"])
     bus["expected_link"]["adapter"] = copy.deepcopy(binding)

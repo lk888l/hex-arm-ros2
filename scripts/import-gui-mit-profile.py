@@ -15,7 +15,7 @@ import yaml
 # Source: hex-gui/src/sixMotorMitTest.ts:13-25,38-70, inspected 2026-09-05.
 # The encoder snapshot is installation-specific, not a universal motor zero.
 DIRECTIONS = (-1, -1, 1, 1, 1, 1)
-PARK_POSITIONS_REV = (0.000269, 0.249714, 0.251193, -0.00159, -0.004028, 0.000018)
+PARK_POSITIONS_REV = (0.249714, 0.251193, -0.00159, -0.004028)  # J2-J5 only
 PARK_ANGLES_RAD = (0.0, -1.57, 1.57, 0.0, 0.0, 0.0)
 GRAVITY_SCALES = (0.0, 0.3, 0.7, 0.7, 0.0, 0.0)
 GRAVITY_LIMITS_NM = (0.2, 5.0, 5.0, 1.0, 0.2, 0.1)
@@ -37,11 +37,11 @@ def import_profile(source, park_positions_rev=PARK_POSITIONS_REV):
     joints = source.get("joints")
     if not isinstance(joints, list) or len(joints) != 6:
         raise ValueError("input must contain exactly joint_1 through joint_6")
-    if len(park_positions_rev) != 6 or any(
+    if len(park_positions_rev) != 4 or any(
         not math.isfinite(value) or not -128.0 <= value < 128.0
         for value in park_positions_rev
     ):
-        raise ValueError("park positions must be six finite readings in [-128, 128) Rev")
+        raise ValueError("park positions must be four finite J2-J5 readings in [-128, 128) Rev")
     for index, joint in enumerate(joints, 1):
         if not isinstance(joint, dict) or joint.get("name") != f"joint_{index}":
             raise ValueError("input must use ordered joint_1 through joint_6")
@@ -61,8 +61,6 @@ def import_profile(source, park_positions_rev=PARK_POSITIONS_REV):
     for index, joint in enumerate(result["joints"]):
         joint.update(
             node_id=index + 1,
-            direction=DIRECTIONS[index],
-            zero_offset_rad=PARK_ANGLES_RAD[index] - DIRECTIONS[index] * math.tau * park_positions_rev[index],
             torque_scale=1.0,
             gravity_compensation_scale=GRAVITY_SCALES[index],
             gravity_compensation_limit_nm=GRAVITY_LIMITS_NM[index],
@@ -71,6 +69,9 @@ def import_profile(source, park_positions_rev=PARK_POSITIONS_REV):
             default_kp=80.0,
             default_kd=15.0,
         )
+        if 1 <= index <= 4:
+            joint.update(direction=DIRECTIONS[index],
+                         zero_offset_rad=PARK_ANGLES_RAD[index] - DIRECTIONS[index] * math.tau * park_positions_rev[index - 1])
     return result
 
 
@@ -85,9 +86,10 @@ def write_profile(output, profile, source, parks):
         "# Offline hex-gui MIT parameter import (sixMotorMitTest.ts, 2026-09-05).\n"
         "# This output is NOT validated or calibrated after conversion.\n"
         "# Hardware identities, adapter, gravity vector, payload and measured limits are retained.\n"
-        "# References below are valid only at the physical folded park pose:\n"
-        f"# URDF q [rad]: {list(PARK_ANGLES_RAD)}\n"
-        f"# Encoder [Rev]: {list(parks)}\n"
+        "# J1/J6 directions and zero offsets are retained from the source profile.\n"
+        "# References below are valid only at the physical J2-J5 folded park pose:\n"
+        f"# J2-J5 URDF q [rad]: {list(PARK_ANGLES_RAD[1:5])}\n"
+        f"# J2-J5 encoder [Rev]: {list(parks)}\n"
         "# Physical torque calibration is read from 0x4001 by the Meow backend.\n"
     )
     with output.open("x", encoding="utf-8", newline="\n") as stream:
@@ -100,9 +102,9 @@ def main(argv=None):
     parser.add_argument("--profile", required=True, type=Path, help="existing hardware YAML or commissioning template")
     parser.add_argument("--output", required=True, type=Path, help="new *.local.yaml; existing files are never replaced")
     parser.add_argument(
-        "--park-positions-rev", nargs=6, type=float, default=PARK_POSITIONS_REV,
-        metavar=("M1", "M2", "M3", "M4", "M5", "M6"),
-        help="fresh encoders taken only at physical q=[0,-1.57,1.57,0,0,0] rad; otherwise uses the GUI snapshot",
+        "--park-positions-rev", nargs=4, type=float, default=PARK_POSITIONS_REV,
+        metavar=("M2", "M3", "M4", "M5"),
+        help="J2-J5 encoders at physical q=[-1.57,1.57,0,0] rad; otherwise uses the GUI snapshot; J1/J6 are retained",
     )
     args = parser.parse_args(argv)
     try:
@@ -112,10 +114,11 @@ def main(argv=None):
     except (OSError, ValueError, yaml.YAMLError) as error:
         parser.exit(2, f"error: {error}\n")
     print(f"Created {args.output}; validated=false, calibrated=false. No motor I/O performed.")
-    print("References require the physical folded pose q=[0,-1.57,1.57,0,0,0] rad.")
+    print("References require the physical J2-J5 folded pose q=[-1.57,1.57,0,0] rad; J1/J6 offsets retained.")
     print("Joint      encoder Rev    zero offset rad    gravity scale    clamp Nm")
     for index, joint in enumerate(profile["joints"]):
-        print(f"{joint['name']:8} {args.park_positions_rev[index]:12.6f} {joint['zero_offset_rad']:18.9f} {joint['gravity_compensation_scale']:16.3f} {joint['gravity_compensation_limit_nm']:11.3f}")
+        encoder = f"{args.park_positions_rev[index - 1]:.6f}" if 1 <= index <= 4 else "retained"
+        print(f"{joint['name']:8} {encoder:>12} {joint['zero_offset_rad']:18.9f} {joint['gravity_compensation_scale']:16.3f} {joint['gravity_compensation_limit_nm']:11.3f}")
         if any(joint["identity"].get(key, 0) == 0 for key in ("vendor_id", "product_code", "serial_number")):
             print("  Review: identity still contains placeholders; fill from read-only discovery.")
         if joint["limits"]["torque_nm"] < joint["gravity_compensation_limit_nm"]:

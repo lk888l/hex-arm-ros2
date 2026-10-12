@@ -3,8 +3,9 @@
 **English** | [中文](README_cn.md)
 
 ROS 2 Jazzy drivers, MoveIt 2 planning, and Gazebo simulation for the six-axis Firefly Y6.
-The default build includes Meow and CiA402 drivers. Current hardware uses
-**Meow firmware on can2, without a gripper or extra payload**.
+All entry points and the generic hardware template default to the latest **Meow firmware / SocketCAN**.
+Current hardware uses can2, without a gripper or extra payload. Software zero calibration updates
+**J2–J5 only**, retaining J1/J6 directions and offsets. Legacy CiA402 requires an explicit protocol and build opt-in.
 
 | Task | Entry point | Run commands in |
 |---|---|---|

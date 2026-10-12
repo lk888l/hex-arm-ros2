@@ -6,8 +6,9 @@
 # zero_offset_rad = park_q - direction * 2*pi * park_encoder_rev.
 # These are installation-specific references. After power-cycle or encoder change,
 # use fresh read-only readings at that exact physical pose with:
-# scripts/import-gui-mit-profile.py --profile <base.yaml> --output <new.local.yaml>
-#   --park-positions-rev M1 M2 M3 M4 M5 M6
+# scripts/calibrate-zero.py --interface <canN> --profile <base.yaml>
+#   --confirm-folded-pose --output <new.local.yaml>
+# Software calibration updates J2-J5 only; J1/J6 retain the source coordinates.
 # Replace every identity/adapter placeholder from read-only discovery.
 # torque_scale=1: the Meow backend reads physical torque calibration from 0x4001.
 # GUI Kp=80 Nm/rad, Kd=15 Nm*s/rad, PD limit=500 permille, total=650 permille.

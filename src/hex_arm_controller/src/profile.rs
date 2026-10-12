@@ -110,8 +110,8 @@ pub struct SocketCanAdapterFingerprint {
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BusTransport {
-    #[default]
     GsUsb,
+    #[default]
     #[serde(alias = "socket-can", alias = "socketcan")]
     SocketCan,
 }
@@ -119,8 +119,8 @@ pub enum BusTransport {
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MotorProtocol {
-    #[default]
     Cia402,
+    #[default]
     Meow,
 }
 
@@ -1276,12 +1276,33 @@ default_kd: 0.3
     }
 
     #[test]
-    fn gravity_limits_and_startup_rate_are_optional_and_validated() {
-        let legacy: HardwareProfile =
-            serde_yaml::from_str(include_str!("../test/firefly_y6.mock.yaml")).unwrap();
+    fn omitted_protocol_and_transport_use_meow_multi_turn_coordinates() {
+        let yaml = include_str!("../test/firefly_y6.mock.yaml")
+            .replace("  protocol: meow\n", "")
+            .replace("  transport: socket_can\n", "");
+        let mut profile: HardwareProfile = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(profile.bus.protocol, MotorProtocol::Meow);
+        assert_eq!(profile.bus.transport, BusTransport::SocketCan);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        profile.urdf_path = file.path().display().to_string();
+        profile.joints[1].zero_offset_rad = 7.0;
+        profile.validate().unwrap();
+        profile.validate_single_turn_command_windows().unwrap();
+
+        let explicit_legacy = yaml.replace("bus:\n", "bus:\n  protocol: cia402\n");
+        let legacy: HardwareProfile = serde_yaml::from_str(&explicit_legacy).unwrap();
         assert_eq!(legacy.bus.protocol, MotorProtocol::Cia402);
-        assert_eq!(legacy.controller.gravity_startup_slew_rate_nm_s, None);
-        assert!(legacy
+        profile.bus.protocol = legacy.bus.protocol;
+        assert!(profile.validate_single_turn_command_windows().is_err());
+    }
+
+    #[test]
+    fn gravity_limits_and_startup_rate_are_optional_and_validated() {
+        let mock: HardwareProfile =
+            serde_yaml::from_str(include_str!("../test/firefly_y6.mock.yaml")).unwrap();
+        assert_eq!(mock.bus.protocol, MotorProtocol::Meow);
+        assert_eq!(mock.controller.gravity_startup_slew_rate_nm_s, None);
+        assert!(mock
             .joints
             .iter()
             .all(|joint| joint.gravity_compensation_limit_nm.is_none()));

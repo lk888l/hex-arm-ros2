@@ -1,5 +1,5 @@
-# MOCK-ONLY integration profile. The deliberately impossible USB identity
-# prevents this fixture from opening physical hardware if used accidentally.
+# MOCK-ONLY integration profile. The nonexistent interface and synthetic USB
+# serial prevent this fixture from matching physical hardware.
 schema_version: 3
 joint_coordinate_version: 2
 validated: true
@@ -10,17 +10,31 @@ gravity_vector_base_m_s2: [0.0, 0.0, -9.81]
 tip_payload: null
 
 bus:
-  transport: gs_usb
-  interface: ""
+  protocol: meow
+  transport: socket_can
+  interface: can_mock
   channel: 0
-  adapter_vid: 65535
-  adapter_pid: 65535
+  adapter_vid: 4617
+  adapter_pid: 8995
   heartbeat_node_id: 127
   hardware_timestamp: false
   auxiliary_node_ids: []
-  # userspace gs_usb opens its own impossible mock VID/PID; SocketCAN
-  # expected_link preflight is intentionally not applicable to this fixture.
-  expected_link: null
+  # MockBackend skips CAN; this interface/serial binding rejects real I/O.
+  expected_link:
+    nominal_bitrate: 1000000
+    nominal_sample_point_permille: 800
+    nominal_sjw: 5
+    data_bitrate: 4000000
+    data_sample_point_permille: 800
+    data_sjw: 3
+    fd: true
+    restart_ms: 0
+    adapter:
+      driver: gs_usb
+      vendor_id: 4617
+      product_id: 8995
+      serial: "00000000000000000000000000000000"
+      channel: 0
 
 controller:
   loop_hz: 1000

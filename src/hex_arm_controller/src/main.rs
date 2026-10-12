@@ -13,7 +13,7 @@ use std::{fmt, path::PathBuf, sync::Arc};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(about = "Firefly Y6 Meow / CiA402 production driver")]
+#[command(about = "Firefly Y6 Meow production driver (legacy CiA402 opt-in)")]
 struct Arguments {
     #[arg(long)]
     profile: PathBuf,
@@ -190,7 +190,7 @@ async fn run_normal_control(
     }
 
     let mut protocol_tasks = match tokio::select! {
-        signal = termination_signals.received() => Err(anyhow::anyhow!("API startup interrupted: {:?}", signal)),
+        signal = termination_signals.received() => Err(anyhow::anyhow!("API startup interrupted: {signal:?}")),
         result = async {
         let urdf_xml = std::fs::read_to_string(&profile.urdf_path).context("read URDF resource")?;
         protocol::serve(session, runtime.clone(), urdf_xml).await

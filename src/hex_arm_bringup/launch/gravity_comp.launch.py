@@ -34,8 +34,8 @@ def _load_profile(path, activate, mock):
         raise RuntimeError("hand guiding requires a validated schema v3 six-axis profile with installation gravity")
     if activate and profile.get("calibrated") is not True:
         raise RuntimeError("hand guiding requires calibrated joint coordinates")
-    if not mock and profile.get("bus", {}).get("protocol") not in ("meow", "cia402"):
-        raise RuntimeError("real hand guiding requires an explicit meow or cia402 protocol")
+    if not mock and profile.get("bus", {}).get("protocol", "meow") not in ("meow", "cia402"):
+        raise RuntimeError("real hand guiding requires meow (default) or explicit legacy cia402 protocol")
     return profile
 
 

@@ -36,6 +36,15 @@ def test_nearly_zero_j6_does_not_add_a_preparation_phase():
     assert len(client.startup_steps(profile(), q, [0.0] * 6)) == 3
 
 
+def test_omitted_protocol_retains_the_meow_folded_startup():
+    config = profile()
+    del config["bus"]["protocol"]
+    assert client.folded_entry_command(config, client.FOLDED) == client.FOLDED
+    steps = client.startup_steps(config, client.FOLDED, [0.0] * 6, align_folded=True)
+    assert [label for label, _, _ in steps] == ["align_folded", "startup_j2", "startup_j4", "startup_j3"]
+    assert steps[-1][1] == client.READY
+
+
 def test_direct_cold_start_waits_for_inactive_and_fresh_feedback(monkeypatch):
     from types import SimpleNamespace as NS
     clock = [100.0]

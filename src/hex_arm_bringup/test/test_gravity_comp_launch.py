@@ -41,6 +41,11 @@ def test_bad_real_profile_rejected(tmp_path, changes):
         module._load_profile(profile_file(tmp_path, **changes), True, False)
 
 
+def test_real_hand_guiding_accepts_default_meow_protocol(tmp_path):
+    profile = module._load_profile(profile_file(tmp_path, bus={}), True, False)
+    assert profile["calibrated"]
+
+
 @pytest.mark.parametrize("value", ["[1,2]", "0", "[1,1,1,1,1,0]", "[1,1,1,1,1,.nan]",
                                    "[true,1,1,1,1,1]"])
 def test_bad_damping_rejected(value):

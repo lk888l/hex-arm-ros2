@@ -35,7 +35,8 @@ SocketCAN 仍通过宿主网络访问，设备序列号、物理通道和位时�
 source install/setup.bash
 ```
 
-CMake 默认启用生产 CiA402 后端。独立关节调试程序需要显式构建：
+默认构建使用新版 Meow。旧版 CiA402 后端及独立关节调试程序需要显式构建；
+旧版模板为 `config/hardware/firefly_y6.cia402.example.yaml`：
 
 ```bash
 ./scripts/build.sh --packages-select hex_arm_controller \

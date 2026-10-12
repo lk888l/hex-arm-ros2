@@ -3,7 +3,7 @@ project(hex_arm_controller VERSION 0.1.0 LANGUAGES NONE)
 
 find_package(ament_cmake REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
-option(HEX_ARM_ENABLE_CIA402 "Include the CiA402 motor backend in the production controller" ON)
+option(HEX_ARM_ENABLE_CIA402 "Include the legacy CiA402 motor backend (Meow is the default)" OFF)
 option(HEX_ARM_BUILD_COMMISSIONING "Build/install historical commissioning executable" OFF)
 
 set(cargo_build_args --no-default-features --bin hex_arm_controller)

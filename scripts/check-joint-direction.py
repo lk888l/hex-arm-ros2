@@ -15,20 +15,20 @@ import yaml
 
 
 spec = importlib.util.spec_from_file_location(
-    "direction_campaign", Path(__file__).with_name("commission-cia402.py"))
-campaign = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(campaign)
+    "direction_meow_reader", Path(__file__).with_name("read-meow-state.py"))
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
 
 
 def compare(profile, before, after, axis, expected_sign):
     if (profile.get("schema_version") != 3 or profile.get("joint_coordinate_version") != 2
-            or profile.get("bus", {}).get("protocol") != "cia402"
+            or profile.get("bus", {}).get("protocol", "meow") != "meow"
             or len(profile.get("joints", [])) != 6
             or len({j.get("node_id") for j in profile["joints"]}) != 6
             or axis not in range(6) or expected_sign not in (-1, 1)):
-        raise ValueError("requires six-axis CiA402 coordinates v2 and a known +/-1 URDF motion")
+        raise ValueError("requires six-axis Meow coordinates v2 and a known +/-1 URDF motion")
     for capture in (before, after):
-        campaign.verify_disabled(capture)
+        reader.verify_disabled(capture)
         if capture.get("interface") != profile["bus"]["interface"]:
             raise ValueError("capture interface differs from profile")
     deltas = []
@@ -50,9 +50,9 @@ def compare(profile, before, after, axis, expected_sign):
                 raise ValueError("capture requires finite raw encoder positions")
             samples.append(raw)
         delta = (samples[1] - samples[0]) * math.tau
-        # Do not infer winding or direction across an encoder seam.
+        # Bound the independent physical observation; Meow positions are multi-turn.
         if abs(delta) > 0.35:
-            raise ValueError("capture moved too far or crossed an encoder seam")
+            raise ValueError("capture moved too far for an isolated direction check")
         if i != axis and abs(delta) > 0.01:
             raise ValueError(f"joint_{i + 1}: another axis moved; isolate the intended joint")
         deltas.append(delta)

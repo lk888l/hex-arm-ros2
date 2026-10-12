@@ -24,7 +24,7 @@ startup = shutdown.startup
 
 def return_steps(profile, prior, digest):
     """Only reverse a successful, exact-profile, standard Meow startup."""
-    if (profile.get('bus', {}).get('protocol') != 'meow'
+    if (profile.get('bus', {}).get('protocol', 'meow') != 'meow'
             or not profile.get('validated') or not profile.get('calibrated')
             or prior.get('passed') is not True or prior.get('deactivated')
             or 'ready_hold' not in prior or prior.get('profile_sha256') != digest
