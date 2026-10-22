@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dual_arm_robot">
+  <xacro:arg name="backend" default="mock"/>
+  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.macro.xacro"/>
+  <link name="chassis">
+    <visual><geometry><box size="0.8 0.8 0.1"/></geometry></visual>
+    <collision><geometry><box size="0.8 0.8 0.1"/></geometry></collision>
+  </link>
+  <xacro:firefly_y6_arm prefix="left_" parent="chassis" xyz="0 0.3 0.05"
+    backend="$(arg backend)" hardware_name="LeftArmSystem" ros_namespace="left"
+    robot_prefix="example/left" tool_link="tcp" tcp_xyz="0 0 0.10"/>
+  <xacro:firefly_y6_arm prefix="right_" parent="chassis" xyz="0 -0.3 0.05"
+    backend="$(arg backend)" hardware_name="RightArmSystem" ros_namespace="right"
+    robot_prefix="example/right" tool_link="tcp" tcp_xyz="0 0 0.10"/>
+  <!-- A fixed mock tool. A real tool also needs matching payload mass/CoM in
+       the driver's hardware profile; URDF alone cannot configure gravity. -->
+  <xacro:macro name="example_tool" params="prefix">
+    <link name="${prefix}tool">
+      <inertial><origin xyz="0 0 0.04"/><mass value="0.1"/>
+        <inertia ixx="0.00007" iyy="0.00007" izz="0.00003" ixy="0" ixz="0" iyz="0"/></inertial>
+      <visual><origin xyz="0 0 0.04"/><geometry><box size="0.04 0.04 0.08"/></geometry></visual>
+      <collision><origin xyz="0 0 0.04"/><geometry><box size="0.04 0.04 0.08"/></geometry></collision>
+    </link>
+    <joint name="${prefix}tool_mount" type="fixed">
+      <parent link="${prefix}link_6"/><child link="${prefix}tool"/>
+    </joint>
+  </xacro:macro>
+  <xacro:example_tool prefix="left_"/>
+  <xacro:example_tool prefix="right_"/>
+</robot>

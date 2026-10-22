@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(hex_arm_controller VERSION 0.1.0 LANGUAGES NONE)
 
 find_package(ament_cmake REQUIRED)
+find_package(hex_arm_protocol REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 option(HEX_ARM_ENABLE_CIA402 "Include the legacy CiA402 motor backend (Meow is the default)" OFF)
 option(HEX_ARM_BUILD_COMMISSIONING "Build/install historical commissioning executable" OFF)
@@ -29,6 +30,7 @@ endif()
 # could otherwise silently reinstall the wrong feature set.
 add_custom_target(${PROJECT_NAME}_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${cargo_target_dir}
+    HEX_ARM_PROTO_FILE=${hex_arm_protocol_PROTO_FILE}
     ${CARGO_EXECUTABLE} build --release --locked ${cargo_build_args}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   BYPRODUCTS ${cargo_outputs}
@@ -36,11 +38,14 @@ add_custom_target(${PROJECT_NAME}_cargo ALL
   VERBATIM)
 
 install(PROGRAMS ${cargo_outputs} DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY proto config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+# Compatibility export for existing clients; the source of truth is hex_arm_protocol.
+install(FILES "${hex_arm_protocol_PROTO_FILE}" DESTINATION share/${PROJECT_NAME}/proto)
 
 if(BUILD_TESTING)
   add_test(NAME ${PROJECT_NAME}_rust_tests
     COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${cargo_target_dir}
+      HEX_ARM_PROTO_FILE=${hex_arm_protocol_PROTO_FILE}
       ${CARGO_EXECUTABLE} test --locked ${cargo_test_args})
   set_tests_properties(${PROJECT_NAME}_rust_tests PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 180)

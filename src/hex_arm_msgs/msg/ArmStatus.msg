@@ -1,0 +1,11 @@
+builtin_interfaces/Time stamp
+string instance
+uint8 STARTING=0
+uint8 READY=1
+uint8 STOPPING=2
+uint8 DISABLED=3
+uint8 FAULT=4
+uint8 state
+bool execution_ready
+bool disabled_confirmed
+string reason

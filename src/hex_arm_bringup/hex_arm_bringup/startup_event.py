@@ -3,7 +3,8 @@ from launch import Event
 
 
 class StartupVerified(Event):
-    def __init__(self, profile, readiness_token):
+    def __init__(self, profile, readiness_token, namespace=""):
         super().__init__()
         self.profile = str(profile)
         self.readiness_token = readiness_token
+        self.namespace = namespace

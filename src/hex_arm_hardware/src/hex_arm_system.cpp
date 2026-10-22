@@ -1,4 +1,6 @@
 #include "hex_arm_hardware/hex_arm_system.hpp"
+#include "hex_arm_hardware/instance_config.hpp"
+#include "hex_arm_hardware/instance_node.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -79,8 +81,14 @@ hardware_interface::CallbackReturn HexArmSystem::on_init(
         throw std::invalid_argument("joint " + joint.name + " has an incomplete interface set");
       }
       joint_names_.push_back(joint.name);
+      const auto device = joint.parameters.find("device_joint_name");
+      zenoh_options_.device_joint_names.push_back(
+        device == joint.parameters.end() ? joint.name : device->second);
     }
 
+    validate_device_joints(joint_names_, zenoh_options_.device_joint_names);
+    zenoh_options_.hardware_name = info_.name;
+    zenoh_options_.ros_namespace = parameter_or(info_, "ros_namespace", "");
     zenoh_options_.endpoint = parameter_or(info_, "zenoh_connect", zenoh_options_.endpoint);
     zenoh_options_.prefix = parameter_or(info_, "robot_prefix", zenoh_options_.prefix);
     zenoh_options_.command_period = parse_positive_parameter(info_, "command_period_sec", 0.01);
@@ -150,17 +158,16 @@ hardware_interface::CallbackReturn HexArmSystem::on_configure(
   }
   stop_io_thread();
   static std::atomic_uint instance{0U};
-  const auto name = "hex_arm_system_io_" + std::to_string(instance.fetch_add(1U));
-  io_node_ = std::make_shared<rclcpp::Node>(name);
-  executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
-  executor_->add_node(io_node_);
-
   try {
+    io_node_ = make_instance_node(
+      zenoh_options_.hardware_name, zenoh_options_.ros_namespace, instance.fetch_add(1U));
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor_->add_node(io_node_);
     trace_.start();
     direct_ = std::make_unique<ZenohTransport>(zenoh_options_, io_node_,
       feedback_mailbox_, command_mailbox_, trace_);
   } catch (const std::exception & error) {
-    RCLCPP_ERROR(io_node_->get_logger(), "transport configuration failed: %s", error.what());
+    RCLCPP_ERROR(rclcpp::get_logger("HexArmSystem"), "transport configuration failed: %s", error.what());
     stop_io_thread();
     return hardware_interface::CallbackReturn::ERROR;
   }

@@ -48,11 +48,11 @@ MoveIt 采用模型、commissioning 限位和本机 profile 的交集，J2 规�
 
 ## 日常启动与停止
 
-每次重新上电，在默认摆放位 `[0,-1.570,1.570,0,0,0]` rad 附近直接启动。
-J1～J5 各容许 0.15 rad 偏差，同时必须满足本机硬件窗口；J6 按位置限位检查并保持当前角度。
-入口在使能前读取完整、新鲜、静止的六轴反馈，原地使能并渐入重力补偿。
-`[0,-1.350,1.430,-0.300,0,0]` rad 保留为关机返回位。
-摆放位、允许偏差和关机路点统一由
+每次重新上电，先摆放到折叠入口 `[0,-1.570,1.570,0,0,0]` rad。
+J1/J5 容许 0.03 rad 偏差，J2/J3/J4 容许 0.01 rad，同时满足本机反馈窗口；J6 按需平滑回零。
+使能前核对完整、新鲜、静止的六轴反馈，先验证实测位置保持和重力渐入，
+再自动运动到 `[0,-1.350,1.430,-0.300,0,0]` rad，此姿态也用作关机返回位。
+摆放位、允许偏差和路点统一由
 [`startup.yaml`](../src/hex_arm_controller/config/startup.yaml) 定义。
 
 在宿主机仓库目录的图形终端执行：
@@ -64,12 +64,14 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-默认启动不执行展开或自动对齐轨迹。使能和重力渐入后，验证当前位置静止保持，
-再开放 MoveIt 执行和 RViz，图形显示使用实际反馈。
+默认依次执行 **J2→−1.350、J4→−0.300、J3→1.430**，未轮到的 J2/J3/J4 保持实测位置。
+ROS 按本次 MoveIt 动态上限与行程计算时长；YAML 中的 8/10/6 秒仅用于独立 commissioning。
+显式 `align_folded:=true` 可允许基座及腕部先做有界对齐。
+动作完成并通过 3 秒 ready 静止验收后，开放 MoveIt 执行和 RViz，图形显示使用实际反馈。
 
-等待 `Measured pose held; controller continues holding` 后，在 RViz 选择
+等待 `startup_ready reached and verified; controller continues holding` 后，在 RViz 选择
 `arm`、当前状态作为起点，再使用 `Plan` / `Plan & Execute`。
-真机执行必须通过当前位置保持验收，不能用 `startup_ready:=false` 绕过；
+真机执行必须完成自动 J2 → J4 → J3 及保持验收，不能用 `startup_ready:=false` 绕过；
 省略 `enable_execution:=true` 为保持失能的观察/规划。
 
 本机 profile 已配置退出阻尼（新增参数尚未实机验收）。第一次在 real-launch 终端按 Ctrl-C，

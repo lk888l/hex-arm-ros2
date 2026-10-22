@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 
 from diagnostic_msgs.msg import DiagnosticArray
-from hex_arm_msgs.msg import DriverState
+from hex_arm_msgs.msg import DriverState, InterpolationState
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
@@ -19,11 +19,17 @@ class TransportProbe(Node):
 
     def __init__(self):
         super().__init__("hex_arm_protocol_probe")
-        self.received = {"state": False, "driver": False, "diagnostics": False}
+        self.received = {"state": False, "driver": False, "diagnostics": False,
+                         "command": False, "interpolation": False}
         self.driver = None
         self.create_subscription(JointState, "/hex_arm/internal/state", self.state,
                                  qos_profile_sensor_data)
         self.create_subscription(DriverState, "/hex_arm/driver_state", self.driver_state, 10)
+        self.create_subscription(JointState, "/hex_arm/internal/command",
+                                 lambda message: self.received.__setitem__("command", len(message.position) == 6),
+                                 qos_profile_sensor_data)
+        self.create_subscription(InterpolationState, "/hex_arm/interpolation_state", self.interpolation,
+                                 qos_profile_sensor_data)
         self.create_subscription(DiagnosticArray, "/diagnostics",
                                  lambda _: self.received.__setitem__("diagnostics", True), 10)
 
@@ -33,6 +39,13 @@ class TransportProbe(Node):
     def driver_state(self, message):
         self.received["driver"] = True
         self.driver = message
+
+    def interpolation(self, message):
+        assert message.command_generation > 0
+        assert message.sample_stamp_ns >= message.segment_start_ns
+        assert message.effective_duration_ns >= message.requested_duration_ns
+        assert len(message.joint_names) == 6
+        self.received['interpolation'] = True
 
 
 def main():

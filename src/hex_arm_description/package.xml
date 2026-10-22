@@ -7,11 +7,9 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>python3</build_depend>
+  <depend>xpkg_urdf_firefly_y6</depend>
   <depend>xacro</depend>
-  <exec_depend>hex_arm_hardware</exec_depend>
-  <exec_depend>gz_ros2_control</exec_depend>
-  <exec_depend>ros2_control</exec_depend>
-  <exec_depend>xpkg_urdf_firefly_y6</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>urdfdom_py</test_depend>

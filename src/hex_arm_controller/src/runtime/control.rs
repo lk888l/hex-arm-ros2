@@ -159,6 +159,20 @@ impl ArmRuntime {
                         interpolator = Interpolator::hold(targets.clone(), now_ns);
                         generation = command.generation;
                     }
+                    let (segment_start_ns, effective_duration_ns) = interpolator.timing();
+                    let observation = (!holding_for_gravity).then(|| InterpolationSnapshot {
+                        owner,
+                        command_sequence: command.source_sequence,
+                        command_generation: generation,
+                        segment_start_ns,
+                        requested_duration_ns: command.duration_ns,
+                        effective_duration_ns,
+                        sample_stamp_ns: now_ns,
+                        command_position: array::from_fn(|i| command.targets[i].position_rad),
+                        command_velocity: array::from_fn(|i| command.targets[i].velocity_rad_s),
+                        interpolated_position: array::from_fn(|i| targets[i].position_rad),
+                        interpolated_velocity: array::from_fn(|i| targets[i].velocity_rad_s),
+                    });
                     match self.motor_targets(&targets) {
                         Ok(targets) => {
                             if self.is_closing() {
@@ -197,6 +211,11 @@ impl ArmRuntime {
                             if let Err(error) = update {
                                 self.fault_and_disable(FAULT_TRANSPORT, error.to_string())
                                     .await;
+                            } else {
+                                let mut data = self.data.write();
+                                if data.accepts_control(owner) {
+                                    data.interpolation = observation;
+                                }
                             }
                         }
                         Err(error) => {

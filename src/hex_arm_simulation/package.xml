@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>hex_arm_simulation</name>
+  <version>0.1.0</version>
+  <description>Optional Gazebo dependencies for the existing hex_arm_bringup simulation launches.</description>
+  <maintainer email="kisonhe@icloud.com">HEX arm maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>hex_arm_bringup</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -25,7 +25,8 @@ class RuntimePackagingTest(unittest.TestCase):
         self.prefix = Path(self.directory.name) / "install"
         for relative in install.REQUIRED:
             self.write(relative)
-        self.write("lib/python3.12/site-packages/hex_arm_tools/pb/robot_api_pb2.py")
+        for relative in install.REQUIRED_PYTHON:
+            self.write("lib/python3.12/site-packages/" + relative)
         self.write("share/hex_arm_moveit_config/config/joint_limits_commissioning.yaml")
         build_inputs = {"base_image": "reviewed-base"}
         self.write("share/hex_arm_runtime/build-manifest.json",

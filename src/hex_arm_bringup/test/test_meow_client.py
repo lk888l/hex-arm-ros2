@@ -192,7 +192,8 @@ def test_normal_exit_after_campaign_does_not_move_or_enable_again(monkeypatch):
     node.list_hardware_components = lambda: components
     report = {}
     client.run(node, [], False, report)
-    assert report == dict(passed=True, deactivated=True, already_inactive=True)
+    assert report == dict(passed=True, deactivated=True, already_inactive=True,
+                          motion_completed=False, motion_skipped='already_inactive')
     with pytest.raises(RuntimeError, match='require active'):
         client.run(node, [], True, {})
 
@@ -209,13 +210,13 @@ def test_unmoved_folded_start_disables_without_an_unfolding_motion(monkeypatch, 
                                  state=SimpleNamespace(id=3, label='active'))]
     node = SimpleNamespace(profile=profile, q=lambda: q.copy(), driver=None,
         list_hardware_components=lambda: components, check_live=lambda: events.append('healthy'),
-        wait_stationary=lambda: events.append('stationary'),
+        prepare_handoff=lambda: events.extend(['cancel_and_confirm', 'stationary']),
         is_valid=lambda reference, contacts: events.append(('collision', reference.copy(), contacts)),
         deactivate=lambda: events.append('disable'))
     monkeypatch.setattr(client, 'warm_connections', lambda *args, **kwargs: None)
     report = {'moveit': []}
     client.run(node, client.return_steps(profile, prior, 'exact'), False, report)
-    assert events == ['healthy', 'stationary',
+    assert events == ['healthy', 'cancel_and_confirm', 'stationary',
                       ('collision', q, client.startup.FOLDED_CONTACTS), 'disable']
     assert report['passed'] and report['deactivated'] and report['already_folded']
     assert report['folded_q'] == q and report['moveit'] == []
@@ -231,6 +232,7 @@ def test_shutdown_tolerance_covers_ready_and_folding_without_changing_campaign(m
                                  state=SimpleNamespace(id=3, label='active'))]
     node = SimpleNamespace(profile=profile, q=lambda: q.copy(), driver=None, list_hardware_components=lambda: components,
                            check_live=lambda: None, wait_stationary=lambda *args: None,
+                           prepare_handoff=lambda: None,
                            check_point=lambda q: None, is_valid=lambda *args: True,
                            sequence_path_checks=[], samples=[], deactivate=lambda: None,
                            spin_hold=lambda *args: ([0.]*6, 0.))
@@ -246,6 +248,6 @@ def test_shutdown_tolerance_covers_ready_and_folding_without_changing_campaign(m
     report = {'moveit': []}
     goals = [('return_ready', client.startup.READY, .5)] if campaign else None
     client.run(node, reverse, False, report, goals=goals, velocity_scaling=.8, acceleration_scaling=.6)
-    assert planned == ([(None, .5, .5), (None, .8, .6)] if campaign else [(.1, .5, .5)])
-    assert folded == [0.1]*3
-    assert report['shutdown_path_tolerance_rad'] == 0.1 and report['passed']
+    assert planned == ([(None, .25, .25), (None, .8, .6)] if campaign else [(.11, .25, .25)])
+    assert folded == [0.11]*3
+    assert report['shutdown_path_tolerance_rad'] == 0.11 and report['passed']

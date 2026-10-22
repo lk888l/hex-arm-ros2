@@ -39,7 +39,7 @@ LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
 WORKDIR /opt/hex-arm
 COPY --from=build /opt/hex-arm /opt/hex-arm
 COPY docker/runtime-entrypoint.sh /usr/local/bin/hex-arm-entrypoint
-COPY scripts/runtime-manifest.py /usr/local/bin/hex-arm-runtime-manifest.py
+COPY src/hex_arm_bringup/scripts/runtime-manifest.py /usr/local/bin/hex-arm-runtime-manifest.py
 ENV ROS_LOG_DIR=/var/log/hex-arm \
     PYTHONDONTWRITEBYTECODE=1
 STOPSIGNAL SIGINT

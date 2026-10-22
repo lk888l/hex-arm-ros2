@@ -7,14 +7,17 @@
 ## 操作入口
 
 使用 `scripts/docker-dev.sh real-launch moveit ... enable_execution:=true`，
-或独立生产 `compose.runtime.yaml`。只有本次启动读取当前位置、原地使能并通过
-静止保持检查，且 profile 配置了 `controller.shutdown_damping`，才启用柔和退出。
+或独立生产 `compose.runtime.yaml`。默认 Meow 启动完成实测位置保持、自动 J2→J4→J3
+及最终 `startup_ready` 静止验收，且 profile 配置了 `controller.shutdown_damping`，才启用柔和退出。
+显式或旧版原地保持的兼容报告仍需通过完整保持证据验证。
 
 在拥有 real-launch 的终端按**第一次 Ctrl+C 后，机械臂可能主动运动**：
 
-1. ROS、MoveIt 和 ros2_control 暂时保持运行；取消当前 MoveIt/FJT goal，并检查静止反馈。
+1. ROS、MoveIt 和 ros2_control 暂时保持运行。默认由实例 StopArm 服务发布 STOPPING，
+   `execution_ready=false`；上层运动客户端应停止提交目标。
+   顺序取消 MoveGroup、ExecuteTrajectory、FJT goal，并通过 GetResult 确认每个旧目标已终止，随后检查静止反馈。
 2. 通过严格碰撞检查的 MoveIt 规划，回到安全启动位
-   `[0,-1.350,1.430,-0.300,0,0]` rad，固定使用 0.5/0.5 速度、加速度缩放。
+   `[0,-1.350,1.430,-0.300,0,0]` rad，默认使用 0.25/0.25 速度、加速度缩放。
    已在目标附近则只检查保持，不重复规划。
 3. 六轴位置误差均不超过 0.005 rad、速度不超过 0.02 rad/s，连续保持 0.5 s 后，
    请求 Rust 接管退出。Rust 独立复核状态、位置、速度及电机目标合法性。
@@ -24,12 +27,14 @@
    （每轴误差 ≤0.02 rad、速度 ≤0.02 rad/s）连续静止 `settle_sec`，才确认柔和阶段完成；
    随后执行并确认全轴 Disable，最后退出 ROS。
 
-若原地开机后仍停在折叠终点，退出时确认静止并直接失能，无需先返回 ready 再下落。
-仍位于启动摆放窗口、且只有已知折叠模型接触时，预检完整路径后按 J3→J4→J2 回折并失能，
-J1/J5/J6 保持当前位置。普通工作位置继续执行返回固定 ready 位和阻尼退出。
+若已经停在折叠终点，退出时确认静止并直接失能。
+对原地保持的兼容报告，若仍位于其摆放窗口且只有已知折叠模型接触，
+预检完整路径后按 J3→J4→J2 回折并失能，J1/J5/J6 保持当前位置。
+普通工作位置继续执行返回固定 ready 位和阻尼退出。
 
 安全启动位和折叠位均读取同一份
-[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml)。取消开机轨迹后，关机仍使用这两组固定参考。
+[`startup.yaml`](../src/hex_arm_controller/config/startup.yaml)。开机按 J2→J4→J3 到达 ready；
+ROS 开机轨迹按本次动态限值计算时长，最终 ready 保持验收为 3 秒。
 **下落阶段是六轴阻尼，不是 J2→J3→J4 的主动折叠轨迹**；回安全位由 MoveIt 协调规划，
 环境障碍物仍需正确加入规划场景。
 
@@ -76,8 +81,49 @@ Kd 按 J1～J6 排列，单位为关节侧 Nm·s/rad；仅在退出阶段生效�
 `soft-stop.json` 与本次启动报告位于最终 `driver-shutdown.json` 同目录下的独立子目录，
 路径在终端输出。生产镜像日志卷会保留这些报告。
 柔和报告包含参数、回位/阻尼开始时刻，以及收到的关节位置/速度样本，供首轮验收分析。
+默认 StopArm 入口的 `soft-stop.json` 包含 `motion_completed`、`disabled_confirmed` 和
+`motion_report`；详细轨迹记录在 `motion_report` 指向的 `operations-stop-*.json`。
+已经禁能而跳过运动时记录 `motion_skipped`，不把它当作完成回折的证据。
 最后仍应等待开发 supervisor 的 `VERIFIED structured disabled_confirmed`。
 该回执仅确认失能，和柔和阶段报告是两个独立结果。
+
+## 返回 READY 的诊断与交接
+
+关机从取消后静止的控制器参考开始规划；实际反馈仍用于碰撞、静止和 0.015 rad 保持误差检查。
+执行前再次验证实测位置、当前参考和计划首点，参考与首点偏差超过 0.0001 rad 即拒绝执行。
+这保留柔顺关节的保持参考；参考不新鲜、仍在运动或保持误差过大时停止回位并走禁能流程。
+STOPPING 是集成客户端的提交门控，不是原生 MoveIt/FJT 服务的权限隔离；直接调用这些底层
+接口的其他客户端也必须遵守 `hex_arm/status.execution_ready`，否则仍可能抢占关机轨迹。
+
+关机报告默认记录以下数据，失败时同样保留：
+
+强制杀死 helper 或整个进程组可能使报告未写完；完整记录依赖正常返回或异常清理阶段完成。
+
+| 字段 | 内容 |
+| --- | --- |
+| `last_plan.trajectory` | 所有计划点的位置、速度、加速度、起始时间 |
+| `action_feedback` | FJT 期望/实际/误差的位置及速度、各点时间 |
+| `controller_states` | JTC 参考、实际和误差，包含交接期间样本 |
+| `driver_states` | 驱动模式、故障码及原始故障原因、指令/反馈年龄 |
+| `commands` | C++ 实际发送指令的诊断采样 |
+| `interpolation_states` | Rust 消费的指令序号、目标、插补后目标、请求/有效时长与采样时间 |
+| `handoff` | 各旧目标的取消及终止结果、静止后的实测位置和参考 |
+| `ready_completed` / `motion_completed` / `disable_result` | 返回 READY、整个回位/回折和 helper 禁能的独立结果 |
+
+`last_plan` 还包含实际执行状态、原始错误字符串和各轴最大位置/速度误差。
+`interpolation_states` 通过可选 protobuf 字段传输，旧驱动不会提供这一记录；应同时重编译
+`hex_arm_protocol`、`hex_arm_msgs`、`hex_arm_controller`、`hex_arm_hardware` 和 `hex_arm_bringup`。
+采样话题采用 best-effort QoS，不向实时控制循环施加可靠订阅的背压；这不是每个控制 tick 的无损记录。
+Rust 时间是驱动进程的单调时钟，不能直接减去 Python 的 `t` 或 ROS 时间戳；用指令序号关联，
+在各自时钟内计算时长。比较 `effective_duration_ns` 与 `requested_duration_ns` 可观察底层重定时。
+`interpolation_summary` 汇总已采到的段数、发生重定时的段数和最大有效时长；
+`commands` 的 ROS 时间表示诊断发布时间，Rust 的指令序号标识真正被消费的目标。
+
+两个 stop helper 可分别用 `--shutdown-velocity-scaling`、`--shutdown-acceleration-scaling`
+设置返回段比例，默认均为 0.25；campaign 的 `--velocity-scaling` 和 `--acceleration-scaling`
+仍只影响 campaign 动作。先比较 0.25 与原 0.5 的误差曲线，再决定是否调整插补职责。
+本次保留底层速度/加速度限制、0.11 rad 路径容差和 J3→J4→J2 顺序。
+这些软件改动已增加离线回归测试，故障是否消除仍需实机报告验证。
 
 修改后先在已停止控制的开发容器中重新编译并 source：
 

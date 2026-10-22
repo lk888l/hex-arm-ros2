@@ -47,6 +47,9 @@ case "${level}" in
   protocol)
     python3 src/hex_arm_bringup/test/test_protocol_smoke.py
     ;;
+  portability)
+    python3 scripts/test-package-portability.py --underlay "${workspace_dir}/install" "${@:2}"
+    ;;
   mock)
     python3 src/hex_arm_bringup/test/test_mock_trajectory.py
     ;;
@@ -54,7 +57,7 @@ case "${level}" in
     python3 src/hex_arm_bringup/test/test_gz_trajectory.py
     ;;
   *)
-    echo "usage: $0 {unit|legacy|protocol|mock|gz}" >&2
+    echo "usage: $0 {unit|legacy|protocol|mock|gz|portability [options]}" >&2
     exit 2
     ;;
 esac

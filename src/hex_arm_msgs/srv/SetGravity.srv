@@ -1,3 +1,6 @@
+# Gravity acceleration in the arm's unprefixed model base frame, m/s^2.
+# Installation gravity, not an arbitrary force or a vector in map/world.
+# Requires the current hardware session; hand guiding must be disabled first.
 float64 x
 float64 y
 float64 z

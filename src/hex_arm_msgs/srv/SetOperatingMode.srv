@@ -1,3 +1,5 @@
+# The ROS hardware adapter accepts MODE_DISABLED (1) only.
+# Activation must use the verified ros2_control hardware lifecycle/startup gate.
 uint8 mode
 ---
 bool success

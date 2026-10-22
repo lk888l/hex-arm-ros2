@@ -1,4 +1,5 @@
 # Joint-side SI planning limits for this arm's full-range deployment.
+# RViz velocity scaling 1.0 maps to the previous 0.9 setting (115.2 deg/s).
 # Hardware profile remains authoritative. Acceleration headroom accommodates
 # the 100 Hz ROS command stream and the bounded 500 Hz Rust interpolation.
 default_velocity_scaling_factor: 1.0
@@ -6,7 +7,7 @@ default_acceleration_scaling_factor: 1.0
 joint_limits:
   joint_1: &deployment_limit
     has_velocity_limits: true
-    max_velocity: 2.2340214425527414
+    max_velocity: 2.0106192982974673
     has_acceleration_limits: true
     max_acceleration: 0.9375
   joint_2: *deployment_limit

@@ -170,6 +170,10 @@ impl Interpolator {
         Ok(())
     }
 
+    pub fn timing(&self) -> (u64, u64) {
+        (self.started_ns, self.duration_ns)
+    }
+
     pub fn sample(&self, now_ns: u64) -> Vec<RosTarget> {
         let elapsed_ns = now_ns.saturating_sub(self.started_ns).min(self.duration_ns);
         let elapsed_sec = elapsed_ns as f64 / NS_PER_SECOND;

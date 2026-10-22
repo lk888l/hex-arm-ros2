@@ -18,7 +18,7 @@ SPEC.loader.exec_module(graceful)
 @pytest.mark.parametrize("scenario", ["normal", "return_failure", "term", "second_interrupt", "startup_incomplete", "disable_failure"])
 def test_exit_order_and_interrupts(tmp_path, scenario):
     wrapper = tmp_path / "graceful-real-launch.py"
-    wrapper.write_text((ROOT / "scripts/graceful-real-launch.py").read_text())
+    wrapper.write_text(Path(graceful.__file__).read_text())
     events = tmp_path / "events"
     profile = tmp_path / "profile.yaml"
     profile.write_text("controller: {shutdown_damping: {}}\n")
@@ -133,3 +133,16 @@ def test_measured_startup_keeps_meow_normal_shutdown_available(tmp_path):
     for field, value in (('passed', False), ('deactivated', True), ('measured_hold', None)):
         path.write_text(json.dumps({**report, field: value}))
         assert not graceful.eligible(profile, path)
+
+
+@pytest.mark.parametrize('operation_server', [True, False])
+def test_real_wrapper_uses_instance_stop_owner_unless_explicitly_disabled(operation_server):
+    from hex_arm_bringup.integration import InstanceNames
+    instance = InstanceNames(namespace='left', controller_name='arm_controller')
+    launch = ['ros2', 'launch', 'hex_arm_moveit_config', 'moveit_real.launch.py']
+    if not operation_server:
+        launch.append('use_operation_server:=False')
+    command = graceful.coordinated_stop_command(launch, {'bus': {'protocol': 'meow'}},
+                                                'profile', 'startup', 'output', instance)
+    assert Path(command[1]).name == ('request-stop-ros.py' if operation_server else 'commission-meow-ros.py')
+    assert command[command.index('--namespace') + 1] == '/left'

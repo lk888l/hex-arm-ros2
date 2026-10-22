@@ -18,6 +18,7 @@ from launch.actions import (
     RegisterEventHandler,
 )
 from launch.conditions import IfCondition
+from launch.condition import Condition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -25,6 +26,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 from hex_arm_bringup.startup_event import StartupVerified
+from hex_arm_bringup.launch_support import (
+    arm_faulted, boolean, failure_actions, instance_arguments, instance_from_context,
+    stop_owned_processes, value,
+)
+from hex_arm_bringup.model import prefix_moveit_config, write_rviz_config
+import xacro
 
 
 STATE_TOPIC = "/hex_arm/internal/state"
@@ -35,7 +42,7 @@ DYNAMICS_FILES = {
 }
 
 
-def _shutdown_after_exit(step: str):
+def _shutdown_after_exit(step: str, namespace="", scope="launch"):
     """Stop the complete real stack when a critical MoveIt process exits."""
 
     def _handler(event, context):
@@ -43,15 +50,9 @@ def _shutdown_after_exit(step: str):
             return []
         if event.returncode == 0:
             reason = f"critical process {step} exited cleanly"
-            return [
-                LogInfo(msg=f"{reason}; shutting down dependent processes"),
-                EmitEvent(event=Shutdown(reason=reason)),
-            ]
+            return failure_actions(reason, namespace, scope)
         reason = f"critical process {step} exited with code {event.returncode}"
-        return [
-            LogInfo(msg=f"ERROR: {reason}"),
-            EmitEvent(event=Shutdown(reason=reason)),
-        ]
+        return failure_actions(f"ERROR: {reason}", namespace, scope)
 
     return _handler
 
@@ -221,6 +222,29 @@ def _build_moveit_config(enable_execution: bool, hardware_profile=None, position
     return moveit_config
 
 
+def _restrict_to_external_model(moveit_config, joint_prefix):
+    """An outer model may further constrain the arm's already bounded limits."""
+    joints = {joint.get("name"): joint for joint in ET.fromstring(
+        moveit_config.robot_description["robot_description"]).findall("joint")}
+    planning = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
+    for name in JOINT_NAMES:
+        ros_name = joint_prefix + name
+        element = joints.get(ros_name)
+        limit = element.find("limit") if element is not None else None
+        if limit is None or any(key not in limit.attrib for key in ("lower", "upper", "velocity")):
+            raise ValueError(f"external model requires bounded arm joint {ros_name}")
+        lower, upper = float(limit.get("lower")), float(limit.get("upper"))
+        velocity = _positive(float(limit.get("velocity")), f"external {ros_name} velocity")
+        if not math.isfinite(lower) or not math.isfinite(upper):
+            raise ValueError(f"external model has non-finite bounds for {ros_name}")
+        target = planning[ros_name]
+        lower, upper = max(lower, target["min_position"]), min(upper, target["max_position"])
+        if lower >= upper:
+            raise ValueError(f"external model has no permitted travel for {ros_name}")
+        target.update(min_position=lower, max_position=upper,
+                      max_velocity=min(velocity, target["max_velocity"]))
+
+
 def _move_group_runtime_parameters(enable_execution: bool) -> dict[str, bool]:
     return {
         "allow_trajectory_execution": enable_execution,
@@ -242,11 +266,13 @@ def _bringup_arguments(
     startup_motion_limits: str = "",
 ) -> dict[str, str]:
     if enable_execution and not startup_ready:
-        raise RuntimeError("real execution requires the verified measured-pose hold")
+        raise RuntimeError("real execution requires the protocol startup procedure")
     if allow_enable_transient and not enable_execution:
         raise RuntimeError("enable transient allowance requires explicit execution")
-    if startup_sequence or startup_trial or align_folded:
-        raise RuntimeError("startup motion is disabled; startup_sequence, startup_trial and align_folded cannot request motion")
+    if align_folded and not enable_execution:
+        raise RuntimeError("folded alignment requires explicit execution")
+    if startup_trial and (not enable_execution or not startup_sequence):
+        raise RuntimeError("startup trial requires explicit execution and an arm-bound sequence")
     return {
         "hardware_profile": hardware_profile,
         "zenoh_connect": zenoh_connect,
@@ -254,7 +280,10 @@ def _bringup_arguments(
         # execute only when the hardware and trajectory controller are active.
         "activate_hardware": "true" if enable_execution else "false",
         "startup_ready": "true" if enable_execution and startup_ready else "false",
+        **({"startup_sequence": startup_sequence} if startup_sequence else {}),
+        **({"startup_trial": "true"} if startup_trial else {}),
         **({"allow_enable_transient": "true"} if allow_enable_transient else {}),
+        **({"align_folded": "true"} if align_folded else {}),
         **({"moveit_ready_token": readiness_token} if readiness_token else {}),
         **({"startup_motion_limits": startup_motion_limits} if startup_motion_limits else {}),
         # The outer launch owns the single MoveIt-configured RViz process.
@@ -263,6 +292,10 @@ def _bringup_arguments(
 
 
 def _launch_setup(context: LaunchContext):
+    instance = instance_from_context(context)
+    scope = value(context, "shutdown_scope", "launch")
+    custom_runtime = boolean(context, "use_custom_runtime", True)
+    start_move_group = boolean(context, "start_move_group", True)
     enable_execution = _boolean_argument(context, "enable_execution")
     use_rviz = _boolean_argument(context, "use_rviz")
     publish_world_tf = _boolean_argument(context, "publish_world_tf")
@@ -290,43 +323,91 @@ def _launch_setup(context: LaunchContext):
     moveit_share = Path(get_package_share_directory("hex_arm_moveit_config"))
     moveit_config = _build_moveit_config(enable_execution, hardware_profile, position_limits,
                                        dynamics_limits, planning_limits_file)
-    readiness_token = uuid.uuid4().hex if enable_execution else ""
+    if instance.joint_prefix:
+        description_share = Path(get_package_share_directory("hex_arm_description"))
+        moveit_config.robot_description = {"robot_description": xacro.process_file(
+            str(description_share / "urdf/firefly_y6.urdf.xacro"), mappings={
+                "backend": "real", "prefix": instance.joint_prefix,
+                "hardware_name": instance.hardware_name, "ros_namespace": instance.namespace,
+            }).toxml()}
+    if (instance.joint_prefix or instance.controller_name != "firefly_arm_controller"
+            or instance.planning_group != "arm"):
+        prefix_moveit_config(moveit_config, instance.joint_prefix,
+                             instance.controller_name, instance.planning_group)
+    external_description = value(context, "robot_description_file")
+    external_semantic = value(context, "robot_semantic_file")
+    if external_description:
+        if publish_world_tf:
+            raise ValueError("a whole-robot URDF requires publish_world_tf:=false; the parent model owns the base transform")
+        if not external_semantic:
+            raise ValueError("a whole-robot URDF requires robot_semantic_file for consistent planning")
+        moveit_config.robot_description = {"robot_description": Path(external_description).read_text()}
+        moveit_config.robot_description_semantic = {"robot_description_semantic": Path(external_semantic).read_text()}
+        _restrict_to_external_model(moveit_config, instance.joint_prefix)
+    elif external_semantic:
+        raise ValueError("robot_semantic_file requires robot_description_file")
+    if enable_execution and (instance.namespace or instance.ros_name(instance.controller_name) != instance.controller_ros_name()):
+        manager = moveit_config.trajectory_execution["moveit_simple_controller_manager"]
+        manager[instance.controller_ros_name()] = manager.pop(instance.controller_name)
+        manager["controller_names"] = [instance.controller_ros_name()]
+    readiness_token = uuid.uuid4().hex if enable_execution and custom_runtime else ""
+    if not start_move_group and enable_execution:
+        readiness_token = value(context, "external_readiness_token")
+        if not custom_runtime or len(readiness_token) != 32 or any(c not in "0123456789abcdef" for c in readiness_token):
+            raise ValueError("external executing MoveIt requires its configured 32-digit readiness token and startup gate")
+    if not custom_runtime and enable_execution and (startup_sequence or startup_trial):
+        raise ValueError("CiA402 startup planning/trials require the gated custom runtime before startup")
     startup_motion_limits = ""
     if enable_execution:
         planning = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
         startup_motion_limits = json.dumps({
-            name: {"velocity_rad_s": planning[name]["max_velocity"],
-                   "acceleration_rad_s2": planning[name]["max_acceleration"]}
+            name: {"velocity_rad_s": planning[instance.joint_prefix + name]["max_velocity"],
+                   "acceleration_rad_s2": planning[instance.joint_prefix + name]["max_acceleration"]}
             for name in JOINT_NAMES
         })
 
+    bringup_arguments = _bringup_arguments(
+        hardware_profile, zenoh_connect, enable_execution, startup_ready, startup_sequence,
+        startup_trial, align_folded, allow_enable_transient, readiness_token, startup_motion_limits)
+    bringup_arguments.update(instance.as_dict())
+    for name, default in (("shutdown_scope", "launch"), ("zenoh_listen", ""),
+                          ("start_driver", "true"), ("start_controller_manager", "true"),
+                          ("publish_robot_description", "true"), ("robot_description_file", ""),
+                          ("robot_description_topic", ""),
+                          ("controllers_file", ""), ("controller_update_rate", ""), ("startup_report_file", ""),
+                          ("shutdown_report_file", ""), ("use_operation_server", "true")):
+        bringup_arguments[name] = value(context, name, default)
     real_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             str(bringup_share / "launch" / "real.launch.py")
         ),
-        launch_arguments=_bringup_arguments(
-            hardware_profile, zenoh_connect, enable_execution, startup_ready, startup_sequence,
-            startup_trial, align_folded, allow_enable_transient, readiness_token, startup_motion_limits,
-        ).items(),
+        launch_arguments=bringup_arguments.items(),
     )
     move_group = Node(
-        package="hex_arm_moveit_runtime",
-        executable="hex_arm_move_group",
+        package="hex_arm_moveit_runtime" if custom_runtime else "moveit_ros_move_group",
+        executable="hex_arm_move_group" if custom_runtime else "move_group",
+        name=instance.move_group_name, namespace=instance.namespace,
         output="screen",
-        additional_env=_move_group_environment(),
+        additional_env=_move_group_environment() if custom_runtime and start_move_group else {},
+        condition=Condition(predicate=lambda context: not arm_faulted(context, instance.namespace)),
         parameters=[
             moveit_config.to_dict(),
             _move_group_runtime_parameters(enable_execution),
             {"startup_readiness_token": readiness_token},
         ],
-        remappings=[("joint_states", STATE_TOPIC)],
+        remappings=[("joint_states", value(context, "joint_states_topic") or instance.ros_name("hex_arm/internal/state"))],
     )
+    rviz_config = str(moveit_share / "config" / "moveit.rviz")
+    if instance.namespace or instance.joint_prefix or instance.planning_group != "arm":
+        rviz_config = write_rviz_config(rviz_config, namespace=instance.namespace,
+            joint_prefix=instance.joint_prefix, planning_group=instance.planning_group)
     rviz = Node(
         package="rviz2",
         executable="rviz2",
         name="moveit_rviz",
+        namespace=instance.namespace,
         output="screen",
-        arguments=["-d", str(moveit_share / "config" / "moveit.rviz")],
+        arguments=["-d", rviz_config],
         parameters=[
             moveit_config.robot_description,
             moveit_config.robot_description_semantic,
@@ -336,52 +417,59 @@ def _launch_setup(context: LaunchContext):
         ],
         # The included bringup sets its own use_rviz=false in this context.
         # Capture the outer request before that include executes.
-        condition=IfCondition("true" if use_rviz else "false"),
+        condition=Condition(predicate=lambda context: use_rviz and not arm_faulted(context, instance.namespace)),
     )
 
     # A FollowJointTrajectory goal already accepted by ros2_control can outlive
     # move_group. Treat move_group as critical so any clean or failed exit
     # tears down bringup and reaches the controller's confirmed-disable path.
+    owned = [rviz] + ([move_group] if start_move_group else [])
     actions = [
         LogInfo(msg=f"MoveIt limits: positions={position_limits}, dynamics={dynamics_limits}, "
                     f"effective SI limits={moveit_config.joint_limits['robot_description_planning']}"),
-        RegisterEventHandler(
+        *([RegisterEventHandler(
             OnProcessExit(
                 target_action=move_group,
-                on_exit=_shutdown_after_exit("move_group"),
+                on_exit=_shutdown_after_exit("move_group", instance.namespace, scope),
             )
-        ),
+        )] if start_move_group else []),
         real_bringup,
-        move_group,
     ]
+    # Standard move_group starts only after the verified unfolding finishes;
+    # custom runtime can offer planning services early with execution locked.
+    delayed_move_group = start_move_group and enable_execution and not custom_runtime
+    if start_move_group and not delayed_move_group:
+        actions.append(move_group)
     if publish_world_tf:
         # real.launch.py deliberately owns robot_state_publisher but publishes
         # no world transform. Keep this one publisher outside bringup so the
         # combined launch never duplicates either RSP or world -> base_link.
-        actions.append(
-            Node(
+        world_tf = Node(
                 package="tf2_ros",
                 executable="static_transform_publisher",
                 name="moveit_world_to_firefly_base",
+                namespace=instance.namespace,
                 arguments=[
                     "--frame-id",
                     "world",
                     "--child-frame-id",
-                    "base_link",
+                    instance.joint_prefix + "base_link",
                 ],
                 output="log",
             )
-        )
+        actions.append(world_tf)
+        owned.append(world_tf)
+    actions.insert(0, stop_owned_processes(instance.namespace, owned))
     if enable_execution:
-        # The startup process only holds the measured pose. The runtime gates
-        # its action servers; open the UI after this exact process reports a
-        # successful stationary hold with the complete six-axis feedback.
-        actions.append(LogInfo(msg="MoveIt startup in progress: holding measured pose; execution and RViz wait for verified hold"))
+        # The startup trajectory controller is active during the final hold.
+        # Open execution and RViz after this startup process reports success.
+        actions.append(LogInfo(msg="MoveIt startup in progress: execution and RViz wait for verified hold"))
         actions.append(RegisterEventHandler(EventHandler(
             matcher=lambda event: (isinstance(event, StartupVerified)
                                    and Path(event.profile) == Path(hardware_profile)
+                                   and event.namespace == instance.namespace
                                    and event.readiness_token == readiness_token),
-            entities=[LogInfo(msg="MoveIt startup verified: execution available"
+            entities=[*([move_group] if delayed_move_group else []), LogInfo(msg="MoveIt startup verified: execution available"
                                   + ("; opening RViz" if use_rviz else "")), rviz],
         )))
     else:
@@ -392,14 +480,32 @@ def _launch_setup(context: LaunchContext):
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
+            *instance_arguments(),
+            DeclareLaunchArgument("shutdown_scope", default_value="launch", choices=["launch", "arm"]),
+            DeclareLaunchArgument("zenoh_listen", default_value=""),
+            DeclareLaunchArgument("start_driver", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("start_controller_manager", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("publish_robot_description", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("start_move_group", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("use_custom_runtime", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("external_readiness_token", default_value=""),
+            DeclareLaunchArgument("robot_description_file", default_value=""),
+            DeclareLaunchArgument("robot_description_topic", default_value=""),
+            DeclareLaunchArgument("robot_semantic_file", default_value=""),
+            DeclareLaunchArgument("joint_states_topic", default_value=""),
+            DeclareLaunchArgument("controllers_file", default_value=""),
+            DeclareLaunchArgument("controller_update_rate", default_value=""),
+            DeclareLaunchArgument("use_operation_server", default_value="true", choices=["true", "false"]),
+            DeclareLaunchArgument("startup_report_file", default_value=""),
+            DeclareLaunchArgument("shutdown_report_file", default_value=""),
             DeclareLaunchArgument("allow_enable_transient", default_value="false", choices=["true", "false"],
                                   description="Explicit Meow enable/ramp allowance: 0.15 rad/s for 0.25 s, then 0.05; settle before trajectories"),
             DeclareLaunchArgument("align_folded", default_value="false", choices=["true", "false"],
-                                  description="Retired startup alignment option; must be false"),
+                                  description="Explicit bounded Meow base/wrist alignment"),
             DeclareLaunchArgument("startup_sequence", default_value="",
-                                  description="Retired startup motion option; must be empty"),
+                                  description="Optional arm-bound CiA402 unfolded startup recipe"),
             DeclareLaunchArgument("startup_trial", default_value="false", choices=["true", "false"],
-                                  description="Retired startup motion option; must be false"),
+                                  description="Validate startup and MoveIt, return to entry, then disable"),
             DeclareLaunchArgument(
                 "hardware_profile",
                 default_value="",
@@ -452,8 +558,8 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 choices=["true", "false"],
                 description=(
-                    "Required for execution: read and hold the existing six-axis pose, verify "
-                    "stationary feedback, then enable MoveIt execution and RViz."
+                    "Required for execution: Meow runs the verified J2 -> J4 -> J3 fold exit; "
+                    "CiA402 verifies and holds the measured pose."
                 ),
             ),
             DeclareLaunchArgument(

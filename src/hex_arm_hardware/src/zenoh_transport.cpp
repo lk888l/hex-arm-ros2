@@ -1,4 +1,6 @@
 #include "hex_arm_hardware/zenoh_transport.hpp"
+#include "hex_arm_hardware/instance_config.hpp"
+#include "hex_arm_hardware/disable_receipt.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +13,8 @@
 #include "robot_api.pb.h"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "hex_arm_msgs/msg/driver_state.hpp"
+#include "hex_arm_msgs/msg/state_timing.hpp"
+#include "hex_arm_msgs/msg/interpolation_state.hpp"
 #include "hex_arm_msgs/srv/discover_motors.hpp"
 #include "hex_arm_msgs/srv/set_gravity.hpp"
 #include "hex_arm_msgs/srv/set_operating_mode.hpp"
@@ -53,7 +57,8 @@ struct ZenohTransport::Impl
   FeedbackSnapshot latest;
   pb::DriverState driver;
   pb::RobotStatus status;
-  std::int64_t driver_ns{}, status_ns{}, activated_ns{};
+  std::int64_t driver_ns{}, driver_ros_ns{}, status_ns{}, activated_ns{};
+  FeedbackPublication publication;
   std::array<std::size_t, 6> wire_to_ros{};
   std::uint32_t session_id{};
   std::uint64_t generation{};
@@ -63,11 +68,18 @@ struct ZenohTransport::Impl
   bool acquisition_uncertain{false};
   bool ownership_confirmed{false};
   CommandFreshness freshness;
+  DisableReceipt disable_receipt;
   std::optional<zenoh::Session> session;
   std::vector<zenoh::Subscriber<void>> subscribers;
   std::thread stream, diagnostic_worker;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub;
   rclcpp::Publisher<hex_arm_msgs::msg::DriverState>::SharedPtr driver_pub;
+  rclcpp::Publisher<hex_arm_msgs::msg::StateTiming>::SharedPtr timing_pub;
+  rclcpp::Publisher<hex_arm_msgs::msg::InterpolationState>::SharedPtr interpolation_pub;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr command_pub;
+  pb::InterpolationState interpolation;
+  CommandSnapshot last_sent_command;
+  std::uint64_t published_command_sequence{}, published_interpolation_stamp{};
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics;
   std::vector<rclcpp::ServiceBase::SharedPtr> services;
 
@@ -180,15 +192,8 @@ struct ZenohTransport::Impl
     }
     require(arm.dof() == 6 && arm.joint_names_size() == 6 && options.joint_names.size() == 6,
       "expected six-joint arm description");
-    std::array<bool, 6> seen{};
-    for (std::size_t i = 0; i < 6; ++i) {
-      auto found = std::find(options.joint_names.begin(), options.joint_names.end(),
-        arm.joint_names(static_cast<int>(i)));
-      require(found != options.joint_names.end(), "arm joint name mismatch");
-      wire_to_ros[i] = static_cast<std::size_t>(found - options.joint_names.begin());
-      require(!seen[wire_to_ros[i]], "duplicate arm joint name");
-      seen[wire_to_ros[i]] = true;
-    }
+    const std::vector<std::string> wire_names(arm.joint_names().begin(), arm.joint_names().end());
+    wire_to_ros = wire_joint_mapping(options.joint_names, options.device_joint_names, wire_names);
     require(std::find(arm.supported_timeouts().begin(), arm.supported_timeouts().end(),
       pb::TIMEOUT_BEHAVIOR_FAULT) != arm.supported_timeouts().end(), "FAULT watchdog required");
     subscribers.push_back(session->declare_subscriber(
@@ -204,8 +209,11 @@ struct ZenohTransport::Impl
           latest.velocity[dest] = value.dq(static_cast<int>(i));
           latest.effort[dest] = value.tau_est(static_cast<int>(i));
         }
-        latest.received_ns = monotonic_ns(); latest.source_stamp_ns = value.header().stamp_ns();
+        latest.received_ns = monotonic_ns();
+        latest.received_ros_ns = node->now().nanoseconds();
+        latest.source_stamp_ns = value.header().stamp_ns();
         latest.sequence = value.header().seq();
+        interpolation = value.interpolation();
         feedback.store(latest);
         trace.emit("direct_state_receive", latest.sequence, 0, latest.source_stamp_ns);
       }, zenoh::closures::none));
@@ -215,7 +223,8 @@ struct ZenohTransport::Impl
         if (!value.ParseFromString(sample.get_payload().as_string()) || !value.has_header()) {return;}
         std::lock_guard<std::mutex> lock(data);
         if (driver_ns && value.header().stamp_ns() <= driver.header().stamp_ns()) {return;}
-        driver = std::move(value); driver_ns = monotonic_ns(); gate_locked();
+        driver = std::move(value); driver_ns = monotonic_ns();
+        driver_ros_ns = node->now().nanoseconds(); gate_locked();
       }, zenoh::closures::none));
     subscribers.push_back(session->declare_subscriber(
       zenoh::KeyExpr(options.prefix + "/status"), [this](const zenoh::Sample & sample) {
@@ -230,7 +239,8 @@ struct ZenohTransport::Impl
           return;
         }
         if (status_ns && value.header().stamp_ns() == status.header().stamp_ns()) {return;}
-        status = std::move(value); status_ns = monotonic_ns(); gate_locked();
+        status = std::move(value); status_ns = monotonic_ns();
+        disable_receipt.observe_holder(status.session_holder()); gate_locked();
       }, zenoh::closures::none));
     setup_ros();
     stream = std::thread([this]() {
@@ -285,6 +295,7 @@ struct ZenohTransport::Impl
     put_options.is_express = true;
     session->put(zenoh::KeyExpr(options.prefix + "/arm/command"),
       zenoh::Bytes(message.SerializeAsString()), std::move(put_options));
+    last_sent_command = target;
     trace.emit("direct_put", target.sequence, generation, target.created_ns);
   }
 
@@ -304,6 +315,7 @@ struct ZenohTransport::Impl
       // Rust release acknowledges only after disable_all succeeds.
       checked("rpc/release_session", request);
       std::lock_guard<std::mutex> lock(data);
+      disable_receipt.acknowledge(session_id);
       session_id = 0;
       ownership_confirmed = false;
       return true;
@@ -313,6 +325,32 @@ struct ZenohTransport::Impl
       RCLCPP_ERROR(node->get_logger(), "%s", gate_reason.c_str());
       return false;
     }
+  }
+
+  bool verified_disable()  // management lock held by the service wrapper
+  {
+    if (!release()) {return false;}
+    {
+      std::lock_guard<std::mutex> lock(data);
+      if (!disable_receipt.acknowledged()) {return false;}
+    }
+    const auto deadline = monotonic_ns() + static_cast<std::int64_t>(options.service_timeout * 1e9);
+    while (monotonic_ns() < deadline) {
+      {
+        std::lock_guard<std::mutex> lock(data);
+        const auto now = monotonic_ns();
+        const auto maximum_age = static_cast<std::int64_t>(options.state_timeout * 1e9);
+        const bool fresh = driver_ns > 0 && status_ns > 0 && now >= driver_ns && now >= status_ns &&
+          now - driver_ns <= maximum_age && now - status_ns <= maximum_age;
+        const bool inactive = driver.mode() == pb::OPERATING_MODE_DISABLED ||
+          driver.mode() == pb::OPERATING_MODE_FAULT;
+        if (disable_receipt.confirms(fresh, inactive, status.session_holder(), remote_restarted)) {
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
   }
 
   bool activate(std::uint64_t epoch)
@@ -343,6 +381,7 @@ struct ZenohTransport::Impl
       {
         std::lock_guard<std::mutex> lock(data);
         session_id = acquired.session_id();
+        disable_receipt.invalidate();
         ownership_confirmed = false;
         const auto error = readiness(false); require(error.empty(), error);
       }
@@ -389,23 +428,30 @@ struct ZenohTransport::Impl
   void setup_ros()
   {
     state_pub = node->create_publisher<sensor_msgs::msg::JointState>(
-      "/hex_arm/internal/state", rclcpp::SensorDataQoS());
-    driver_pub = node->create_publisher<hex_arm_msgs::msg::DriverState>("/hex_arm/driver_state", 10);
+      "hex_arm/internal/state", rclcpp::SensorDataQoS());
+    driver_pub = node->create_publisher<hex_arm_msgs::msg::DriverState>("hex_arm/driver_state", 10);
+    timing_pub = node->create_publisher<hex_arm_msgs::msg::StateTiming>("hex_arm/state_timing", 10);
+    interpolation_pub = node->create_publisher<hex_arm_msgs::msg::InterpolationState>(
+      "hex_arm/interpolation_state", rclcpp::SensorDataQoS());
+    command_pub = node->create_publisher<sensor_msgs::msg::JointState>(
+      "hex_arm/internal/command", rclcpp::SensorDataQoS());
     diagnostics = node->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
     // No activation service: only the hardware lifecycle can enable command
     // streaming and establish a command epoch. Tools use this same manager.
-    service<std_srvs::srv::Trigger>("/hex_arm/deactivate_hardware",
-      [this](auto &, auto & response) {response.success = release();
-        response.message = response.success ? "disabled and session released" : "release unconfirmed";});
-    service<std_srvs::srv::Trigger>("/hex_arm/damped_stop", [this](auto &, auto & response) {
+    service<std_srvs::srv::Trigger>("hex_arm/deactivate_hardware",
+      [this](auto &, auto & response) {response.success = verified_disable();
+        response.message = response.success ? "physical disable RPC and current inactive state confirmed" :
+          "physical disable unconfirmed; no successful owned disable receipt or fresh inactive state";});
+    service<std_srvs::srv::Trigger>("hex_arm/damped_stop", [this](auto &, auto & response) {
         require(permitted.load() && session_id, "damped stop requires ACTIVE owned session");
         permitted.store(false);
         pb::DampedStopRequest request; request.set_session_id(session_id);
         checked("rpc/damped_stop", request, 35.0);
-        {std::lock_guard<std::mutex> lock(data); session_id = 0;}
+        {std::lock_guard<std::mutex> lock(data);
+          disable_receipt.acknowledge(session_id); session_id = 0;}
         response.success = true; response.message = "folded, settled and disabled";
       });
-    service<std_srvs::srv::Trigger>("/hex_arm/clear_fault", [this](auto &, auto & response) {
+    service<std_srvs::srv::Trigger>("hex_arm/clear_fault", [this](auto &, auto & response) {
         require(!permitted.load(), "deactivate hardware before fault recovery");
         require(!acquisition_uncertain, "previous acquisition unconfirmed; driver restart required");
         if (session_id) {require(release(), "previous lease release unconfirmed");}
@@ -415,7 +461,8 @@ struct ZenohTransport::Impl
           acquire.SerializeAsString(), options.service_timeout);
         acquisition_uncertain = false;
         require(owned.ok() && owned.session_id(), "fault recovery session unavailable");
-        {std::lock_guard<std::mutex> lock(data); session_id = owned.session_id();}
+        {std::lock_guard<std::mutex> lock(data);
+          session_id = owned.session_id(); disable_receipt.invalidate();}
         try {
           pb::ClearFaultRequest request; request.set_session_id(session_id);
           checked("rpc/clear_fault", request);
@@ -423,13 +470,13 @@ struct ZenohTransport::Impl
         require(release(), "fault recovery release unconfirmed");
         response.success = true; response.message = "fault cleared; explicit reactivation required";
       });
-    service<hex_arm_msgs::srv::SetOperatingMode>("/hex_arm/set_mode",
+    service<hex_arm_msgs::srv::SetOperatingMode>("hex_arm/set_mode",
       [this](auto & request, auto & response) {
         require(request.mode == pb::OPERATING_MODE_DISABLED,
           "direct backend tools only allow DISABLED; ACTIVE belongs to hardware lifecycle");
         response.success = release(); response.message = "disable/session release requested";
       });
-    service<hex_arm_msgs::srv::SetGravity>("/hex_arm/set_gravity",
+    service<hex_arm_msgs::srv::SetGravity>("hex_arm/set_gravity",
       [this](auto & request, auto & response) {
         require(session_id != 0, "no owned session");
         pb::SetGravityRequest payload; payload.set_session_id(session_id);
@@ -439,7 +486,7 @@ struct ZenohTransport::Impl
         checked("arm/rpc/set_gravity", payload);
         response.success = true; response.message = "gravity updated";
       });
-    service<hex_arm_msgs::srv::DiscoverMotors>("/hex_arm/discover_motors",
+    service<hex_arm_msgs::srv::DiscoverMotors>("hex_arm/discover_motors",
       [this](auto & request, auto & response) {
         require(!request.refresh || !permitted.load(), "active refresh is forbidden");
         pb::DiscoverMotorsRequest payload; payload.set_refresh(request.refresh);
@@ -454,28 +501,87 @@ struct ZenohTransport::Impl
   {
     FeedbackSnapshot snapshot;
     pb::DriverState driver_copy;
+    pb::InterpolationState interpolation_copy;
+    CommandSnapshot command_copy;
     std::string reason;
     bool driver_fresh = false;
+    std::int64_t driver_received_ros_ns = 0;
     {
       std::lock_guard<std::mutex> lock(data);
       snapshot = latest; driver_copy = driver; reason = gate_reason;
+      interpolation_copy = interpolation; command_copy = last_sent_command;
+      driver_received_ros_ns = driver_ros_ns;
       driver_fresh = driver_ns && monotonic_ns() - driver_ns <=
         static_cast<std::int64_t>(options.state_timeout * 1e9);
       if (reason.empty()) {reason = readiness(false);}
     }
     const auto now = node->now();
-    if (snapshot.received_ns && monotonic_ns() - snapshot.received_ns <=
-      static_cast<std::int64_t>(options.state_timeout * 1e9))
+    const auto published_steady_ns = monotonic_ns();
+    if (command_copy.sequence && command_copy.sequence != published_command_sequence) {
+      sensor_msgs::msg::JointState message;
+      message.header.stamp = now;
+      message.name = options.joint_names;
+      message.position.assign(command_copy.position.begin(), command_copy.position.end());
+      message.velocity.assign(command_copy.velocity.begin(), command_copy.velocity.end());
+      command_pub->publish(message);
+      published_command_sequence = command_copy.sequence;
+    }
+    if (interpolation_copy.sample_stamp_ns() > published_interpolation_stamp &&
+      finite_six(interpolation_copy.command_position()) &&
+      finite_six(interpolation_copy.command_velocity()) &&
+      finite_six(interpolation_copy.interpolated_position()) &&
+      finite_six(interpolation_copy.interpolated_velocity()))
+    {
+      hex_arm_msgs::msg::InterpolationState message;
+      message.stamp = now; message.joint_names = options.joint_names;
+      message.source_stamp_ns = static_cast<std::uint64_t>(snapshot.source_stamp_ns);
+      message.command_sequence = interpolation_copy.command_sequence();
+      message.command_generation = interpolation_copy.command_generation();
+      message.segment_start_ns = interpolation_copy.segment_start_ns();
+      message.requested_duration_ns = interpolation_copy.requested_duration_ns();
+      message.effective_duration_ns = interpolation_copy.effective_duration_ns();
+      message.sample_stamp_ns = interpolation_copy.sample_stamp_ns();
+      for (std::size_t i = 0; i < 6; ++i) {
+        const auto source = static_cast<int>(i);
+        const auto dest = wire_to_ros[i];
+        message.command_position[dest] = interpolation_copy.command_position(source);
+        message.command_velocity[dest] = interpolation_copy.command_velocity(source);
+        message.interpolated_position[dest] = interpolation_copy.interpolated_position(source);
+        message.interpolated_velocity[dest] = interpolation_copy.interpolated_velocity(source);
+      }
+      interpolation_pub->publish(message);
+      published_interpolation_stamp = interpolation_copy.sample_stamp_ns();
+    }
+    if (publication.accept(snapshot, published_steady_ns,
+      static_cast<std::int64_t>(options.state_timeout * 1e9)))
     {
       sensor_msgs::msg::JointState message;
-      message.header.stamp = now; message.name = options.joint_names;
+      message.header.stamp = rclcpp::Time(snapshot.received_ros_ns, node->get_clock()->get_clock_type());
+      message.name = options.joint_names;
       message.position.assign(snapshot.position.begin(), snapshot.position.end());
       message.velocity.assign(snapshot.velocity.begin(), snapshot.velocity.end());
       message.effort.assign(snapshot.effort.begin(), snapshot.effort.end());
       state_pub->publish(message);
     }
+    if (snapshot.received_ns) {
+      hex_arm_msgs::msg::StateTiming timing;
+      timing.stamp = now;
+      timing.received_stamp = rclcpp::Time(snapshot.received_ros_ns, node->get_clock()->get_clock_type());
+      timing.sequence = snapshot.sequence;
+      timing.source_stamp_ns = snapshot.source_stamp_ns;
+      timing.received_steady_ns = snapshot.received_ns;
+      timing.receive_age_s = static_cast<double>(published_steady_ns - snapshot.received_ns) * 1e-9;
+      timing.feedback_fresh = published_steady_ns >= snapshot.received_ns &&
+        timing.receive_age_s <= options.state_timeout;
+      timing.source_clock = timing.DRIVER_PROCESS_MONOTONIC;
+      timing.motor_sample_time_available = false;
+      timing.clocks_synchronized = false;
+      timing.instance = options.hardware_name;
+      timing_pub->publish(timing);
+    }
     hex_arm_msgs::msg::DriverState message;
-    message.stamp = now; message.mode = static_cast<std::uint8_t>(driver_copy.mode());
+    message.stamp = rclcpp::Time(driver_received_ros_ns, node->get_clock()->get_clock_type());
+    message.mode = static_cast<std::uint8_t>(driver_copy.mode());
     message.session_owned = driver_copy.session_owned(); message.profile_valid = driver_copy.profile_valid();
     message.calibrated = driver_copy.calibrated(); message.all_motors_online = driver_copy.all_motors_online();
     message.feedback_fresh = driver_fresh && driver_copy.feedback_fresh();
@@ -488,7 +594,8 @@ struct ZenohTransport::Impl
     if (++diagnostic_ticks % 20 != 0) {return;}
     diagnostic_msgs::msg::DiagnosticArray report; report.header.stamp = now;
     diagnostic_msgs::msg::DiagnosticStatus health;
-    health.name = "hex_arm/zenoh_transport"; health.hardware_id = options.prefix;
+    health.name = std::string(node->get_fully_qualified_name()) + "/zenoh_transport";
+    health.hardware_id = options.prefix;
     health.level = reason.empty() && !message.fault_latched ? health.OK : health.ERROR;
     health.message = reason.empty() ? (permitted.load() ? "ACTIVE" : "INACTIVE") : reason;
     report.status.push_back(health); diagnostics->publish(report);

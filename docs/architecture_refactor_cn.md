@@ -3,6 +3,9 @@
 本文保留第一阶段迁移及当时的验收记录。第二阶段的并发修复、模块拆分、
 性能采集和发布契约见 [运行优化说明](runtime_optimization_cn.md)。
 当前已删除 Python bridge，使用 [C++ Zenoh 直连](zenoh_direct_transport_cn.md)；下文架构图为历史状态。
+当前协议唯一源码已经迁入 `src/hex_arm_protocol/proto/robot_api.proto`，各 ROS 包通过已安装的
+`hex_arm_protocol` 定位协议。下文控制器目录中的 `proto/robot_api.proto` 当前仅是兼容符号链接；
+包独立复用方式见 [工程集成指南](integration_cn.md)。
 
 ## 本次已实现的范围
 

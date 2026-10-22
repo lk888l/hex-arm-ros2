@@ -37,12 +37,12 @@ MoveIt intersects the model, commissioning and hardware limits; its J2 lower bou
 
 ## Start and stop
 
-After each power cycle, start directly near the default placement
-`[0,-1.570,1.570,0,0,0]` rad. J1–J5 each allow 0.15 rad of placement variation
-within hardware bounds; J6 holds its measured angle within its position limits.
-Startup checks complete, fresh, stationary six-axis feedback before enabling at that position
-and ramping gravity compensation. `[0,-1.350,1.430,-0.300,0,0]` rad remains the shutdown
-return pose. Placement, tolerances and shutdown waypoints are defined by
+After each power cycle, place the arm at the folded entry
+`[0,-1.570,1.570,0,0,0]` rad. J1/J5 allow 0.03 rad of placement variation and
+J2/J3/J4 allow 0.01 rad, within the hardware feedback bounds. J6 is aligned to zero when needed.
+Startup checks complete, fresh, stationary six-axis feedback before enabling at the measured pose
+and ramping gravity compensation. It then moves to `[0,-1.350,1.430,-0.300,0,0]` rad,
+which is also the shutdown return pose. Placement, tolerances and waypoints are defined by
 [`startup.yaml`](../src/hex_arm_controller/config/startup.yaml).
 
 From a graphical host terminal in the repository:
@@ -54,11 +54,14 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   enable_execution:=true
 ```
 
-Startup sends no unfolding or alignment trajectory. After enable and gravity ramp, it verifies
-stationary holding at the measured position, then opens MoveIt execution and RViz with live feedback.
+After verified measured holding, startup moves **J2 → J4 → J3** to −1.350, −0.300,
+and 1.430 rad respectively. ROS trajectory durations follow the effective MoveIt dynamics;
+the YAML's 8/10/6-second durations apply only to standalone commissioning.
+J2/J3/J4 retain their measured positions until their turn. Explicit `align_folded:=true`
+permits bounded base/wrist alignment first. After a 3-second ready hold, execution and RViz open.
 
-Wait for `Measured pose held; controller continues holding`, then select `arm` and the current
-start state in RViz. Real execution requires measured-position hold verification; `startup_ready:=false` cannot
+Wait for `startup_ready reached and verified; controller continues holding`, then select `arm` and the current
+start state in RViz. Real execution requires protocol startup verification; `startup_ready:=false` cannot
 bypass it. Omitting `enable_execution:=true` selects disabled observation/planning.
 
 With the newly configured local damping profile, the first Ctrl-C can move the arm back to

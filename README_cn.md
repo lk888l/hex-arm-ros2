@@ -12,9 +12,15 @@
 | 用 MoveIt 控制当前机械臂 | [MoveIt 真机](#real-hardware) | 宿主机 |
 | 手扶拖动，使用重力补偿和阻尼 | [手扶拖动](#hand-guiding) | 容器 |
 | 查看模型、普通 mock 或 Gazebo | [其他模拟模式](#simulation-modes) | 容器 |
+| 接入双臂、外设或其他机器人的 ROS 工程 | [工程集成指南](docs/integration_cn.md) | 容器 |
 
 导航：[环境与构建](#environment) · [MoveIt 真机](#real-hardware) ·
 [开发与测试](#development) · [常见问题](#troubleshooting) · [文档索引](#documentation)
+
+GUI 和 Gazebo 依赖可按需选择：`hex_arm_visualization` 提供 RViz 与关节滑块界面的依赖，
+`hex_arm_simulation` 提供 Gazebo 依赖，原有 launch 入口继续可用。
+无界面真机部署只需选择所需驱动/MoveIt 包，并设置 `use_rviz:=false`。
+集成指南还提供 `scripts/test.sh portability`，验证复制到外部工作区后的独立构建。
 
 <a id="environment"></a>
 
@@ -102,23 +108,23 @@ ros2 launch hex_arm_moveit_config moveit_mock.launch.py
 ### 1. 检查入口姿态
 
 先停止 GUI MIT、重力补偿及其他控制入口，同一时间仅保留一个真机控制程序和一个运动客户端。
-每次断电重启后，在默认摆放位置附近直接启动；单位均为 rad：
+每次断电重启后，先按下表摆放到折叠入口，再执行自动启动；单位均为 rad：
 
 | 姿态 | J1 | J2 | J3 | J4 | J5 | J6 |
 |---|---:|---:|---:|---:|---:|---:|
 | 折叠入口 `folded_position_rad` | 0 | **−1.570** | **1.570** | 0 | 0 | 0 |
-| 关机返回位 `startup_ready` | 0 | −1.350 | 1.430 | −0.300 | 0 | 0 |
+| 启动完成及关机返回位 `startup_ready` | 0 | −1.350 | 1.430 | −0.300 | 0 | 0 |
 
-启动读取绝对编码器的六轴当前位置，在该位置使能、渐入重力补偿并保持，
-通过静止验收后开放 MoveIt 执行和 RViz。启动不执行展开或自动对齐轨迹；
-RViz 的 Scene Robot 使用实时反馈显示实际姿态。关机仍返回表中的固定 ready 位再收拢。
+启动在使能前核对六轴绝对编码器反馈，渐入重力补偿并验证实测位置保持。
+随后 Meow 按 **J2 → J4 → J3** 执行：J2 到 −1.350、J4 到 −0.300、J3 到 1.430。
+ROS 轨迹按本次 MoveIt 速度、加速度上限及行程计算时长，最终通过 ready 静止验收后开放执行和 RViz。
 权威配置见 [startup.yaml](src/hex_arm_controller/config/startup.yaml)。
 
-J1～J5 相对默认摆放参考各允许 **0.15 rad（约 8.59°）** 偏差，J6 按硬件配置的位置范围检查。
-六轴仍须静止、反馈新鲜且处于硬件允许范围。摆放窗口与硬件限位共同约束入口：
-当前部署 profile 的 J2 有效入口为 −1.580～−1.420 rad，J3 为 1.420～1.580 rad，
-其中边界外最多 0.01 rad 来自 `measured_position_margin_rad`。
-边界内保持目标直接使用实测位置；边界外微小偏差沿用驱动的合法目标限幅。
+J1/J5 允许 **0.03 rad** 摆放偏差，J2/J3/J4 允许 **0.01 rad（约 0.57°）**。
+J6 必须处于硬件位置范围内，并在展开前按需平滑回零。
+部署 profile 的 `measured_position_margin_rad: 0.01` 使 J2 可在 −1.580～−1.560 rad、
+J3 可在 1.560～1.580 rad 进入启动。保持目标及首次轨迹起点将边界微差约束到合法命令范围，
+实际反馈仍用于重力与故障检查。显式 `align_folded:=true` 可允许基座和腕部在有界范围内先对齐。
 
 ### 2. 启动 MoveIt（宿主机完整命令）
 
@@ -134,10 +140,11 @@ HEX_ARM_CAN_IFACE=can2 ./scripts/docker-dev.sh real-launch moveit \
   position_limits:=hardware \
   dynamics_limits:=custom \
   planning_limits_file:=/workspaces/hex_arm_ros2/src/hex_arm_moveit_config/config/joint_limits_deployment.yaml \
+  align_folded:=true \
   allow_enable_transient:=true
 ```
 
-此命令会在读取到的当前位置使能并保持；保持终端运行。
+此命令会使能并自动移动机械臂；保持终端运行。
 profile 和规划 YAML 参数使用**容器内绝对路径**。
 监督入口核对 CAN 适配器序列号与物理通道，并负责信号转发、审计日志和最终失能校验。
 
@@ -146,21 +153,22 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 | `enable_execution:=true` | 使能真机，启动验收通过后允许轨迹执行 |
 | `position_limits:=hardware` | 取 URDF 与硬件 profile 的位置范围交集 |
 | `dynamics_limits:=custom` + `planning_limits_file:=...` | 取正式规划 YAML 与硬件的动态限值交集；速度还受 URDF 限制 |
+| `align_folded:=true` | 显式允许基座和腕部先进行有界对齐，再展开 |
 | `allow_enable_transient:=true` | 允许使能和重力渐入时的短暂速度余量，随后仍需静止验收 |
 
 无界面规划服务可追加 `use_rviz:=false`。无图形桌面的宿主机还需在 `up` 与
 `real-launch` 两条命令前同时设置 `HEX_ARM_HEADLESS=1`，入口会自动关闭 RViz。
-只观察和规划而不使能时，将 `enable_execution` 和
+只观察和规划而不使能时，将 `enable_execution`、`align_folded` 和
 `allow_enable_transient` **同时改为 `false`**。
 
 ### 3. 等待验收，再规划执行
 
-使能和重力渐入完成后还有 **3 秒当前位置静止验收**。
+启动动作结束后还有 **3 秒 ready 静止验收**。
 期间 MoveIt 执行动作接口尚未开放，RViz 等待验收通过后自动打开。
 看到 `MoveIt startup verified: execution available` 后，在 RViz 选择 `arm`，
 以当前状态为起点执行 **Plan** / **Plan & Execute**。无界面客户端也必须等待这条日志。
-`startup_ready:=false` 不能绕过真机当前位置保持验收；旧的 `align_folded:=true`
-和开机序列参数会报错。
+`startup_ready:=false` 不能绕过协议启动验收。旧版 CiA402 默认保持实测位置，
+可显式提供与当前硬件配置绑定的 `startup_sequence`，执行已验收的短序列。
 
 灰影规划预览默认按每个轨迹点 `0.05 s` 循环播放。在当前 RViz 窗口设置
 **Displays → MotionPlanning → Planned Path → State Display Time = 0.05 s**，
@@ -175,7 +183,7 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 |---|---|
 | 位置范围 | J1 ±2.86；J2 [−1.57,2.09]；J3/J4 ±1.57；J5 ±1.54；J6 ±2.79 rad |
 | 硬件速度 / 加速度 | 2.234021 rad/s / 1.256637 rad/s² |
-| MoveIt 规划速度 / 加速度 | 2.234021 rad/s（128°/s）/ **0.9375 rad/s²** |
+| MoveIt 规划速度 / 加速度 | 2.010619 rad/s（115.2°/s）/ **0.9375 rad/s²** |
 | Kp / Kd | Kp `[100,100,150,110,80,80]` N·m/rad；Kd 六轴 15 N·m·s/rad |
 | 重力补偿 | 六轴比例 1.0；J2 前馈限幅 ±5 N·m |
 | 扭矩预算 | 总上限与 PD 配置上限均为 1000‰；额外预留 0，`pd_allocation: remaining` |
@@ -189,13 +197,13 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 - GUI 的 Rev/s、Rev/s² 分别乘 `2π`，才是 ROS / MoveIt / Rust 的 rad/s、rad/s²。
 - 真机位置默认取硬件与 URDF 的交集，动态默认 `commissioning`；提高硬件速度仍保留 0.1 rad/s、0.1 rad/s² 动态上限，除非显式选择动态配置。
 - RViz 速度和加速度缩放是额外比例，均设为 1.0 才能使用完整规划限值。
-- Meow 关机收拢沿用本次 MoveIt 的速度、加速度上限，按行程自动计算轨迹时长；关机返回 ready 固定使用 0.5/0.5 速度、加速度缩放。开机原地保持的静止验收为 3 秒。
+- Meow 开机展开、准备对齐及关机收拢沿用本次 MoveIt 的速度、加速度上限，按行程自动计算轨迹时长；关机返回 ready 默认使用 0.25/0.25 速度、加速度缩放。最终 ready 静止验收为 3 秒。
 - 旧 `replacement.local.yaml` 保留窄窗口；日常部署使用上方命令的 `moveit_deployment.local.yaml`。
 
 2026-09-30 已通过三个大范围 MoveIt 组合目标、返回 ready、受控回折及确认失能，
 当时总扭矩上限为 650‰。当前 100% 与动态 PD 分配已通过离线校验，尚未重新做真机动作复测；
 完整 URDF 边界及附加载荷未穷举验收。
-当前规划速度在 96°/s 的基础上再次提高 1/3，加速度在 0.75 rad/s² 的基础上再次提高 1/4；这组更高限值尚未进行真机动作复测。
+RViz 速度缩放 1.0 现在对应原先 0.9 的速度上限（115.2°/s），规划加速度保持 0.9375 rad/s²；这组组合尚未重新进行真机动作复测。
 配置细节与实测见 [替换臂部署说明](docs/meow_replacement_deployment_cn.md)和
 [验收记录](docs/commissioning_evidence/2026-09-30-can2-moveit-deployment.md)。
 
@@ -203,12 +211,17 @@ profile 和规划 YAML 参数使用**容器内绝对路径**。
 
 在拥有 `real-launch` 的终端第一次按 **Ctrl+C**，工作位置的机械臂先经 MoveIt 返回 ready，
 再按 **J3 → J4 → J2** 受控回折并确认失能。
-若原地开机后仍处于折叠终点，确认静止后直接失能。
-仍处于摆放窗口、且只有已知折叠模型接触时，先预检全部路径，再按同一顺序直接回折；
-J1/J5/J6 保持实测角度。额外接触或路径检查失败时请求失能并报告失败。
-关机返回 ready 固定使用 **0.5/0.5** 速度、加速度缩放。
+若已经处于折叠终点，确认静止后直接失能。
+对显式原地保持或旧版原地启动的兼容报告，若仍在其摆放窗口、且只有已知折叠模型接触，
+先预检全部路径，再按同一顺序回折并保持 J1/J5/J6 实测角度。
+额外接触或路径检查失败时请求失能并报告失败。
+关机返回 ready 默认使用 **0.25/0.25** 速度、加速度缩放。
+默认退出入口通过实例 StopArm 服务确认旧目标结束，保留静止后的控制器指令参考，
+等到最终禁能确认后再结束 ROS；清理阶段复用本次有效回执。
+`soft-stop.json` 分别报告 `motion_completed` 和 `disabled_confirmed`，
+其中 `motion_report` 指向含完整计划、FJT 反馈、控制器状态和 Rust 插补时长的详细报告。
 再次 Ctrl+C 或故障走立即停机路径。
-返回 ready 和回折的关机轨迹逐条使用 **0.1 rad 路径跟踪容差**；最终到位仍需满足 0.015 rad
+返回 ready 和回折的关机轨迹逐条使用 **0.11 rad 路径跟踪容差**；最终到位仍需满足 0.015 rad
 位置误差及 0.02 rad/s 静止检查。返回轨迹经 MoveIt 严格规划和逐点检查后交给 FJT 控制器执行。
 
 等待回折结果与 `VERIFIED structured disabled_confirmed` 后再断电。
