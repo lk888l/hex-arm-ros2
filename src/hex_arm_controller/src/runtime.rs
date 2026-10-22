@@ -81,6 +81,40 @@ struct CommandEnvelope {
     automatic_gravity_feedforward: bool,
 }
 
+/// Fixed-size observation, copied on the control task without file I/O or
+/// diagnostic vector allocation. Encoding happens on the publication task.
+#[derive(Debug, Clone, Copy)]
+struct InterpolationSnapshot {
+    owner: ControlOwner,
+    command_sequence: u64,
+    command_generation: u64,
+    segment_start_ns: u64,
+    requested_duration_ns: u64,
+    effective_duration_ns: u64,
+    sample_stamp_ns: u64,
+    command_position: [f32; DOF],
+    command_velocity: [f32; DOF],
+    interpolated_position: [f32; DOF],
+    interpolated_velocity: [f32; DOF],
+}
+
+impl InterpolationSnapshot {
+    fn to_proto(self) -> pb::InterpolationState {
+        pb::InterpolationState {
+            command_sequence: self.command_sequence,
+            command_generation: self.command_generation,
+            segment_start_ns: self.segment_start_ns,
+            requested_duration_ns: self.requested_duration_ns,
+            effective_duration_ns: self.effective_duration_ns,
+            sample_stamp_ns: self.sample_stamp_ns,
+            command_position: self.command_position.to_vec(),
+            command_velocity: self.command_velocity.to_vec(),
+            interpolated_position: self.interpolated_position.to_vec(),
+            interpolated_velocity: self.interpolated_velocity.to_vec(),
+        }
+    }
+}
+
 /// Prepared off-lock; admission is rechecked atomically when committing.
 struct PreparedTrajectory {
     session_id: u32,
@@ -127,6 +161,7 @@ struct RuntimeData {
     command_generation: u64,
     /// Incremented by mode commits, independently of incoming command updates.
     control_epoch: u64,
+    interpolation: Option<InterpolationSnapshot>,
     /// A latched fault is not considered physically quiescent until the
     /// backend has confirmed that all six axes left Operation Enabled.
     disable_pending: bool,
@@ -191,6 +226,7 @@ impl ArmRuntime {
                 command: None,
                 command_generation: 0,
                 control_epoch: 0,
+                interpolation: None,
                 disable_pending: false,
                 next_disable_retry_at: None,
                 feedback: FeedbackSnapshot::default(),
@@ -274,7 +310,14 @@ impl ArmRuntime {
     }
 
     pub fn joint_state_proto(&self) -> pb::JointState {
-        let feedback = self.data.read().feedback.clone();
+        let (feedback, interpolation) = {
+            let data = self.data.read();
+            (
+                data.feedback.clone(),
+                data.interpolation
+                    .filter(|sample| data.accepts_control(sample.owner)),
+            )
+        };
         let (mut q, dq, tau, temp) = self.ros_joint_state_full(&feedback);
         // ros2_control seeds its initial command from this state. Publish the
         // same numerical endpoint representation as our activation hold, so
@@ -289,6 +332,7 @@ impl ArmRuntime {
             dq,
             tau_est: tau,
             temp,
+            interpolation: interpolation.map(InterpolationSnapshot::to_proto),
         }
     }
 

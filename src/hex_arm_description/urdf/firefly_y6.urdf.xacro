@@ -8,25 +8,33 @@
   <xacro:arg name="robot_prefix" default="hexmeow/ubuntu/firefly_y6_meow"/>
   <xacro:arg name="command_period_sec" default="0.01"/>
   <xacro:arg name="startup_timeout_sec" default="30.0"/>
+  <xacro:arg name="prefix" default=""/>
+  <xacro:arg name="parent" default=""/>
+  <xacro:arg name="xyz" default="0 0 0"/>
+  <xacro:arg name="rpy" default="0 0 0"/>
+  <xacro:arg name="hardware_name" default="FireflyY6System"/>
+  <xacro:arg name="ros_namespace" default=""/>
+  <xacro:arg name="tool_link" default=""/>
+  <xacro:arg name="tcp_xyz" default="0 0 0"/>
+  <xacro:arg name="tcp_rpy" default="0 0 0"/>
   <xacro:property name="initial_positions" value="${xacro.load_yaml('$(arg initial_positions_file)')['initial_positions'] if '$(arg initial_positions_file)' else dict(joint_1=0.0, joint_2=0.0, joint_3=0.0, joint_4=0.0, joint_5=0.0, joint_6=0.0)}"/>
 
   <!-- Geometry, inertials, joint origins, axes, and limits remain owned by the
        pinned upstream package. The contract test compares every field. -->
-  <xacro:include filename="$(find xpkg_urdf_firefly_y6)/urdf/xpkg_urdf_firefly_y6.urdf"/>
-  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.ros2_control.xacro"/>
-
-  <xacro:if value="${'$(arg backend)' != 'view'}">
-    <xacro:firefly_y6_ros2_control backend="$(arg backend)" state_timeout_sec="$(arg state_timeout_sec)" initial_positions="${initial_positions}"
-      zenoh_connect="$(arg zenoh_connect)"
-      robot_prefix="$(arg robot_prefix)" command_period_sec="$(arg command_period_sec)"
-      startup_timeout_sec="$(arg startup_timeout_sec)"/>
-  </xacro:if>
+  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.macro.xacro"/>
+  <xacro:firefly_y6_arm backend="$(arg backend)" prefix="$(arg prefix)"
+    parent="$(arg parent)" xyz="$(arg xyz)" rpy="$(arg rpy)"
+    hardware_name="$(arg hardware_name)" ros_namespace="$(arg ros_namespace)"
+    tool_link="$(arg tool_link)" tcp_xyz="$(arg tcp_xyz)" tcp_rpy="$(arg tcp_rpy)"
+    state_timeout_sec="$(arg state_timeout_sec)" initial_positions="${initial_positions}"
+    zenoh_connect="$(arg zenoh_connect)" robot_prefix="$(arg robot_prefix)"
+    command_period_sec="$(arg command_period_sec)" startup_timeout_sec="$(arg startup_timeout_sec)"/>
 
   <xacro:if value="${'$(arg backend)' == 'gz'}">
     <link name="world"/>
-    <joint name="world_to_base" type="fixed">
+    <joint name="$(arg prefix)world_to_base" type="fixed">
       <parent link="world"/>
-      <child link="base_link"/>
+      <child link="$(arg prefix)base_link"/>
     </joint>
     <gazebo>
       <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">

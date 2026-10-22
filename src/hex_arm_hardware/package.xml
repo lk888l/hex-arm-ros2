@@ -12,6 +12,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>hex_arm_msgs</depend>
+  <build_depend>hex_arm_protocol</build_depend>
   <depend>diagnostic_msgs</depend>
   <depend>libprotobuf-dev</depend>
   <build_depend>protobuf-compiler</build_depend>

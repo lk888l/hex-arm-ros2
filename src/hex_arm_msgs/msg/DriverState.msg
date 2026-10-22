@@ -5,6 +5,8 @@ uint8 MODE_GRAVITY_COMP=4
 uint8 MODE_FAULT=100
 uint8 MODE_CALIBRATING=101
 
+# First ROS reception time of the current driver snapshot. Cached publication
+# keeps this stamp; feedback_fresh also includes local monotonic reception age.
 builtin_interfaces/Time stamp
 uint8 mode
 bool session_owned

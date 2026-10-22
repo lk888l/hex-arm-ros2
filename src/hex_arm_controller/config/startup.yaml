@@ -1,23 +1,21 @@
-# Shared placement gate and shutdown return path for the ROS FJT client.
-# Automatic ROS startup enables a hold at the measured position without motion.
-# The steps below remain the shutdown return reference and explicit commissioning trial.
-# ROS return times follow the effective MoveIt velocity/acceleration caps.
+# Shared startup posture/order and shutdown return path for the ROS FJT client.
+# After the measured hold, Meow performs J2 -> J4 -> J3 before execution unlock.
+# ROS startup/return times follow the effective MoveIt velocity/acceleration caps.
 # duration_sec below is retained only for the standalone commissioning trial.
-# Before automatic activation, place the arm near this folded entry:
+# After each power cycle and before automatic startup, place the arm at this folded entry:
 # J2=-1.570 rad and J3=1.570 rad (all other joints nominally zero).
-# Absolute encoders verify placement and supply the activation/visualization position.
-# The ROS placement tolerance is intersected with the hardware profile's position limits.
-# ROS checks J1-J5 placement; J6 stays at its measured position within profile limits.
+# Absolute encoders verify this posture; this is not a homing procedure.
+# ROS checks J1-J5 placement; J6 is aligned within profile limits before unfolding.
 # ROS Meow entry uses the profile's measured_position_margin_rad (up to 0.01)
 # for endpoint placement differences, while all commanded positions stay bounded.
 schema_version: 1
 folded_position_rad: [0.0, -1.570, 1.570, 0.0, 0.0, 0.0]
-ros_folded_tolerance_rad: [0.15, 0.15, 0.15, 0.15, 0.15]
+ros_folded_tolerance_rad: [0.03, 0.01, 0.01, 0.01, 0.03]
 commissioning_folded_tolerance_rad: [0.01, 0.01, 0.01, 0.01, 0.01]
 stopped_velocity_rad_s: 0.02
 steps:
-  # joint_index is zero-based. The reference order is J2 -> J4 -> J3.
-  # Preserve this startup_ready shutdown approach pose with J3=1.430 rad.
+  # joint_index is zero-based. The required physical order is J2 -> J4 -> J3.
+  # The resulting startup_ready pose has J3=1.430 rad.
   - {joint_index: 1, target_rad: -1.350, duration_sec: 8.0}
   - {joint_index: 3, target_rad: -0.300, duration_sec: 10.0}
   - {joint_index: 2, target_rad: 1.430, duration_sec: 6.0}

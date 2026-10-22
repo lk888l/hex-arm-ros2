@@ -117,7 +117,7 @@ public:
     {
       RCLCPP_INFO(getLogger(), "MoveIt execution locked: waiting for verified startup hold");
       startup_ready_subscription_ = moveit_cpp->getNode()->create_subscription<std_msgs::msg::String>(
-          "/hex_arm/internal/moveit_startup_ready", rclcpp::QoS(1).reliable().transient_local(),
+          "hex_arm/internal/moveit_startup_ready", rclcpp::QoS(1).reliable().transient_local(),
           [this](const std_msgs::msg::String::SharedPtr message) {
             if (message->data != startup_readiness_token_ || deferred_capabilities_.empty() || failed_)
             {

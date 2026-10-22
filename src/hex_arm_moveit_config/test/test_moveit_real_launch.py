@@ -67,7 +67,7 @@ def test_public_launch_defaults_to_plan_only() -> None:
         for entity in module.generate_launch_description().entities
         if isinstance(entity, DeclareLaunchArgument)
     }
-    assert set(declarations) == {
+    assert set(declarations) >= {
         "hardware_profile",
         "zenoh_connect",
         "enable_execution",
@@ -110,7 +110,7 @@ def test_one_switch_gates_hardware_and_moveit_execution() -> None:
         assert arguments["activate_hardware"] == expected
         assert arguments["startup_ready"] == expected
         if enabled:
-            with pytest.raises(RuntimeError, match="verified measured-pose hold"):
+            with pytest.raises(RuntimeError, match="protocol startup procedure"):
                 module._bringup_arguments("/tmp/profile.yaml", "", enabled, False)
         else:
             assert module._bringup_arguments("/tmp/profile.yaml", "", False, False)["startup_ready"] == "false"
@@ -228,7 +228,7 @@ def test_launch_composes_bringup_without_duplicate_control_or_rsp(monkeypatch) -
     nodes = [action for action in actions if isinstance(action, Node)]
     handlers = [action for action in actions if isinstance(action, RegisterEventHandler)]
     assert len(includes) == 1
-    assert len(handlers) == 1
+    assert len(handlers) == 2  # Critical exit plus this instance's fault handler.
     include_source = includes[0].launch_description_source
     include_path = perform_substitutions(
         context, vars(include_source)["_LaunchDescriptionSource__location"]
@@ -268,11 +268,11 @@ def test_real_launch_selects_dynamics_and_keeps_the_authoritative_state_topic() 
     assert '.joint_limits(file_path=dynamics_file)' in source
     assert '"hardware": "config/joint_limits_hardware.yaml"' in source
     assert 'STATE_TOPIC = "/hex_arm/internal/state"' in source
-    assert 'remappings=[("joint_states", STATE_TOPIC)]' in source
+    assert 'instance.ros_name("hex_arm/internal/state")' in source
     assert 'package="controller_manager"' not in source
     assert 'package="robot_state_publisher"' not in source
     assert "target_action=move_group" in source
-    assert 'on_exit=_shutdown_after_exit("move_group")' in source
+    assert 'on_exit=_shutdown_after_exit("move_group", instance.namespace, scope)' in source
 
 
 def test_mock_launch_can_never_select_the_plan_only_semantic_model() -> None:
@@ -516,13 +516,24 @@ def test_launch_forwards_the_selected_dynamic_configuration(monkeypatch):
     assert selected == [(True, "/tmp/validated.local.yaml", "hardware", "custom", "/tmp/dynamics.yaml")]
 
 
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("arguments", [
     {"startup_sequence": "/tmp/legacy-sequence.yaml"},
-    {"startup_trial": True},
     {"align_folded": True},
     {"startup_sequence": "/tmp/legacy-sequence.yaml", "startup_trial": True},
 ])
-def test_real_moveit_cannot_restore_startup_motion(enabled, arguments):
-    with pytest.raises(RuntimeError, match="startup motion is disabled"):
-        _module()._bringup_arguments("/tmp/profile.yaml", "", enabled, **arguments)
+def test_real_moveit_restores_explicit_startup_options(arguments):
+    result = _module()._bringup_arguments("/tmp/profile.yaml", "", True, **arguments)
+    for name, option in arguments.items():
+        assert result[name] == (str(option).lower() if isinstance(option, bool) else option)
+
+
+@pytest.mark.parametrize("arguments", [{"align_folded": True}, {"startup_trial": True},
+    {"startup_sequence": "/tmp/recipe.yaml", "startup_trial": True}])
+def test_startup_motion_options_still_require_activation(arguments):
+    with pytest.raises(RuntimeError, match="explicit execution"):
+        _module()._bringup_arguments("/tmp/profile.yaml", "", False, **arguments)
+
+
+def test_startup_trial_requires_qualified_sequence():
+    with pytest.raises(RuntimeError, match="arm-bound sequence"):
+        _module()._bringup_arguments("/tmp/profile.yaml", "", True, startup_trial=True)

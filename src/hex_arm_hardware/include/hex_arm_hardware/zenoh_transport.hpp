@@ -13,7 +13,10 @@ struct ZenohOptions
 {
   std::string endpoint{"tcp/127.0.0.1:7448"};
   std::string prefix{"hexmeow/ubuntu/firefly_y6_meow"};
+  std::string ros_namespace;
+  std::string hardware_name;
   std::vector<std::string> joint_names;
+  std::vector<std::string> device_joint_names;
   double state_timeout{0.1}, command_max_age{0.05}, command_period{0.01};
   double startup_timeout{30.0}, service_timeout{5.0};
 };

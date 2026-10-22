@@ -233,16 +233,16 @@ def test_uncalibrated_profile_is_observable_but_cannot_activate(tmp_path: Path) 
         raise AssertionError("uncalibrated hardware activation was not rejected")
 
 
-def test_real_execution_cannot_skip_measured_hold(tmp_path: Path) -> None:
+def test_real_execution_cannot_skip_protocol_startup(tmp_path: Path) -> None:
     import pytest
     module = _load_launch_module()
     context = _context(_profile(tmp_path), "true")
     context.launch_configurations["startup_ready"] = "false"
-    with pytest.raises(RuntimeError, match="verified measured-pose hold"):
+    with pytest.raises(RuntimeError, match="protocol startup procedure"):
         module._real_nodes(context)
 
 
-def test_real_execution_holds_measured_pose_for_every_protocol(tmp_path: Path) -> None:
+def test_real_execution_runs_protocol_startup_after_activation(tmp_path: Path) -> None:
     module = _load_launch_module()
     context = _context(_profile(tmp_path), "true")
     # The startup process is nested in an event handler; inspect the source
@@ -288,7 +288,7 @@ def test_effective_moveit_dynamics_reach_the_startup_process_as_one_json_argumen
     startup = next(command for command in commands if any(
         token.endswith('commission-startup-ros.py') for token in command))
     assert startup[startup.index('--motion-limits') + 1] == rates
-    assert '--hold-current' in startup
+    assert ('--hold-current' in startup) == (protocol == 'cia402')
     assert '--cia402-sequence' not in startup
     assert '--align-folded' not in startup
 
@@ -337,8 +337,7 @@ def test_controller_manager_chain_requires_explicit_opt_in(tmp_path: Path) -> No
     assert controller_manager_executables == {"ros2_control_node"}
 
 
-def test_startup_entry_activates_real_bringup_without_a_motion_sequence(tmp_path: Path) -> None:
-    from launch.actions import IncludeLaunchDescription
+def test_startup_entry_requires_explicit_commissioning_acknowledgement(tmp_path: Path) -> None:
     path = PACKAGE_ROOT / "launch" / "startup.launch.py"
     spec = importlib.util.spec_from_file_location("hex_arm_startup_launch", path)
     module = importlib.util.module_from_spec(spec)
@@ -357,30 +356,22 @@ def test_startup_entry_activates_real_bringup_without_a_motion_sequence(tmp_path
         "zenoh_connect": "",
         "use_rviz": "false",
     })
-    actions = module._setup(context)
-    assert len(actions) == 1 and isinstance(actions[0], IncludeLaunchDescription)
-    include = actions[0]
-    source_path = perform_substitutions(context, vars(include.launch_description_source)[
-        "_LaunchDescriptionSource__location"])
-    assert source_path.endswith("/hex_arm_bringup/launch/real.launch.py")
-    launch_arguments = dict(include.launch_arguments)
-    assert launch_arguments["activate_hardware"] == "true"
-    assert launch_arguments["startup_ready"] == "true"
-    assert "startup_sequence" not in launch_arguments
-    context.launch_configurations["allow_startup_motion"] = "true"
-    with pytest.raises(RuntimeError, match="startup motion is disabled"):
+    with pytest.raises(RuntimeError, match="allow_startup_motion:=true"):
         module._setup(context)
+    context.launch_configurations["allow_startup_motion"] = "true"
+    process = next(action for action in module._setup(context) if isinstance(action, ExecuteProcess))
+    command = [perform_substitutions(context, token) for token in process.cmd]
+    assert '--startup-sequence' in command and '--allow-startup-motion' in command
 
 
-@pytest.mark.parametrize("argument,value", [
-    ("startup_sequence", "/tmp/legacy-sequence.yaml"),
-    ("startup_trial", "true"),
-    ("align_folded", "true"),
+@pytest.mark.parametrize("argument,value,error", [
+    ("startup_sequence", "/tmp/legacy-sequence.yaml", "requires CiA402"),
+    ("startup_trial", "true", "arm-bound sequence"),
 ])
-def test_real_launch_rejects_retired_startup_motion_options(tmp_path, argument, value):
+def test_real_launch_rejects_unqualified_startup_recipe(tmp_path, argument, value, error):
     context = _context(_profile(tmp_path), "true")
     context.launch_configurations[argument] = value
-    with pytest.raises(RuntimeError, match="startup motion is disabled"):
+    with pytest.raises(RuntimeError, match=error):
         _load_launch_module()._real_nodes(context)
 
 
@@ -410,10 +401,7 @@ def test_startup_event_requires_a_successful_profile_bound_report(tmp_path):
     assert len(success) == 1 and isinstance(success[0].event, module.StartupVerified)
     assert success[0].event.profile == str(profile) and success[0].event.readiness_token == token
     for changes in ({"passed": False}, {"profile_sha256": "stale"}, {"moveit_execution_unlocked": False},
-                    {"startup_mode": "fixed_sequence"}, {"steps": [{"target": [0.] * 6}]},
-                    {"measured_hold": {"reference_q": [0.] * 5, "q": [0.] * 6, "samples": 100}},
-                    {"measured_hold": {"reference_q": [0.] * 6, "q": [float("nan")] * 6, "samples": 100}},
-                    {"measured_hold": {"reference_q": [0.] * 6, "q": [0.] * 6, "samples": 0}}):
+                    ):
         report_path.write_text(json.dumps({**report, **changes}))
         failed = handler(SimpleNamespace(returncode=0), context)
         assert any(isinstance(action, EmitEvent) and isinstance(action.event, module.Shutdown)

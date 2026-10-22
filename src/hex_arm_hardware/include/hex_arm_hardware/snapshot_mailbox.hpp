@@ -62,8 +62,24 @@ private:
 struct FeedbackSnapshot
 {
   std::array<double, 6> position{}, velocity{}, effort{};
-  std::int64_t received_ns{}, source_stamp_ns{};
+  // received_ns is local steady time for safety; ROS time is metadata only.
+  std::int64_t received_ns{}, received_ros_ns{}, source_stamp_ns{};
   std::uint64_t sequence{};
+};
+
+class FeedbackPublication
+{
+public:
+  bool accept(const FeedbackSnapshot & sample, std::int64_t now_ns, std::int64_t max_age_ns)
+  {
+    if (!sample.received_ns || sample.source_stamp_ns <= last_source_stamp_ns_ ||
+      now_ns < sample.received_ns || now_ns - sample.received_ns > max_age_ns)
+    {return false;}
+    last_source_stamp_ns_ = sample.source_stamp_ns;
+    return true;
+  }
+private:
+  std::int64_t last_source_stamp_ns_{-1};
 };
 
 struct CommandSnapshot

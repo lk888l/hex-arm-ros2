@@ -7,8 +7,10 @@
 ## 构建与版本
 
 C++ 使用官方 **zenoh-cpp 1.9.0 + zenoh-c 1.9.0**，对应现有 Rust 和 Python Zenoh 1.9.0。
-CMake 要求版本完全匹配，C++ Protobuf 从唯一协议源
-`src/hex_arm_controller/proto/robot_api.proto` 生成，不维护第二份协议文件或手工编解码器。
+CMake 要求版本完全匹配。协议唯一源码为
+`src/hex_arm_protocol/proto/robot_api.proto`，Rust、C++ 与 Python 共同使用该定义。
+ROS 构建通过已安装的 `hex_arm_protocol` 包定位协议；
+`src/hex_arm_controller/proto/robot_api.proto` 仅保留兼容符号链接，不是另一份协议权威来源。
 当前 Jazzy 容器的 Protobuf 为 3.21.12；真实 Rust mock 及 can2 链路用于互操作验证。
 
 在开发容器内安装依赖并构建：

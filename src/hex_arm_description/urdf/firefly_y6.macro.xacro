@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.geometry.xacro"/>
+  <xacro:include filename="$(find hex_arm_description)/urdf/firefly_y6.ros2_control.xacro"/>
+
+  <!-- Include this file from the owning robot. parent is an existing, fully
+       qualified link; tool_link is an optional arm-relative TCP frame name.
+       Attach tool geometry to ${prefix}link_6 in the owning robot description. -->
+  <xacro:macro name="firefly_y6_arm" params="prefix:='' parent:='' xyz:='0 0 0' rpy:='0 0 0' backend:='view' hardware_name:='FireflyY6System' ros_namespace:='' initial_positions:=${dict(joint_1=0.0,joint_2=0.0,joint_3=0.0,joint_4=0.0,joint_5=0.0,joint_6=0.0)} tool_link:='' tcp_xyz:='0 0 0' tcp_rpy:='0 0 0' state_timeout_sec:=0.100 activation_timeout_sec:=5.0 zenoh_connect:='tcp/127.0.0.1:7448' robot_prefix:='hexmeow/ubuntu/firefly_y6_meow' command_period_sec:=0.01 startup_timeout_sec:=30.0">
+    <xacro:firefly_y6_geometry prefix="${prefix}"/>
+    <xacro:if value="${parent != ''}">
+      <joint name="${prefix}mount_joint" type="fixed">
+        <parent link="${parent}"/>
+        <child link="${prefix}base_link"/>
+        <origin xyz="${xyz}" rpy="${rpy}"/>
+      </joint>
+    </xacro:if>
+    <xacro:if value="${tool_link != ''}">
+      <link name="${prefix}${tool_link}"/>
+      <joint name="${prefix}tcp_joint" type="fixed">
+        <parent link="${prefix}link_6"/>
+        <child link="${prefix}${tool_link}"/>
+        <origin xyz="${tcp_xyz}" rpy="${tcp_rpy}"/>
+      </joint>
+    </xacro:if>
+    <xacro:if value="${backend != 'view'}">
+      <xacro:firefly_y6_ros2_control backend="${backend}" prefix="${prefix}"
+        hardware_name="${hardware_name}" ros_namespace="${ros_namespace}"
+        state_timeout_sec="${state_timeout_sec}" activation_timeout_sec="${activation_timeout_sec}"
+        initial_positions="${initial_positions}" zenoh_connect="${zenoh_connect}"
+        robot_prefix="${robot_prefix}" command_period_sec="${command_period_sec}"
+        startup_timeout_sec="${startup_timeout_sec}"/>
+    </xacro:if>
+  </xacro:macro>
+</robot>

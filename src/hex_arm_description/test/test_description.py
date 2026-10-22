@@ -108,3 +108,29 @@ def test_all_package_meshes_exist() -> None:
         prefix = "package://xpkg_urdf_firefly_y6/"
         assert uri.startswith(prefix)
         assert (share / uri.removeprefix(prefix)).is_file(), uri
+
+
+def test_prefixed_model_preserves_every_vendor_element_and_device_mapping():
+    source = Path(get_package_share_directory("hex_arm_description")) / "urdf/firefly_y6.urdf.xacro"
+    robot = ET.fromstring(subprocess.run(
+        ["xacro", str(source), "backend:=real", "prefix:=left_", "hardware_name:=LeftArm",
+         "ros_namespace:=robot/left", "tool_link:=tcp", "tcp_xyz:=0 0 0.1"],
+        check=True, capture_output=True, text=True).stdout)
+
+    def canonical(element):
+        return (element.tag, sorted(element.attrib.items()), (element.text or "").strip(),
+                [canonical(child) for child in element])
+
+    for original in _original():
+        candidate = robot.find(f"{original.tag}[@name='left_{original.attrib['name']}']")
+        assert candidate is not None
+        for element in candidate.iter():
+            for key in ("name", "link", "reference"):
+                if element.get(key, "").startswith("left_"):
+                    element.set(key, element.attrib[key].removeprefix("left_"))
+        assert canonical(candidate) == canonical(original)
+    control = robot.find("ros2_control[@name='LeftArm']")
+    assert control.find("hardware/param[@name='ros_namespace']").text == "robot/left"
+    for name in JOINTS:
+        assert control.find(f"joint[@name='left_{name}']/param[@name='device_joint_name']").text == name
+    assert robot.find("joint[@name='left_tcp_joint']/parent").attrib["link"] == "left_link_6"

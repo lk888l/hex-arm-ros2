@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Publish an arm-local model for ros2_control without owning the robot's TF."""
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+
+def main():
+    rclpy.init()
+    node = Node("robot_description_publisher")
+    description = node.declare_parameter("robot_description", "").value
+    if not description:
+        raise ValueError("robot_description must contain an expanded URDF")
+    publisher = node.create_publisher(String, "robot_description", QoSProfile(
+        depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE))
+    publisher.publish(String(data=description))
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

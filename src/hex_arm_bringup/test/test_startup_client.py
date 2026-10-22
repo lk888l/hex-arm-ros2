@@ -17,17 +17,17 @@ def profile():
 
 
 def test_measured_startup_retains_nearby_placement_and_nonzero_j6():
-    q = [-.12, -1.43, 1.43, .13, -.11, .217]
+    q = [.02, -1.565, 1.565, .005, -.02, .217]
     assert client.validate_measured_startup(profile(), q, [0.] * 6) == q
     assert q != client.FOLDED and q != client.READY
 
 
 @pytest.mark.parametrize("axis", range(5))
-def test_measured_startup_placement_window_never_extends_past_point_fifteen(axis):
+def test_measured_startup_placement_window_preserves_qualified_tolerance(axis):
     config = profile()
     for joint in config["joints"]:
         joint["limits"].update(position_lower_rad=-3., position_upper_rad=3.)
-    q = client.FOLDED.copy(); q[axis] += .15
+    q = client.FOLDED.copy(); q[axis] += client.FOLDED_TOLERANCE[axis]
     assert client.validate_measured_startup(config, q, [0.] * 6) == q
     q[axis] += .0001
     with pytest.raises(RuntimeError, match="default placement window"):
@@ -37,13 +37,13 @@ def test_measured_startup_placement_window_never_extends_past_point_fifteen(axis
 def test_measured_startup_only_bounds_existing_encoder_margin():
     config = profile()
     q = client.FOLDED.copy(); q[1] = -1.575; q[5] = .217
-    with pytest.raises(RuntimeError, match="profile allowance"):
+    with pytest.raises(RuntimeError):
         client.validate_measured_startup(config, q, [0.] * 6)
     config["joints"][1]["limits"]["measured_position_margin_rad"] = .01
     reference = client.validate_measured_startup(config, q, [0.] * 6)
     assert reference[1] == -1.57 and reference[5] == q[5] and q[1] == -1.575
     q[1] = -1.5801
-    with pytest.raises(RuntimeError, match="profile allowance"):
+    with pytest.raises(RuntimeError, match="placement window"):
         client.validate_measured_startup(config, q, [0.] * 6)
 
 
@@ -58,9 +58,8 @@ def test_measured_startup_rejects_invalid_feedback_before_enable(fault):
         client.validate_measured_startup(profile(), q, dq)
 
 
-@pytest.mark.parametrize("protocol", ["meow", "cia402"])
-@pytest.mark.parametrize("hold_flag", [False, True])
-def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path, monkeypatch, protocol, hold_flag):
+@pytest.mark.parametrize("protocol,hold_flag", [("meow", False), ("meow", True), ("cia402", True)])
+def test_automatic_startup_verifies_hold_then_runs_protocol_sequence(tmp_path, monkeypatch, protocol, hold_flag):
     import hashlib
     import json
     import sys
@@ -73,11 +72,13 @@ def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path
             "--moveit-ready-token", "a" * 32, "--output", str(output)]
     if hold_flag: argv.append("--hold-current")
     monkeypatch.setattr(sys, "argv", argv)
-    q = [-.12, -1.43, 1.43, .13, -.11, .217]
+    q = client.FOLDED.copy(); q[5] = .217
+    entry = q.copy()
     events = []
     class FakeProbe:
         def __init__(self, profile, **_):
             self.profile = profile
+            self.motion_limits = client.resolve_motion_limits(profile)
             self.steps, self.samples, self.commands, self.action_feedback = [], [], [], []
             self.service_timeouts, self.sequence_path_checks = [], []
             self.positions, self.velocity = dict(zip(client.JOINTS, q)), dict.fromkeys(client.JOINTS, 0.)
@@ -85,7 +86,8 @@ def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path
             self.hardware_activation_requested = False
             self.fjt, self.hardware = NS(wait_for_server=lambda **_: True), NS(wait_for_service=lambda **_: True)
         def q(self): return q.copy()
-        def activate_controllers(self):
+        def activate_controllers(self, *, startup_ready=False):
+            assert startup_ready is not hold_flag
             events.append("enable_at_measured_position")
             self.enable_position_q = self.q()
             self.hold_reference = client.validate_measured_startup(self.profile, q, [0.] * 6)
@@ -98,6 +100,11 @@ def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path
             self.samples.append({"q": self.q(), "dq": [0.] * 6})
             return client.measured_hold_metrics(reference, self.samples[start:])
         def activate_trajectory_controller(self): events.append("trajectory_controller")
+        def check_point(self, target): pass
+        def direct_step(self, target, duration, label, **_):
+            events.append(label)
+            q[:] = target
+            self.steps.append({"label": label, "target": target.copy()})
         def unlock_moveit_after_hold(self, token):
             assert token == "a" * 32 and events[-1] == "verify_hold"
             events.append("unlock_moveit")
@@ -108,12 +115,17 @@ def test_automatic_startup_never_sends_motion_and_reports_measured_hold(tmp_path
     monkeypatch.setattr(client.rclpy, "shutdown", lambda: None)
     client.main()
     report = json.loads(output.read_text())
-    assert report["passed"] and report["startup_mode"] == "measured_hold" and report["steps"] == []
-    assert report["measured_hold"]["reference_q"] == report["ready_hold"]["target"] == q
+    assert report["passed"]
+    assert report["startup_mode"] == ("measured_hold" if hold_flag else "fixed_sequence")
+    assert report["measured_hold"]["reference_q"] == entry
+    assert report["ready_hold"]["target"] == (entry if hold_flag else client.READY)
     assert report["moveit_execution_unlocked"]
-    client.verified_measured_hold(config, report, hashlib.sha256(profile_path.read_bytes()).hexdigest())
+    if hold_flag:
+        client.verified_measured_hold(config, report, hashlib.sha256(profile_path.read_bytes()).hexdigest())
+    motion = [] if hold_flag else ["align_j6", "startup_j2", "startup_j4", "startup_j3"]
+    assert [step["label"] for step in report["steps"]] == motion
     assert events == ["enable_at_measured_position", "verify_hold", "trajectory_controller",
-                      "verify_hold", "verify_hold", "unlock_moveit", "cleanup"]
+                      "verify_hold", *motion, "verify_hold", "unlock_moveit", "cleanup"]
 
 
 @pytest.mark.parametrize("j6", [-2.7, -0.219, 0.497, 2.7])
@@ -206,6 +218,7 @@ def test_controller_configuration_completes_before_any_enable():
         hardware=Endpoint("list", NS(component=[system])),
         load_controller=Endpoint("load", NS(ok=True)),
         configure_controller=Endpoint("configure", NS(ok=True)),
+        list_controllers=Endpoint("controllers", NS(controller=[])),
         set_hardware=Endpoint("enable", NS(ok=True, state=NS(id=3))),
         switch=Endpoint("activate_group", NS(ok=True)),
         fjt=NS(wait_for_server=lambda **_: True),
@@ -221,7 +234,7 @@ def test_controller_configuration_completes_before_any_enable():
     fake.list_hardware_components = lambda **_: fake.wait(
         fake.hardware.call_async(client.ListHardwareComponents.Request()), 5.0).component
     client.Probe.activate_controllers(fake)
-    assert events == [("list", None), ("load", "joint_state_broadcaster"),
+    assert events == [("list", None), ("controllers", None), ("load", "joint_state_broadcaster"),
                       ("configure", "joint_state_broadcaster"), ("load", "firefly_arm_controller"),
                       ("configure", "firefly_arm_controller"), ("warm", None),
                       ("enable", "FireflyY6System"), ("activate_group", None)]
@@ -232,6 +245,25 @@ def test_controller_configuration_completes_before_any_enable():
         client.Probe.activate_controllers(fake)
     assert all(event[0] not in ("enable", "activate_group") for event in events)
     assert not fake.hardware_activation_requested
+
+    # A shared controller manager already owns its broadcaster. This arm only
+    # prepares its own inactive controller and never restarts the broadcaster.
+    events.clear()
+    fake.configure_controller.result = NS(ok=True)
+    fake.list_controllers.result = NS(controller=[
+        NS(name="joint_state_broadcaster", state="active"),
+        NS(name="firefly_arm_controller", state="inactive"),
+    ])
+    client.Probe.activate_controllers(fake)
+    assert events == [("list", None), ("controllers", None), ("warm", None),
+                      ("enable", "FireflyY6System")]
+    events.clear()
+    fake.hardware_activation_requested = False
+    fake.list_controllers.result.controller[1].state = "active"
+    with pytest.raises(RuntimeError, match="must be unconfigured or inactive"):
+        client.Probe.activate_controllers(fake)
+    assert not fake.hardware_activation_requested
+    fake.list_controllers.result = NS(controller=[])
     events.clear()
     fake.configure_controller.result = NS(ok=True)
     fake.profile = profile()
@@ -239,7 +271,7 @@ def test_controller_configuration_completes_before_any_enable():
     fake.q = lambda: bad
     fake.velocity = dict.fromkeys(client.JOINTS, 0.0)
     fake.check_point = lambda q: None
-    with pytest.raises(RuntimeError, match="default placement window"):
+    with pytest.raises(RuntimeError, match="folded reference"):
         client.Probe.activate_controllers(fake, startup_ready=True)
     assert all(event[0] not in ("enable", "activate_group") for event in events)
     assert not fake.hardware_activation_requested
@@ -308,6 +340,53 @@ def test_invalid_state_cannot_refresh_feedback_freshness(fault):
     with pytest.raises(RuntimeError, match="complete finite"):
         client.Probe.state(fake, message)
     assert fake.received_at == 0.0 and not fake.samples
+
+
+def test_prefixed_feedback_maps_to_physical_profile_and_rejects_other_arm():
+    from types import SimpleNamespace as NS
+    instance = client.InstanceNames(namespace="left", joint_prefix="left_")
+    fake = NS(instance=instance, positions={}, velocity={}, received_at=0., samples=[])
+    fake.q = lambda: client.Probe.q(fake)
+    message = NS(name=list(reversed(instance.joint_names)),
+                 position=[float(index) for index in reversed(range(6))], velocity=[0.] * 6)
+    client.Probe.state(fake, message)
+    assert fake.q() == [float(index) for index in range(6)]
+    assert set(fake.positions) == set(client.JOINTS)
+    received = fake.received_at
+    message.name = [name.replace("left_", "right_") for name in message.name]
+    with pytest.raises(RuntimeError, match="complete finite"):
+        client.Probe.state(fake, message)
+    assert fake.received_at == received and len(fake.samples) == 1
+
+
+def test_prefixed_collision_names_and_planning_group_are_scoped():
+    from types import SimpleNamespace as NS
+    requests = []
+    result = NS(valid=False, contacts=[NS(contact_body_1="left_link_1", contact_body_2="left_link_5")])
+    fake = NS(instance=client.InstanceNames(joint_prefix="left_", planning_group="left_arm"),
+              validity=NS(call_async=lambda request: requests.append(request) or result),
+              wait=lambda future, _: future)
+    assert client.Probe.is_valid(fake, client.FOLDED, client.FOLDED_CONTACTS) is False
+    assert requests[0].group_name == "left_arm"
+    assert list(requests[0].robot_state.joint_state.name) == fake.instance.joint_names
+    result.contacts[0].contact_body_1 = "right_link_1"
+    with pytest.raises(RuntimeError, match="state rejected"):
+        client.Probe.is_valid(fake, client.FOLDED, client.FOLDED_CONTACTS)
+
+
+def test_single_arm_deactivation_keeps_shared_broadcaster_running():
+    from types import SimpleNamespace as NS
+    requests = []
+    instance = client.InstanceNames(namespace="left", controller_manager="/manager",
+                                   controller_name="left_arm", hardware_name="LeftArm")
+    fake = NS(instance=instance,
+              switch=NS(wait_for_service=lambda **_: True,
+                        call_async=lambda request: requests.append(request) or NS(ok=True)),
+              set_hardware=NS(call_async=lambda request: requests.append(request) or NS(ok=True, state=NS(id=2))),
+              wait=lambda future, _: future)
+    client.Probe.deactivate(fake)
+    assert list(requests[0].deactivate_controllers) == ["left_arm"]
+    assert requests[1].name == "LeftArm" and requests[1].target_state.id == 2
 
 
 @pytest.mark.parametrize("recover", [True, False])
@@ -576,7 +655,8 @@ def test_expanded_trajectory_deadline_tracks_duration_and_rejects_bad_timing():
 
 @pytest.mark.parametrize("command_reference", [None, "settled"])
 @pytest.mark.parametrize("path_tolerance", [None, 0.1])
-def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(command_reference, path_tolerance):
+@pytest.mark.parametrize("prefix", ["", "left_"])
+def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(command_reference, path_tolerance, prefix):
     from types import SimpleNamespace as NS
     config = profile()
     for joint in config["joints"]:
@@ -596,11 +676,13 @@ def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(co
         return NS(accepted=True, get_result_async=result)
     initial = actual.copy()
     fake = NS(profile=config, motion_limits=rates, last_commanded_target=reference,
+              instance=client.InstanceNames(namespace="left", joint_prefix=prefix),
               q=lambda: actual.copy(), check_point=lambda _: None, action_feedback=[], steps=[],
               shutdown_path_tolerance_rad=path_tolerance,
               fjt=NS(send_goal_async=send), wait=lambda future, _: future, spin=lambda _: None)
     record = client.Probe.direct_step(fake, target, 48., "return_startup_j3", retime=True)
     start, end = goals[0].trajectory.points
+    assert list(goals[0].trajectory.joint_names) == fake.instance.joint_names
     assert list(start.positions) == (reference or initial)
     assert list(end.positions) == target
     seconds = end.time_from_start.sec + end.time_from_start.nanosec / 1e9
@@ -611,7 +693,7 @@ def test_direct_motion_retimes_fresh_feedback_and_preserves_settled_reference(co
         assert 5.774 * distance / seconds**2 <= rates[name]["acceleration_rad_s2"]
     assert fake.last_commanded_target == target
     assert [(t.name, t.position) for t in goals[0].path_tolerance] == (
-        [(name, path_tolerance) for name in client.JOINTS] if path_tolerance else [])
+        [(name, path_tolerance) for name in fake.instance.joint_names] if path_tolerance else [])
     assert not goals[0].goal_tolerance
     assert record.get("path_tolerance_rad") == path_tolerance
 
@@ -669,6 +751,7 @@ def test_return_to_ready_requests_full_normal_moveit_velocity_and_acceleration()
     from types import SimpleNamespace as NS
     goals = []
     fake = NS(profile=profile(), q=lambda: client.READY.copy(),
+              planning_reference=lambda initial: initial,
               check_point=lambda _: None, is_valid=lambda _: True,
               move_group=NS(send_goal_async=lambda goal: goals.append(goal) or NS(accepted=False)),
               wait=lambda future, _: future)

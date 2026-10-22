@@ -2532,6 +2532,51 @@ async fn delayed_source_command_is_still_fresh_by_receive_time() {
 }
 
 #[tokio::test]
+async fn interpolation_diagnostics_report_stretch_and_expire_with_control_owner() {
+    let runtime = Arc::new(runtime_for_safety_test());
+    runtime.initialize().await.unwrap();
+    let session = runtime
+        .acquire("interpolation-diagnostic".into())
+        .unwrap()
+        .0;
+    runtime
+        .set_mode(session, OperatingMode::Active)
+        .await
+        .unwrap();
+    let mut command = streaming_command(session, vec![]);
+    command.header = Some(pb::Header {
+        seq: 42,
+        stamp_ns: 0,
+        sync_ns: None,
+    });
+    command.points[0].q[0] = 0.02;
+    runtime.submit_trajectory(command).unwrap();
+    let control = tokio::spawn(runtime.clone().run_control_loop());
+    let sample = tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            if let Some(sample) = runtime.joint_state_proto().interpolation {
+                break sample;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(sample.command_sequence, 42);
+    assert_eq!(sample.requested_duration_ns, 10_000_000);
+    assert!(sample.effective_duration_ns > sample.requested_duration_ns);
+    assert_eq!(sample.command_position[0], 0.02);
+    assert!(sample.interpolated_position[0] < sample.command_position[0]);
+    assert!(sample.sample_stamp_ns >= sample.segment_start_ns);
+    assert!(
+        sample.interpolated_velocity[0].abs() <= runtime.profile.joints[0].limits.velocity_rad_s
+    );
+    runtime.shutdown().await.unwrap();
+    control.await.unwrap();
+    assert!(runtime.joint_state_proto().interpolation.is_none());
+}
+
+#[tokio::test]
 async fn suspending_only_control_task_does_not_execute_its_watchdog() {
     let backend = Arc::new(ShutdownOrderBackend::new());
     let mut runtime = runtime_with_backend(backend.clone());

@@ -8,8 +8,10 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
-  <build_depend>protobuf</build_depend>
-  <build_depend>hex_arm_controller</build_depend>
+  <build_depend>libprotobuf-dev</build_depend>
+  <build_depend>protobuf-compiler</build_depend>
+  <build_depend>hex_arm_protocol</build_depend>
+  <test_depend>hex_arm_controller</test_depend>
   <exec_depend>python3-protobuf</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
