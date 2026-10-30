@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     cmake \
     curl \
+    fonts-wqy-microhei \
     git \
     libprotobuf-dev \
     libudev-dev \

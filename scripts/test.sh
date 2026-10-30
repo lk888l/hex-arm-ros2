@@ -38,6 +38,7 @@ case "${level}" in
         hex_arm_msgs \
         hex_arm_description \
         hex_arm_tools \
+        hex_arm_visualization \
         hex_arm_hardware \
         hex_arm_bringup \
         hex_arm_moveit_runtime \

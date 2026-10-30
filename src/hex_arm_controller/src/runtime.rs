@@ -333,6 +333,19 @@ impl ArmRuntime {
             tau_est: tau,
             temp,
             interpolation: interpolation.map(InterpolationSnapshot::to_proto),
+            motor_diagnostics: feedback
+                .joints
+                .iter()
+                .zip(&self.profile.joints)
+                .map(|(state, joint)| pb::MotorDiagnostics {
+                    node_id: u32::from(joint.node_id),
+                    motor_temperature_c: state.motor_temperature_c,
+                    driver_temperature_c: state.driver_temperature_c,
+                    online: state.online,
+                    feedback_fresh: state.fresh,
+                    fault_code: state.fault_code.map(u32::from),
+                })
+                .collect(),
         }
     }
 

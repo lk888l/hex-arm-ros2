@@ -17,7 +17,7 @@
 导航：[环境与构建](#environment) · [MoveIt 真机](#real-hardware) ·
 [开发与测试](#development) · [常见问题](#troubleshooting) · [文档索引](#documentation)
 
-GUI 和 Gazebo 依赖可按需选择：`hex_arm_visualization` 提供 RViz 与关节滑块界面的依赖，
+GUI 和 Gazebo 依赖可按需选择：`hex_arm_visualization` 提供 RViz、关节滑块和电机监控窗口，
 `hex_arm_simulation` 提供 Gazebo 依赖，原有 launch 入口继续可用。
 无界面真机部署只需选择所需驱动/MoveIt 包，并设置 `use_rviz:=false`。
 集成指南还提供 `scripts/test.sh portability`，验证复制到外部工作区后的独立构建。
@@ -302,6 +302,39 @@ mock/gz 也不会自动拦截超限命令。Ctrl+C 仅退出发送目标的 CLI 
 <a id="development"></a>
 
 ## 开发与测试
+
+### 电机数据监控窗口
+
+在机械臂驱动已运行时，另开一个开发容器终端，启动只读的六关节实时表格：
+
+```bash
+source /workspaces/hex_arm_ros2/install/setup.bash
+ros2 run hex_arm_visualization motor_monitor \
+  --robot-prefix hexmeow/wsl/firefly_y6_0 \
+  --zenoh-connect tcp/127.0.0.1:7448
+```
+
+`--robot-prefix` 必须替换成运行中硬件 profile 的 `robot_prefix`；
+`--zenoh-connect` 对应驱动的 Zenoh 端点，默认如上。窗口直接订阅 Zenoh，
+适用于真机、手扶拖动和 Rust 驱动的 `--mock` 模式；普通 MoveIt mock 的
+`GenericSystem` 不提供此状态流。该工具属于可选包 `hex_arm_visualization`，
+现有开发容器已安装 Qt/PyQt5、Zenoh 和 Protobuf。
+
+表格显示关节名称、CAN ID、位置 rad、速度 rad/s、关节侧反馈估计力矩 N·m、
+电机温度 °C、驱动板温度 °C、在线状态、反馈新鲜度和故障码。
+力矩取自 `tau_est`，属于电机反馈换算值；不代表外置力矩传感器读数。
+双温度和逐电机诊断需要重新构建并启动 API 0.5+ 驱动，旧驱动缺失的列显示 `—`。
+
+窗口以 10 Hz 刷新。离线或反馈过期的数据置灰，故障显示红色；
+状态流中断时保留并标灰最后的数值，在线状态改为“未知”。
+`--stale-timeout-sec` 控制本地收流超时，默认 0.5 秒；它不替代驱动的 CAN 反馈超时。
+设备时间戳属于驱动进程的单调时钟，不能与本机时钟直接相减。
+窗口关闭后只释放自身连接，机械臂控制继续运行。
+
+若一直等待数据，核对 prefix、端点及驱动进程；连接或驱动恢复后窗口会自动恢复。
+图形环境问题按 [GUI 诊断](docs/gui_and_cli_simulation_cn.md) 排查。
+开发镜像包含 `fonts-wqy-microhei` 中文字体；旧镜像表头显示方框时，
+重建开发镜像或在开发容器安装该字体包。
 
 ### 控制接口与架构
 

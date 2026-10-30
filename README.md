@@ -18,8 +18,8 @@ Current hardware uses can2, without a gripper or extra payload. Software zero ca
 Navigation: [Environment and build](#environment) · [Real MoveIt](#real-hardware) ·
 [Development and tests](#development) · [Troubleshooting](#troubleshooting) · [Documentation](#documentation)
 
-GUI and Gazebo dependencies are optional: select `hex_arm_visualization` for RViz and
-joint sliders, or `hex_arm_simulation` for Gazebo. Existing launch entry points remain available.
+GUI and Gazebo dependencies are optional: select `hex_arm_visualization` for RViz,
+joint sliders and motor monitoring, or `hex_arm_simulation` for Gazebo. Existing launch entry points remain available.
 For a headless hardware deployment, select the required driver/MoveIt packages and set `use_rviz:=false`.
 The integration guide also covers building copied packages with `scripts/test.sh portability`.
 
@@ -317,6 +317,44 @@ Ctrl+C only exits the CLI sender. Field details and Python examples are in the
 <a id="development"></a>
 
 ## Development and tests
+
+### Motor telemetry window
+
+With the arm driver running, open another development-container terminal for the read-only
+six-joint table (Chinese labels):
+
+```bash
+source /workspaces/hex_arm_ros2/install/setup.bash
+ros2 run hex_arm_visualization motor_monitor \
+  --robot-prefix hexmeow/wsl/firefly_y6_0 \
+  --zenoh-connect tcp/127.0.0.1:7448
+```
+
+Replace `--robot-prefix` with the running hardware profile's `robot_prefix` and point
+`--zenoh-connect` at the driver's Zenoh endpoint (default shown above). The window subscribes
+directly to Zenoh for real hardware, hand guiding and the Rust driver's `--mock` mode.
+Ordinary MoveIt mock uses `GenericSystem` and does not publish this stream. Install/build the
+optional `hex_arm_visualization` package; the development container already includes Qt/PyQt5,
+Zenoh and Protobuf.
+
+Columns show joint names, CAN IDs, position (rad), velocity (rad/s), joint-side estimated
+feedback torque (N·m), motor and driver-board temperatures (°C), online/freshness flags and
+fault codes. Torque is the existing `tau_est` motor-feedback estimate, not an external
+torque-sensor measurement. Rebuild and restart the driver for API 0.5+ diagnostics;
+unsupported columns from older drivers show `—`.
+
+The table refreshes at 10 Hz. Offline/stale feedback is gray and faults are red. On a stream
+outage the last values remain visible in gray, with online status marked unknown.
+`--stale-timeout-sec` sets the local reception timeout (default 0.5 s), independently of the
+driver's CAN feedback timeout. Source timestamps belong to the driver's monotonic clock and
+must not be subtracted from the local clock. Closing the window only closes its observation
+connection; arm control continues.
+
+If data never arrives, check the prefix, endpoint and driver process. The window recovers
+after reconnection or driver restart. See [GUI diagnosis](docs/gui_and_cli_simulation.md)
+for display issues. The development image includes `fonts-wqy-microhei` for Chinese labels;
+rebuild an older image or install that font package inside the development container if
+characters appear as squares.
 
 ### Control interface and architecture
 

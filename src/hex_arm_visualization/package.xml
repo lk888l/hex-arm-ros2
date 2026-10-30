@@ -2,13 +2,19 @@
 <package format="3">
   <name>hex_arm_visualization</name>
   <version>0.1.0</version>
-  <description>Optional RViz, MoveIt visualization and joint slider GUI dependencies.</description>
+  <description>Optional RViz, joint sliders and read-only motor telemetry window.</description>
   <maintainer email="kisonhe@icloud.com">HEX arm maintainers</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>hex_arm_bringup</exec_depend>
+  <exec_depend>hex_arm_tools</exec_depend>
+  <exec_depend>python_qt_binding</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>moveit_ros_visualization</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>hex_arm_controller</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

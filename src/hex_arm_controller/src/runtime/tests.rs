@@ -1837,6 +1837,52 @@ async fn startup_checks_eventual_firmware_torque_budget_before_any_enable() {
 }
 
 #[test]
+fn motor_diagnostics_share_the_joint_snapshot_and_preserve_invalid_feedback() {
+    use prost::Message;
+
+    let mut runtime = runtime_for_safety_test();
+    let profile = Arc::make_mut(&mut runtime.profile);
+    profile.joints[1].direction = -1;
+    profile.joints[1].torque_scale = 2.0;
+    profile.joints[1].node_id = 42;
+    let mut feedback = FeedbackSnapshot::default();
+    for (index, state) in feedback.joints.iter_mut().enumerate() {
+        state.position_rev = 0.01 * index as f32;
+        state.velocity_rev_s = 0.02 * index as f32;
+        state.torque_nm = index as f32;
+        state.temperature_c = 30.0 + index as f32;
+        state.motor_temperature_c = 30.0 + index as f32;
+        state.driver_temperature_c = 40.0 + index as f32;
+        state.online = true;
+        state.fresh = true;
+    }
+    feedback.joints[2].online = false;
+    feedback.joints[3].fresh = false;
+    feedback.joints[4].fault_code = Some(0xa123);
+    feedback.joints[5].torque_nm = f32::NAN;
+    feedback.joints[5].motor_temperature_c = f32::NAN;
+    runtime.data.write().feedback = feedback;
+
+    let message = runtime.joint_state_proto();
+    let decoded = pb::JointState::decode(message.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.motor_diagnostics.len(), DOF);
+    assert_eq!(decoded.motor_diagnostics[1].node_id, 42);
+    assert_eq!(decoded.tau_est[1], -0.5);
+    assert!(decoded.dq[1] < 0.0);
+    for (index, motor) in decoded.motor_diagnostics.iter().enumerate() {
+        assert_eq!(motor.driver_temperature_c, 40.0 + index as f32);
+        assert_eq!(motor.online, index != 2);
+        assert_eq!(motor.feedback_fresh, index != 3);
+        assert_eq!(motor.fault_code, (index == 4).then_some(0xa123));
+        if index < 5 {
+            assert_eq!(motor.motor_temperature_c, decoded.temp[index]);
+        }
+    }
+    assert!(decoded.tau_est[5].is_nan());
+    assert!(decoded.motor_diagnostics[5].motor_temperature_c.is_nan());
+}
+
+#[test]
 fn feedback_hold_snaps_only_endpoint_roundoff_and_external_commands_remain_strict() {
     let template = runtime_for_safety_test();
     let mut profile = (*template.profile).clone();

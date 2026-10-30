@@ -95,6 +95,18 @@ message JointState {
   repeated float temp = 5;
   // Optional diagnostic extension; absent on older drivers.
   InterpolationState interpolation = 6;
+  // API 0.5+: one entry per joint, in the same order as q and ArmDescription.
+  // Diagnostics remain available even when motion feedback is non-finite.
+  repeated MotorDiagnostics motor_diagnostics = 7;
+}
+message MotorDiagnostics {
+  uint32 node_id = 1;
+  float motor_temperature_c = 2;
+  float driver_temperature_c = 3;
+  bool online = 4;
+  // Backend CAN feedback freshness, independent of publication/reception time.
+  bool feedback_fresh = 5;
+  optional uint32 fault_code = 6;
 }
 message InterpolationState {
   uint64 command_sequence = 1;

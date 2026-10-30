@@ -312,7 +312,7 @@ fn spawn_description(queryable: QueryEndpoint, runtime: Arc<ArmRuntime>) -> Join
                 model: "firefly_y6".into(),
                 api_version: Some(pb::ApiVersion {
                     major: 0,
-                    minor: 4,
+                    minor: 5,
                     patch: 0,
                 }),
                 device_keys: vec![format!("{}/arm", runtime.profile.robot_prefix)],
